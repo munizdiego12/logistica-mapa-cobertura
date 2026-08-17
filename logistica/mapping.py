@@ -1,6 +1,6 @@
 import html
 import folium
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
 from logistica.costs import calcular_custo_operacional
 from logistica.routing import obter_trajeto_asfalto_osrm
 
@@ -12,10 +12,16 @@ def gerar_link_google_maps(origem_coords: Tuple[float, float], rota: List[Dict[s
     coords.append(f"{origem_coords[0]},{origem_coords[1]}")
     return base_url + "/".join(coords)
 
-def construir_mapa(origem_coords: Tuple[float, float], rotas: List[List[Dict[str, Any]]], nome_modal: str) -> folium.Map:
+def construir_mapa(
+    origem_coords: Tuple[float, float], 
+    rotas: List[List[Dict[str, Any]]], 
+    nome_modal: str,
+    preco_gasolina: Optional[float] = None,
+    custo_hora: Optional[float] = None,
+    dados_rotas_calculados: Optional[List[Dict[str, Any]]] = None
+) -> folium.Map:
     mapa = folium.Map(location=origem_coords, zoom_start=13, tiles="CartoDB positron")
     
-    # Injeção CSS para eliminar o contorno preto de foco
     css_fix = """
     <style>
         path:focus, svg:focus, .leaflet-interactive:focus {
@@ -51,12 +57,22 @@ def construir_mapa(origem_coords: Tuple[float, float], rotas: List[List[Dict[str
     
     for idx, rota in enumerate(rotas):
         cor = cores[idx % len(cores)]
-        pontos = [origem_coords] + [(p['lat'], p['lon']) for p in rota] + [origem_coords]
-        geometria, km_real, tempo_transito_h = obter_trajeto_asfalto_osrm(pontos)
-        met = calcular_custo_operacional(km_real, tempo_transito_h, len(rota), nome_modal)
+        
+        # Reutiliza geometria/métrica se já tiver sido pré-calculada no pipeline com cache
+        if dados_rotas_calculados and idx < len(dados_rotas_calculados):
+            geometria = dados_rotas_calculados[idx]["geometria"]
+            met = dados_rotas_calculados[idx]["metricas"]
+        else:
+            pontos = [origem_coords] + [(p['lat'], p['lon']) for p in rota] + [origem_coords]
+            geometria, km_real, tempo_transito_h = obter_trajeto_asfalto_osrm(pontos)
+            met = calcular_custo_operacional(
+                km_real, tempo_transito_h, len(rota), nome_modal, 
+                preco_gasolina=preco_gasolina, custo_hora=custo_hora
+            )
+            
         link_maps = gerar_link_google_maps(origem_coords, rota)
         
-        # Marcadores de Paradas (Sanitizados contra XSS)
+        # Marcadores de Paradas (Sanitizados contra XSS com html.escape)
         for seq, p in enumerate(rota, 1):
             pt = (p['lat'], p['lon'])
             cliente = html.escape(str(p.get('Cliente', 'N/A')))
@@ -87,7 +103,7 @@ def construir_mapa(origem_coords: Tuple[float, float], rotas: List[List[Dict[str
                 tooltip=f"Parada {seq} - {cliente}"
             ).add_to(camada_rotas)
             
-        # Linha e Popup Operacional
+        # Linha da Rota e Popup Operacional
         popup_linha = f"""
         <div style="font-family: Arial; font-size: 13px; min-width: 220px; line-height: 1.5;">
             <div style="background-color: {cor}; color: white; padding: 6px; border-radius: 4px; font-weight: bold;">

@@ -1,6 +1,6 @@
 import os
 import logging
-from config import ORIGEM_PADRAO, MODAIS
+from config import ORIGEM_PADRAO, MODAIS, PRECO_GASOLINA_LITRO, CUSTO_HOMEM_HORA
 from logistica.validation import carregar_e_validar_csv
 from logistica.geocoding import GeocoderSP
 from logistica.routing import sequenciar_rotas_nearest_neighbor
@@ -14,7 +14,6 @@ def executar_pipeline(caminho_csv: str = "data/pedidos.csv", nome_modal: str = "
     df = carregar_e_validar_csv(caminho_csv)
     geocoder = GeocoderSP()
     
-    # Localizar Origem
     origem_coords = geocoder.geocodificar(
         ORIGEM_PADRAO["logradouro"], 
         ORIGEM_PADRAO["numero"], 
@@ -22,21 +21,22 @@ def executar_pipeline(caminho_csv: str = "data/pedidos.csv", nome_modal: str = "
         ORIGEM_PADRAO["cep"]
     )
     
-    # Localizar Destinos
     lats, lons = [], []
     for _, row in df.iterrows():
-        lat, lon = geocoder.geocodificar(row["Logradouro"], row["Numero"], row["Bairro"], row["CEP_LIMPO"])
+        lat, lon = geocoder.geocodificar(row["Logradouro"], str(row["Numero"]), row["Bairro"], row["CEP_LIMPO"])
         lats.append(lat)
         lons.append(lon)
     df["lat"] = lats
     df["lon"] = lons
     
-    # Sequenciar Rotas
     capacidade = MODAIS[nome_modal].capacidade
     rotas = sequenciar_rotas_nearest_neighbor(origem_coords, df.to_dict("records"), capacidade)
     
-    # Gerar Mapa
-    mapa = construir_mapa(origem_coords, rotas, nome_modal)
+    mapa = construir_mapa(
+        origem_coords, rotas, nome_modal, 
+        preco_gasolina=PRECO_GASOLINA_LITRO, custo_hora=CUSTO_HOMEM_HORA
+    )
+    
     os.makedirs("maps", exist_ok=True)
     caminho_mapa = os.path.join("maps", "mapa_logistica_integrado.html")
     mapa.save(caminho_mapa)

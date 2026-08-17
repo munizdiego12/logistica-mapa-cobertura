@@ -1,3 +1,4 @@
+from typing import Optional
 from config import PRECO_GASOLINA_LITRO, CUSTO_HOMEM_HORA, TEMPO_PARADA_MINUTOS, MODAIS, ModalConfig
 
 def formatar_tempo(tempo_horas_decimal: float) -> str:
@@ -13,16 +14,26 @@ def formatar_tempo(tempo_horas_decimal: float) -> str:
     else:
         return f"{minutos} min"
 
-def calcular_custo_operacional(km_real: float, tempo_transito_h: float, qtd_pedidos: int, nome_modal: str = "Carro de Passeio") -> dict:
-    """Calcula combustível, manutenção e homem-hora."""
+def calcular_custo_operacional(
+    km_real: float, 
+    tempo_transito_h: float, 
+    qtd_pedidos: int, 
+    nome_modal: str = "Carro de Passeio",
+    preco_gasolina: Optional[float] = None,
+    custo_hora: Optional[float] = None
+) -> dict:
+    """Calcula combustível, manutenção e homem-hora com parâmetros dinâmicos."""
     modal: ModalConfig = MODAIS.get(nome_modal, MODAIS["Carro de Passeio"])
     
-    combustivel = (km_real / modal.consumo_km_l) * PRECO_GASOLINA_LITRO
+    gasolina_efetiva = preco_gasolina if preco_gasolina is not None else PRECO_GASOLINA_LITRO
+    hora_efetiva = custo_hora if custo_hora is not None else CUSTO_HOMEM_HORA
+    
+    combustivel = (km_real / modal.consumo_km_l) * gasolina_efetiva
     manutencao = km_real * modal.manutencao_km
     
     tempo_paradas_h = (qtd_pedidos * TEMPO_PARADA_MINUTOS) / 60.0
     tempo_total_h = tempo_transito_h + tempo_paradas_h
-    mao_obra = tempo_total_h * CUSTO_HOMEM_HORA
+    mao_obra = tempo_total_h * hora_efetiva
     
     custo_total = combustivel + manutencao + mao_obra
     

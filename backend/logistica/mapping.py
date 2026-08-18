@@ -1,8 +1,8 @@
 import html
 import folium
 from typing import List, Tuple, Dict, Any, Optional
-from logistica.costs import calcular_custo_operacional
-from logistica.routing import obter_trajeto_asfalto_osrm
+from backend.logistica.costs import calcular_custo_operacional
+from backend.logistica.routing import obter_trajeto_asfalto_osrm
 
 def gerar_link_google_maps(origem_coords: Tuple[float, float], rota: List[Dict[str, Any]]) -> str:
     base_url = "https://www.google.com/maps/dir/"

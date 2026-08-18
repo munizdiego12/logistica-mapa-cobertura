@@ -1,5 +1,5 @@
 from typing import Optional
-from config import PRECO_GASOLINA_LITRO, CUSTO_HOMEM_HORA, TEMPO_PARADA_MINUTOS, MODAIS, ModalConfig
+from backend.config import PRECO_GASOLINA_LITRO, CUSTO_HOMEM_HORA, TEMPO_PARADA_MINUTOS, MODAIS, ModalConfig
 
 def formatar_tempo(tempo_horas_decimal: float) -> str:
     """Converte horas decimais para formato legível ('1 hora e 48 min')."""

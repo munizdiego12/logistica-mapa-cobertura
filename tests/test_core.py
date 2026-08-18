@@ -1,8 +1,8 @@
 import pytest
-from logistica.validation import sanitizar_cep
-from logistica.costs import formatar_tempo, calcular_custo_operacional
-from logistica.routing import calcular_distancia_euclidiana
-from logistica.mapping import construir_mapa
+from backend.logistica.validation import sanitizar_cep
+from backend.logistica.costs import formatar_tempo, calcular_custo_operacional
+from backend.logistica.routing import calcular_distancia_euclidiana
+from backend.logistica.mapping import construir_mapa
 
 def test_sanitizar_cep():
     assert sanitizar_cep("04534-000") == "04534000"

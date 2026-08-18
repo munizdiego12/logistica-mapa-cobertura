@@ -1,6 +1,0 @@
-[server]
-maxUploadSize = 10  # Limita o upload a 10 MB máximo
-enableXsrfProtection = true
-
-[browser]
-gatherUsageStats = false

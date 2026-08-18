@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import MapaLeaflet from './components/MapaLeaflet';
 
-const API_BASE = 'http://127.0.0.1:8000/api';
+const API_BASE = import.meta.env.VITE_API_URL || 'https://routeflow-backend-v5ji.onrender.com';
 
 export default function App() {
   const [loading, setLoading] = useState(false);

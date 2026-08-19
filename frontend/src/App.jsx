@@ -25,7 +25,7 @@ export default function App() {
   // Frota configurável
   const [frota, setFrota] = useState([
     { id: 1, motorista: 'Motorista 01', modal: 'Carro de Passeio' },
-    { id: 2, motorista: 'Motorista 02', modal: 'Fiorino / Van' }
+    { id: 2, motorista: 'Motorista 02', modal: 'Fiorino / Utilitário' }
   ]);
 
   // Hub Operacional Dinâmico

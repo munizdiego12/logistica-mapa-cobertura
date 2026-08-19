@@ -112,23 +112,22 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#030712] text-slate-100 flex flex-col antialiased selection:bg-blue-600 selection:text-white">
       
-      {/* Navbar Superior */}
       {/* Navbar Superior Zubale */}
       <header className="h-16 border-b border-slate-800/80 bg-slate-900/60 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-50">
         <div className="flex items-center gap-3">
-          {/* Logo da Zubale */}
-          <div className="w-9 h-9 rounded-xl bg-[#5B2E91]/20 border border-[#7C3AED]/40 flex items-center justify-center shadow-lg shadow-purple-900/20 overflow-hidden">
-            {<img src="/LogoZubale.svg" alt="Zubale" className="w-6 h-6 object-contain" />}
-            
-            {/* Ícone Vetorial estilizado Zubale 'Z' */}
-            <span className="font-black text-lg text-[#A78BFA] tracking-tighter select-none font-sans">
-              z
-            </span>
+          <div className="w-10 h-10 rounded-xl overflow-hidden flex items-center justify-center bg-[#5B2E91] border border-[#7C3AED]/50 shadow-md shadow-purple-950/40 shrink-0">
+            <img 
+              src="/zubale-logo.png" 
+              alt="Zubale Logo" 
+              className="w-full h-full object-cover"
+            />
           </div>
 
           <div>
             <div className="flex items-center gap-2">
-              <span className="font-extrabold text-base tracking-tight text-white lowercase">zubale</span>
+              <span className="font-extrabold text-base tracking-tight text-white">
+                Zubale
+              </span>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-300 border border-purple-500/20 font-semibold uppercase">
                 Operations & Routing
               </span>

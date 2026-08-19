@@ -13,10 +13,10 @@ const API_BASE = 'https://routeflow-backend-v5ji.onrender.com/api';
 export default function App() {
   const [loading, setLoading] = useState(false);
   const [modais, setModais] = useState({
-    'Moto': { capacidade: 10, consumo_kml: 30.0 },
-    'Carro de Passeio': { capacidade: 25, consumo_kml: 11.5 },
-    'Fiorino / Van': { capacidade: 60, consumo_kml: 9.0 },
-    'VUC / Caminhão 3/4': { capacidade: 150, consumo_kml: 6.5 }
+    'Moto': { capacidade: 3, consumo_kml: 30.0 },
+    'Carro de Passeio': { capacidade: 5, consumo_kml: 11.5 },
+    'Fiorino / Utilitário': { capacidade: 12, consumo_kml: 9.0 },
+    'VUC / Caminhão 3/4': { capacidade: 30, consumo_kml: 6.5 }
   });
 
   const [precoGasolina, setPrecoGasolina] = useState(5.80);

@@ -124,7 +124,7 @@ export default function App() {
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl overflow-hidden flex items-center justify-center bg-blue-500/10 border border-blue-500/20 shadow-md shadow-blue-950/40 p-1.5 shrink-0">
             <img 
-              src="/zubale-logo.png" 
+              src="logo-zubale.svg" 
               alt="Zubale Logo" 
               className="w-full h-full object-contain"
             />

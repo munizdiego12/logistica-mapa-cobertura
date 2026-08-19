@@ -113,17 +113,27 @@ export default function App() {
     <div className="min-h-screen bg-[#030712] text-slate-100 flex flex-col antialiased selection:bg-blue-600 selection:text-white">
       
       {/* Navbar Superior */}
+      {/* Navbar Superior Zubale */}
       <header className="h-16 border-b border-slate-800/80 bg-slate-900/60 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-50">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center shadow-lg shadow-blue-500/20 border border-blue-400/30">
-            <Layers className="w-5 h-5 text-white" />
+          {/* Logo da Zubale */}
+          <div className="w-9 h-9 rounded-xl bg-[#5B2E91]/20 border border-[#7C3AED]/40 flex items-center justify-center shadow-lg shadow-purple-900/20 overflow-hidden">
+            {<img src="/LogoZubale.svg" alt="Zubale" className="w-6 h-6 object-contain" />}
+            
+            {/* Ícone Vetorial estilizado Zubale 'Z' */}
+            <span className="font-black text-lg text-[#A78BFA] tracking-tighter select-none font-sans">
+              z
+            </span>
           </div>
+
           <div>
             <div className="flex items-center gap-2">
-              <span className="font-bold text-sm tracking-tight text-white">ROUTEFLOW</span>
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">ENTERPRISE</span>
+              <span className="font-extrabold text-base tracking-tight text-white lowercase">zubale</span>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-300 border border-purple-500/20 font-semibold uppercase">
+                Operations & Routing
+              </span>
             </div>
-            <p className="text-[11px] text-slate-400">Inteligência Geoespacial & Roteirização Multimodal</p>
+            <p className="text-[11px] text-slate-400">Inteligência Logística • Gestão Multimodal de Frota</p>
           </div>
         </div>
 
@@ -133,7 +143,7 @@ export default function App() {
             <span>Motor VRP / OSRM Ativo</span>
           </div>
           <div className="flex items-center gap-1.5 text-slate-400 font-mono text-[11px]">
-            <ShieldCheck className="w-4 h-4 text-blue-400" />
+            <ShieldCheck className="w-4 h-4 text-purple-400" />
             <span>FastAPI Core</span>
           </div>
         </div>

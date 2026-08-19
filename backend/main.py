@@ -150,29 +150,72 @@ def otimizar_rotas(payload: OtimizacaoRequest):
 
 @app.post("/api/upload")
 async def upload_planilha(file: UploadFile = File(...)):
-    """Recebe CSV ou XLSX e devolve os pedidos sanitizados em JSON."""
-    conteudo = await file.read()
-    if len(conteudo) > 10 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="Arquivo excede limite de 10 MB.")
-
     try:
-        if file.filename.endswith(".csv"):
-            df = pd.read_csv(io.BytesIO(conteudo))
-        else:
-            df = pd.read_excel(io.BytesIO(conteudo))
+        contents = await file.read()
+        filename = file.filename.lower()
 
-        df_validado = validar_e_higienizar_dataframe(df)
-        pedidos_json = []
-        for _, row in df_validado.iterrows():
-            pedidos_json.append({
-                "id_pedido": str(row.get("ID Pedido", "")),
-                "cliente": str(row.get("Cliente", "")),
-                "logradouro": str(row.get("Logradouro", "")),
-                "numero": str(row.get("Numero", "")),
-                "bairro": str(row.get("Bairro", "")),
-                "cep": str(row.get("CEP_LIMPO", "")),
-                "volume": int(row.get("Volume", 1)) if "Volume" in row and not pd.isna(row["Volume"]) else 1
-            })
-        return {"pedidos": pedidos_json, "total": len(pedidos_json)}
+        if filename.endswith(".csv"):
+            try:
+                df = pd.read_csv(io.BytesIO(contents), sep=",")
+                if len(df.columns) <= 1:
+                    df = pd.read_csv(io.BytesIO(contents), sep=";")
+            except Exception:
+                df = pd.read_csv(io.BytesIO(contents), sep=";", encoding="latin-1")
+        elif filename.endswith((".xlsx", ".xls")):
+            df = pd.read_excel(io.BytesIO(contents))
+        else:
+            raise HTTPException(status_code=400, detail="Formato de arquivo não suportado (.csv ou .xlsx).")
+
+        # Normaliza todos os nomes de colunas (minúsculo e sem espaços)
+        df.columns = [str(c).strip().lower() for c in df.columns]
+
+        # Mapeamento inteligente de colunas
+        col_map = {
+            'endereco': ['endereco', 'rua', 'logradouro', 'address', 'street'],
+            'numero': ['numero', 'num', 'nro', 'number'],
+            'bairro': ['bairro', 'neighborhood', 'district'],
+            'cidade': ['cidade', 'city', 'municipio'],
+            'uf': ['uf', 'estado', 'state'],
+            'cep': ['cep', 'zipcode', 'postal_code'],
+            'volume': ['volume', 'vol', 'quantidade', 'pedidos', 'qtd']
+        }
+
+        pedidos = []
+        for idx, row in df.iterrows():
+            def get_val(keys, default=""):
+                for k in keys:
+                    if k in row and pd.notna(row[k]):
+                        return str(row[k]).strip()
+                return default
+
+            rua = get_val(col_map['endereco'])
+            numero = get_val(col_map['numero'], "S/N")
+            bairro = get_val(col_map['bairro'])
+            cep = get_val(col_map['cep'])
+            cidade = get_val(col_map['cidade'], "São Paulo")
+            uf = get_val(col_map['uf'], "SP")
+            volume = 1
+            try:
+                volume = int(float(get_val(col_map['volume'], 1)))
+            except:
+                volume = 1
+
+            if rua:  # Só adiciona se houver logradouro
+                pedidos.append({
+                    "id": idx + 1,
+                    "Endereco": rua,
+                    "Numero": numero,
+                    "Bairro": bairro,
+                    "Cidade": cidade,
+                    "UF": uf,
+                    "CEP": cep,
+                    "Volume": volume
+                })
+
+        if not pedidos:
+            raise HTTPException(status_code=400, detail="Nenhum endereço válido encontrado na planilha.")
+
+        return {"pedidos": pedidos, "total": len(pedidos)}
+
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=f"Erro ao processar planilha: {str(e)}")

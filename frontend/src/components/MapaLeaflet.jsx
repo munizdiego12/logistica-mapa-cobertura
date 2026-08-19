@@ -39,7 +39,7 @@ const createStopIcon = (num, color) => {
   });
 };
 
-// Ícone vetorial do Centro de Distribuição / Loja Central
+// Ícone vetorial da Loja Central / Hub
 const hubIcon = L.divIcon({
   className: 'custom-hub-marker',
   html: `
@@ -66,7 +66,6 @@ const hubIcon = L.divIcon({
   popupAnchor: [0, -18]
 });
 
-// Componente para ajustar o enquadramento do mapa dinamicamente
 function AjustarZoom({ center, pontos }) {
   const map = useMap();
   useEffect(() => {
@@ -95,7 +94,6 @@ export default function MapaLeaflet({ origem, rotas }) {
   const center = [origem.lat, origem.lon];
   const rotasArray = Array.isArray(rotas) ? rotas : [];
 
-  // Coleta todos os pontos para centralizar e ajustar zoom
   const todosPontos = [center];
   rotasArray.forEach(r => {
     const listaParadas = r.paradas || r.pedidos || [];
@@ -106,28 +104,32 @@ export default function MapaLeaflet({ origem, rotas }) {
     });
   });
 
-  // Configuração das zonas de cobertura
+  // Zonas ordenadas DO MAIOR PARA O MENOR (12km -> 7km -> 3km)
+  // Isso garante que a menor área fique no topo e possa ser clicada sem sobreposição
   const zonasCobertura = [
     {
-      raio: 3000,
-      cor: '#10b981',
-      titulo: 'Zona Primária (Expressa)',
-      sla: 'Até 45 minutos',
-      descricao: 'Raio de alta densidade urbana e menor custo por entrega.'
+      raio: 12000,
+      cor: '#f59e0b',
+      titulo: 'Zona Estendida (Metropolitana)',
+      sla: 'Mesmo dia (Same-Day / D+0)',
+      veiculoSugerido: 'VUC / Fiorino / Carro',
+      descricao: 'Região periférica e anel metropolitano. Maior impacto em km rodados e tempo de trânsito.'
     },
     {
       raio: 7000,
       cor: '#3b82f6',
       titulo: 'Zona Secundária (Padrão)',
       sla: 'Até 2 horas',
-      descricao: 'Área intermediária com fluxo moderado de tráfego.'
+      veiculoSugerido: 'Carro de Passeio / Utilitário',
+      descricao: 'Área intermediária com fluxo moderado de tráfego. Equilíbrio entre custo e velocidade.'
     },
     {
-      raio: 12000,
-      cor: '#f59e0b',
-      titulo: 'Zona Estendida (Metropolitana)',
-      sla: 'Mesmo dia (Same-Day)',
-      descricao: 'Área periférica com impacto elevado em quilometragem e combustível.'
+      raio: 3000,
+      cor: '#10b981',
+      titulo: 'Zona Primária (Expressa / Ultrarrápida)',
+      sla: 'Até 45 minutos',
+      veiculoSugerido: 'Moto / Bike / Carro Leve',
+      descricao: 'Raio central de alta densidade de pedidos, máxima agilidade e menor custo por entrega.'
     }
   ];
 
@@ -141,7 +143,7 @@ export default function MapaLeaflet({ origem, rotas }) {
 
         <AjustarZoom center={center} pontos={todosPontos} />
 
-        {/* 1. ZONAS CIRCULARES DE COBERTURA COM POPUPS INTERATIVOS */}
+        {/* 1. ZONAS CIRCULARES (DO MAIOR PARA O MENOR PARA PERMITIR CLIQUE INDIVIDUAL) */}
         {zonasCobertura.map((zona, idx) => (
           <Circle
             key={idx}
@@ -150,29 +152,36 @@ export default function MapaLeaflet({ origem, rotas }) {
             pathOptions={{
               color: zona.cor,
               fillColor: zona.cor,
-              fillOpacity: 0.04,
-              weight: 1.5,
-              dashArray: '4, 4'
+              fillOpacity: 0.05,
+              weight: 2,
+              dashArray: '5, 5'
             }}
           >
             <Popup>
-              <div className="text-slate-900 font-sans p-1 min-w-[210px]">
-                <div className="flex items-center gap-1.5 pb-1 border-b border-slate-200">
-                  <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: zona.cor }}></span>
-                  <span className="text-xs font-bold uppercase tracking-wider text-slate-800">
+              <div className="text-slate-900 font-sans p-1.5 min-w-[230px]">
+                <div className="flex items-center gap-2 pb-1.5 border-b border-slate-200">
+                  <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: zona.cor }}></span>
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-slate-800">
                     {zona.titulo}
                   </span>
                 </div>
-                <div className="mt-2 space-y-1 text-[11px]">
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">Raio Linear:</span>
-                    <span className="font-semibold text-slate-700">{zona.raio / 1000} km do CD</span>
+
+                <div className="mt-2 space-y-1.5 text-[11px]">
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-500">Raio de Alcance:</span>
+                    <span className="font-bold text-slate-800">{zona.raio / 1000} km do Hub</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">SLA Estimado:</span>
-                    <span className="font-semibold text-slate-700">{zona.sla}</span>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-500">SLA Previsto:</span>
+                    <span className="font-semibold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                      {zona.sla}
+                    </span>
                   </div>
-                  <p className="text-[10px] text-slate-500 pt-1 leading-tight">
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-500">Modal Recomendado:</span>
+                    <span className="font-semibold text-slate-700">{zona.veiculoSugerido}</span>
+                  </div>
+                  <p className="text-[10px] text-slate-500 pt-1.5 border-t border-slate-100 leading-snug">
                     {zona.descricao}
                   </p>
                 </div>
@@ -194,11 +203,9 @@ export default function MapaLeaflet({ origem, rotas }) {
           </Popup>
         </Marker>
 
-        {/* 3. TRAÇADOS DAS ROTAS COM POPUP DE CUSTOS E PERFORMANCE */}
+        {/* 3. TRAÇADOS DAS ROTAS COM POPUP DE CUSTOS */}
         {rotasArray.map((rota) => {
           const listaParadas = rota.paradas || rota.pedidos || [];
-          
-          // Geometria sanitizada (evita quebrar se geometria vier vazia)
           const polylinePositions = (Array.isArray(rota.geometria) && rota.geometria.length > 0)
             ? rota.geometria
             : [center, ...listaParadas.map(p => [p.lat, p.lon]), center];

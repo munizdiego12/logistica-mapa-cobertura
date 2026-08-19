@@ -4,7 +4,7 @@ import {
   Truck, DollarSign, Navigation, Package, Upload, 
   MapPin, Sliders, ArrowUpRight, Play, Loader2,
   ShieldCheck, Activity, Plus, Trash2, Users, AlertCircle, 
-  CheckCircle2, Download, FileSpreadsheet, FileDown
+  CheckSquare, Square, Download, FileSpreadsheet, FileDown
 } from 'lucide-react';
 import MapaLeaflet from './components/MapaLeaflet';
 
@@ -28,7 +28,7 @@ export default function App() {
     { id: 2, motorista: 'Motorista 02', modal: 'Fiorino / Van' }
   ]);
 
-  // Hub Operacional Dinâmico (editável pelo operador)
+  // Hub Operacional Dinâmico
   const [origem, setOrigem] = useState({
     rua: '',
     numero: '',
@@ -36,10 +36,14 @@ export default function App() {
     cep: ''
   });
 
-  // Pedidos dinâmicos via upload
-  const [pedidos, setPedidos] = useState([]);
-  const [nomeArquivo, setNomeArquivo] = useState('');
+  // Lista de Múltiplos Arquivos/Lotes de Pedidos
+  const [lotes, setLotes] = useState([]);
+  const [loteAtivoId, setLoteAtivoId] = useState(null);
   const [resultado, setResultado] = useState(null);
+
+  // Pedidos do lote atualmente selecionado
+  const loteSelecionado = lotes.find(l => l.id === loteAtivoId);
+  const pedidosAtivos = loteSelecionado ? loteSelecionado.pedidos : [];
 
   useEffect(() => {
     axios.get(`${API_BASE}/modais`)
@@ -49,13 +53,13 @@ export default function App() {
       .catch(() => {});
   }, []);
 
-  // Cálculo de Capacidade Total da Frota
+  // Capacidade Total da Frota
   const capacidadeTotalFrota = frota.reduce((acc, f) => {
     const cap = modais[f.modal]?.capacidade || 0;
     return acc + cap;
   }, 0);
 
-  const sobrecarga = pedidos.length > capacidadeTotalFrota;
+  const sobrecarga = pedidosAtivos.length > capacidadeTotalFrota;
 
   const adicionarMotorista = () => {
     const nextId = frota.length > 0 ? Math.max(...frota.map(m => m.id)) + 1 : 1;
@@ -75,13 +79,52 @@ export default function App() {
     setFrota(frota.map(m => m.id === id ? { ...m, modal: novoModal } : m));
   };
 
+  // Upload e adição de novo lote à lista
+  const handleFileUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+      setLoading(true);
+      const res = await axios.post(`${API_BASE}/upload`, formData);
+      
+      const novoLote = {
+        id: Date.now(),
+        nome: file.name,
+        pedidos: res.data.pedidos,
+        dataUpload: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      };
+
+      setLotes(prev => [...prev, novoLote]);
+      setLoteAtivoId(novoLote.id); // Seleciona automaticamente o recém-anexado
+    } catch (err) {
+      alert('Erro ao importar arquivo. Certifique-se de que é uma planilha válida (.csv ou .xlsx).');
+    } finally {
+      setLoading(false);
+      e.target.value = '';
+    }
+  };
+
+  // Excluir lote específico da lista
+  const removerLote = (id, e) => {
+    e.stopPropagation();
+    const novosLotes = lotes.filter(l => l.id !== id);
+    setLotes(novosLotes);
+    if (loteAtivoId === id) {
+      setLoteAtivoId(novosLotes.length > 0 ? novosLotes[0].id : null);
+      setResultado(null);
+    }
+  };
+
   const handleOtimizar = async () => {
     if (!origem.rua || !origem.numero) {
       alert('Por favor, preencha o Logradouro e o Número da Loja Central.');
       return;
     }
-    if (pedidos.length === 0) {
-      alert('Faça o upload de uma planilha (.csv ou .xlsx) contendo os pedidos antes de otimizar.');
+    if (pedidosAtivos.length === 0) {
+      alert('Selecione um lote com pedidos válidos antes de otimizar.');
       return;
     }
 
@@ -96,7 +139,7 @@ export default function App() {
         frota: frota,
         preco_gasolina: Number(precoGasolina),
         custo_hora: Number(custoHora),
-        pedidos: pedidos
+        pedidos: pedidosAtivos
       });
       setResultado(res.data);
     } catch (err) {
@@ -106,26 +149,7 @@ export default function App() {
     }
   };
 
-  const handleFileUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    setNomeArquivo(file.name);
-
-    const formData = new FormData();
-    formData.append('file', file);
-    try {
-      setLoading(true);
-      const res = await axios.post(`${API_BASE}/upload`, formData);
-      setPedidos(res.data.pedidos);
-    } catch (err) {
-      alert('Erro ao importar arquivo. Certifique-se de que é uma planilha válida (.csv ou .xlsx).');
-      setNomeArquivo('');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // 1. Download de Planilha Modelo (.csv)
+  // Download de Planilha Modelo (.csv)
   const baixarPlanilhaModelo = () => {
     const cabecalho = "id,endereco,numero,bairro,cidade,uf,cep,volume\n";
     const linhasExemplo = [
@@ -145,7 +169,7 @@ export default function App() {
     downloadAnchor.remove();
   };
 
-  // 3. Exportar Romaneio / Manifesto de Carga (.csv)
+  // Exportar Romaneio de Carga (.csv)
   const exportarRomaneio = () => {
     if (!resultado || !resultado.rotas) return;
 
@@ -256,32 +280,81 @@ export default function App() {
             </div>
           </div>
 
-          {/* 2. Importação de Pedidos + Download do Modelo */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Grade de Pedidos</span>
+          {/* 2. Gerenciador de Múltiplos Lotes de Pedidos */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                <FileSpreadsheet className="w-3.5 h-3.5 text-blue-400" /> Lotes de Pedidos ({lotes.length})
+              </span>
               <button 
                 onClick={baixarPlanilhaModelo}
                 className="inline-flex items-center gap-1 text-[10px] text-blue-400 hover:text-blue-300 font-medium transition-colors"
-                title="Baixar planilha CSV com modelo de colunas aceito"
+                title="Baixar modelo .CSV"
               >
-                <Download className="w-3 h-3" /> Baixar Modelo
+                <Download className="w-3 h-3" /> Modelo
               </button>
             </div>
 
-            <label className="border border-dashed border-slate-800 hover:border-blue-500/60 transition-all rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer bg-slate-900/40 group">
-              <Upload className="w-5 h-5 text-slate-400 group-hover:text-blue-400 transition-colors mb-1.5" />
-              <span className="text-xs font-semibold text-slate-200">
-                {nomeArquivo ? nomeArquivo : 'Importar Planilha de Entregas'}
-              </span>
-              <span className="text-[11px] text-slate-500 mt-0.5">Formatos .CSV ou .XLSX</span>
+            {/* Upload de novo arquivo */}
+            <label className="border border-dashed border-slate-800 hover:border-blue-500/60 transition-all rounded-xl p-3.5 flex flex-col items-center justify-center cursor-pointer bg-slate-900/40 group">
+              <Upload className="w-4 h-4 text-slate-400 group-hover:text-blue-400 transition-colors mb-1" />
+              <span className="text-xs font-semibold text-slate-200">Anexar Novo Arquivo (.csv / .xlsx)</span>
+              <span className="text-[10px] text-slate-500">Adicione múltiplos lotes de entrega</span>
               <input type="file" accept=".csv,.xlsx" onChange={handleFileUpload} className="hidden" />
             </label>
 
-            <div className="mt-2 flex items-center justify-between text-[11px] px-1">
-              <span className="text-slate-400">Total Carregado:</span>
-              <span className={`font-mono font-semibold ${pedidos.length > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>
-                {pedidos.length} pedidos
+            {/* Lista de Caixas com Checkbox e Lixeira */}
+            {lotes.length > 0 && (
+              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                {lotes.map((lote) => {
+                  const ativo = lote.id === loteAtivoId;
+                  return (
+                    <div 
+                      key={lote.id} 
+                      onClick={() => { setLoteAtivoId(lote.id); setResultado(null); }}
+                      className={`flex items-center justify-between p-2.5 rounded-lg cursor-pointer border transition-all ${
+                        ativo 
+                          ? 'bg-blue-500/10 border-blue-500/50 shadow-sm shadow-blue-500/10' 
+                          : 'bg-slate-900/90 border-slate-800/80 hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        {/* Checkbox quadrado */}
+                        <button type="button" className="text-blue-400 shrink-0">
+                          {ativo ? (
+                            <CheckSquare className="w-4 h-4 text-blue-400 fill-blue-500/20" />
+                          ) : (
+                            <Square className="w-4 h-4 text-slate-600" />
+                          )}
+                        </button>
+                        <div className="min-w-0">
+                          <p className={`text-xs font-medium truncate ${ativo ? 'text-white font-semibold' : 'text-slate-300'}`}>
+                            {lote.nome}
+                          </p>
+                          <p className="text-[10px] text-slate-400 font-mono">
+                            {lote.pedidos.length} entregas • {lote.dataUpload}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Lixeira */}
+                      <button
+                        onClick={(e) => removerLote(lote.id, e)}
+                        className="p-1.5 text-slate-500 hover:text-rose-400 transition-colors ml-2 shrink-0"
+                        title="Excluir este arquivo"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="flex items-center justify-between text-[11px] px-1">
+              <span className="text-slate-400">Lote Ativo Selecionado:</span>
+              <span className={`font-mono font-semibold ${pedidosAtivos.length > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>
+                {pedidosAtivos.length} pedidos
               </span>
             </div>
           </div>
@@ -300,7 +373,7 @@ export default function App() {
               </button>
             </div>
 
-            {/* Barra de Capacidade vs Demanda */}
+            {/* Barra de Capacidade da Frota vs Demanda do Lote */}
             <div className="p-2.5 rounded-lg bg-slate-950/60 border border-slate-800 text-[11px] space-y-1.5">
               <div className="flex items-center justify-between">
                 <span className="text-slate-400">Capacidade da Frota:</span>
@@ -312,12 +385,12 @@ export default function App() {
               {sobrecarga && (
                 <div className="flex items-start gap-1.5 text-amber-400 text-[10px] leading-tight pt-1 border-t border-slate-800/80">
                   <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                  <span>Atenção: A demanda ({pedidos.length}) excede a capacidade ({capacidadeTotalFrota}). Adicione mais veículos.</span>
+                  <span>Atenção: O lote selecionado ({pedidosAtivos.length}) supera a capacidade ({capacidadeTotalFrota}).</span>
                 </div>
               )}
             </div>
 
-            <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
+            <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
               {frota.map((item) => (
                 <div key={item.id} className="flex items-center gap-2 bg-slate-900/90 border border-slate-800/80 p-2.5 rounded-lg">
                   <div className="flex-1">
@@ -377,7 +450,7 @@ export default function App() {
           {/* Botão de Execução */}
           <button
             onClick={handleOtimizar}
-            disabled={loading || pedidos.length === 0 || !origem.rua}
+            disabled={loading || pedidosAtivos.length === 0 || !origem.rua}
             className="mt-auto w-full py-3.5 bg-blue-600 hover:bg-blue-500 active:scale-[0.99] transition-all rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-blue-600/25 text-white disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4 fill-current" />}
@@ -396,7 +469,7 @@ export default function App() {
                 <Package className="w-4 h-4 text-blue-400" />
               </div>
               <div className="flex items-baseline gap-2">
-                <span className="text-2xl font-black text-white font-mono">{resultado ? resultado.kpis.total_pedidos : pedidos.length}</span>
+                <span className="text-2xl font-black text-white font-mono">{resultado ? resultado.kpis.total_pedidos : pedidosAtivos.length}</span>
                 <span className="text-xs text-slate-500">entregas</span>
               </div>
             </div>
@@ -463,7 +536,7 @@ export default function App() {
                 <div className="text-center space-y-1">
                   <p className="text-xs font-semibold text-slate-300">Nenhuma rota ativa</p>
                   <p className="text-[11px] text-slate-500 max-w-sm">
-                    Informe o endereço da Loja Central, anexe a planilha com as entregas e clique em Executar Roteirização.
+                    Preencha a Loja Central, selecione uma das caixas de arquivo anexadas e execute a roteirização.
                   </p>
                 </div>
               </div>
@@ -476,7 +549,7 @@ export default function App() {
               <div className="p-4 border-b border-slate-800/80 flex items-center justify-between">
                 <div>
                   <h3 className="font-bold text-xs uppercase tracking-wider text-slate-200">Matriz de Desempenho por Rota e Motorista</h3>
-                  <p className="text-[11px] text-slate-400">{resultado.rotas.length} rotas geradas</p>
+                  <p className="text-[11px] text-slate-400">{resultado.rotas.length} rotas geradas para o lote ativo</p>
                 </div>
                 <button
                   onClick={exportarRomaneio}

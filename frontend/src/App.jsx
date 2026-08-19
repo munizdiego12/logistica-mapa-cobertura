@@ -22,7 +22,7 @@ export default function App() {
   const [precoGasolina, setPrecoGasolina] = useState(5.80);
   const [custoHora, setCustoHora] = useState(25.00);
 
-  // Frota configurável
+  // Frota configurável inicial
   const [frota, setFrota] = useState([
     { id: 1, motorista: 'Motorista 01', modal: 'Carro de Passeio' },
     { id: 2, motorista: 'Motorista 02', modal: 'Fiorino / Utilitário' }
@@ -169,6 +169,11 @@ export default function App() {
     downloadAnchor.remove();
   };
 
+  // Download de Planilha Modelo em Excel (.xlsx)
+  const baixarModeloXLSX = () => {
+    window.open(`${API_BASE}/modelo-xlsx`, '_blank');
+  };
+
   // Exportar Romaneio de Carga (.csv)
   const exportarRomaneio = () => {
     if (!resultado || !resultado.rotas) return;
@@ -286,13 +291,23 @@ export default function App() {
               <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                 <FileSpreadsheet className="w-3.5 h-3.5 text-blue-400" /> Lotes de Pedidos ({lotes.length})
               </span>
-              <button 
-                onClick={baixarPlanilhaModelo}
-                className="inline-flex items-center gap-1 text-[10px] text-blue-400 hover:text-blue-300 font-medium transition-colors"
-                title="Baixar modelo .CSV"
-              >
-                <Download className="w-3 h-3" /> Modelo
-              </button>
+              
+              <div className="flex items-center gap-1.5">
+                <button 
+                  onClick={baixarPlanilhaModelo}
+                  className="inline-flex items-center gap-1 text-[10px] text-blue-400 hover:text-blue-300 font-medium px-2 py-0.5 rounded bg-blue-500/10 border border-blue-500/20 transition-colors"
+                  title="Baixar Modelo CSV"
+                >
+                  <Download className="w-2.5 h-2.5" /> CSV
+                </button>
+                <button 
+                  onClick={baixarModeloXLSX}
+                  className="inline-flex items-center gap-1 text-[10px] text-emerald-400 hover:text-emerald-300 font-medium px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 transition-colors"
+                  title="Baixar Modelo Excel (.xlsx)"
+                >
+                  <Download className="w-2.5 h-2.5" /> XLSX
+                </button>
+              </div>
             </div>
 
             {/* Upload de novo arquivo */}

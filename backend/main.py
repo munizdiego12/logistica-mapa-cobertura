@@ -6,6 +6,7 @@ from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from fastapi.responses import StreamingResponse
 
 app = FastAPI(title="Zubale Routing Core")
 
@@ -300,3 +301,69 @@ def otimizar_rotas(req: OtimizarRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro interno no algoritmo de roteirização: {str(e)}")
+
+@app.get("/api/modelo-xlsx")
+def download_modelo_xlsx():
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Modelo_Pedidos"
+    
+    headers = ["id", "endereco", "numero", "bairro", "cidade", "uf", "cep", "volume"]
+    ws.append(headers)
+    
+    exemplos = [
+        [101, "Avenida Paulista", "1500", "Bela Vista", "Sao Paulo", "SP", "01310-100", 1],
+        [102, "Rua Augusta", "1500", "Consolacao", "Sao Paulo", "SP", "01304-001", 1],
+        [103, "Rua Oscar Freire", "850", "Cerqueira Cesar", "Sao Paulo", "SP", "01426-000", 2],
+        [104, "Rua dos Pinheiros", "600", "Pinheiros", "Sao Paulo", "SP", "05422-001", 1],
+        [105, "Alameda dos Maracatins", "650", "Moema", "Sao Paulo", "SP", "04089-001", 1],
+    ]
+    for row in exemplos:
+        ws.append(row)
+        
+    header_fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
+    header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    header_align = Alignment(horizontal="center", vertical="center")
+    thin_border = Border(
+        left=Side(style='thin', color='CBD5E1'),
+        right=Side(style='thin', color='CBD5E1'),
+        top=Side(style='thin', color='CBD5E1'),
+        bottom=Side(style='thin', color='CBD5E1')
+    )
+
+    for col_num in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=col_num)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = header_align
+
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
+        fill_color = "F8FAFC" if row[0].row % 2 == 0 else "FFFFFF"
+        for cell in row:
+            cell.fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type="solid")
+            cell.border = thin_border
+            if cell.column in [1, 3, 6, 7, 8]:
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            else:
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+
+    for col in ws.columns:
+        max_len = max(len(str(cell.value or '')) for cell in col)
+        col_letter = openpyxl.utils.get_column_letter(col[0].column)
+        ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    headers_resp = {
+        'Content-Disposition': 'attachment; filename="modelo_pedidos_zubale.xlsx"'
+    }
+    return StreamingResponse(
+        output, 
+        headers=headers_resp, 
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )

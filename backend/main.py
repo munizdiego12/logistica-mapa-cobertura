@@ -5,8 +5,8 @@ import pandas as pd
 from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 app = FastAPI(title="Zubale Routing Core")
 
@@ -44,7 +44,7 @@ def geocode_endereco(rua: str, numero: str = "", bairro: str = "", cidade: str =
     except Exception:
         pass
     
-    # Fallback por palavra-chave para endereços comuns de SP se a API externa demorar
+    # Fallback determinístico para pontos conhecidos de SP
     r_lower = rua.lower()
     if 'paulista' in r_lower:
         return -23.5614, -46.6559
@@ -67,11 +67,58 @@ def geocode_endereco(rua: str, numero: str = "", bairro: str = "", cidade: str =
     elif 'domingos de morais' in r_lower or 'vergueiro' in r_lower:
         return -23.5850, -46.6380
     
-    # Coordenada central de São Paulo com pequeno desvio randômico determinístico
+    # Coordenada central com desvio determinístico
     hash_val = sum(ord(c) for c in (rua + str(numero))) % 100
     return -23.5505 + (hash_val * 0.0005), -46.6333 + (hash_val * 0.0005)
 
-# Cálculo de rota e traçado viário via OSRM
+# Cálculo de distância euclidiana rápida para ordenação
+def dist_coords(c1, c2):
+    return math.sqrt((c1[0] - c2[0])**2 + (c1[1] - c2[1])**2)
+
+# Otimizador de Sequência de Entregas (Nearest Neighbor + 2-Opt)
+def ordenar_paradas_otimizadas(origem_coords, lista_pedidos):
+    if len(lista_pedidos) <= 1:
+        return lista_pedidos
+
+    # 1. Vizinho Mais Próximo
+    nao_visitados = list(lista_pedidos)
+    rota_ordenada = []
+    ponto_atual = origem_coords
+
+    while nao_visitados:
+        proximo = min(
+            nao_visitados, 
+            key=lambda p: dist_coords(ponto_atual, (p['lat'], p['lon']))
+        )
+        rota_ordenada.append(proximo)
+        ponto_atual = (proximo['lat'], proximo['lon'])
+        nao_visitados.remove(proximo)
+
+    # 2. Refinamento 2-Opt (desfaz cruzamentos e zigue-zagues)
+    melhorou = True
+    while melhorou:
+        melhorou = False
+        n = len(rota_ordenada)
+        for i in range(n - 1):
+            for j in range(i + 1, n):
+                p_ant = origem_coords if i == 0 else (rota_ordenada[i-1]['lat'], rota_ordenada[i-1]['lon'])
+                p_i = (rota_ordenada[i]['lat'], rota_ordenada[i]['lon'])
+                p_j = (rota_ordenada[j]['lat'], rota_ordenada[j]['lon'])
+                p_prox = origem_coords if j == n - 1 else (rota_ordenada[j+1]['lat'], rota_ordenada[j+1]['lon'])
+
+                dist_atual = dist_coords(p_ant, p_i) + dist_coords(p_j, p_prox)
+                dist_invertida = dist_coords(p_ant, p_j) + dist_coords(p_i, p_prox)
+
+                if dist_invertida < dist_atual - 1e-6:
+                    rota_ordenada[i:j+1] = reversed(rota_ordenada[i:j+1])
+                    melhorou = True
+                    break
+            if melhorou:
+                break
+
+    return rota_ordenada
+
+# Traçado viário real via OSRM
 def get_osrm_route(pontos):
     if len(pontos) < 2:
         return 0, 0, []
@@ -86,13 +133,12 @@ def get_osrm_route(pontos):
             route = data["routes"][0]
             dist_km = round(route["distance"] / 1000, 2)
             tempo_min = round(route["duration"] / 60)
-            # Converte [lon, lat] retornado pelo geojson para [lat, lon] do Leaflet
             geometria = [[coord[1], coord[0]] for coord in route["geometry"]["coordinates"]]
             return dist_km, tempo_min, geometria
     except Exception:
         pass
     
-    # Fallback Euclidiano/Manhattan viário se o OSRM falhar
+    # Fallback se a API externa do OSRM oscilar
     dist_total = 0
     geometria = []
     for i in range(len(pontos) - 1):
@@ -234,20 +280,23 @@ def otimizar_rotas(req: OtimizarRequest):
         if num_rotas == 0:
             num_rotas = 1
 
-        # 4. Distribuição das entregas por veículo
+        # 4. Distribuição inicial de pedidos por frota
         rotas_pedidos = [[] for _ in range(num_rotas)]
         for idx, p in enumerate(pedidos_geo):
             rotas_pedidos[idx % num_rotas].append(p)
 
-        # 5. Cálculo das Rotas e Métricas Operacionais
+        # 5. Cálculo e Otimização TSP de cada Rota
         rotas_resultado = []
         km_total_geral = 0.0
         custo_total_geral = 0.0
 
         for r_idx in range(num_rotas):
-            pts_rota = rotas_pedidos[r_idx]
-            if not pts_rota:
+            pts_brutos = rotas_pedidos[r_idx]
+            if not pts_brutos:
                 continue
+
+            # OTIMIZAÇÃO CRUCIAL: Reordena as paradas para eliminar cruzamentos e zigue-zagues
+            pts_rota = ordenar_paradas_otimizadas((orig_lat, orig_lon), pts_brutos)
 
             modal_info = frota_usar[r_idx]
             modal_config = MODAIS_PADRAO.get(modal_info.modal, {'consumo_kml': 10.0, 'capacidade': 30})
@@ -256,7 +305,6 @@ def otimizar_rotas(req: OtimizarRequest):
             pontos_coords = [(orig_lat, orig_lon)] + [(p['lat'], p['lon']) for p in pts_rota] + [(orig_lat, orig_lon)]
             dist_km, tempo_min, geometria = get_osrm_route(pontos_coords)
 
-            # Cálculo de custos operacionais (Combustível + Horas do motorista)
             litros = dist_km / consumo_kml
             custo_comb = litros * req.preco_gasolina
             custo_mot = (tempo_min / 60.0) * req.custo_hora
@@ -265,7 +313,6 @@ def otimizar_rotas(req: OtimizarRequest):
             km_total_geral += dist_km
             custo_total_geral += custo_rota
 
-            # Link de navegação direta no Google Maps
             waypoint_coords = "/".join([f"{p['lat']},{p['lon']}" for p in pts_rota])
             link_maps = f"https://www.google.com/maps/dir/{orig_lat},{orig_lon}/{waypoint_coords}/{orig_lat},{orig_lon}"
 

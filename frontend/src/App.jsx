@@ -3,7 +3,7 @@ import axios from 'axios';
 import { 
   Truck, DollarSign, Navigation, Package, Upload, 
   MapPin, Sliders, ArrowUpRight, Play, Loader2,
-  Layers, ShieldCheck, Activity, Plus, Trash2, Users
+  ShieldCheck, Activity, Plus, Trash2, Users, AlertCircle, CheckCircle2
 } from 'lucide-react';
 import MapaLeaflet from './components/MapaLeaflet';
 
@@ -21,28 +21,23 @@ export default function App() {
   const [precoGasolina, setPrecoGasolina] = useState(5.80);
   const [custoHora, setCustoHora] = useState(25.00);
 
-  // Lista dinâmica de frota
+  // Frota configurável
   const [frota, setFrota] = useState([
     { id: 1, motorista: 'Motorista 01', modal: 'Carro de Passeio' },
     { id: 2, motorista: 'Motorista 02', modal: 'Fiorino / Van' }
   ]);
 
+  // Hub Operacional Dinâmico (editável pelo operador)
   const [origem, setOrigem] = useState({
-    rua: 'Avenida Paulista',
-    numero: '1000',
-    bairro: 'Bela Vista',
-    cep: '01310-100'
+    rua: '',
+    numero: '',
+    bairro: '',
+    cep: ''
   });
 
-  const [pedidos, setPedidos] = useState([
-    { id_pedido: 'PED-01', cliente: 'Diego Muniz', logradouro: 'Rua Bela Cintra', numero: '500', bairro: 'Consolação', cep: '01415-000', volume: 1 },
-    { id_pedido: 'PED-02', cliente: 'Tech Hub SP', logradouro: 'Rua Oscar Freire', numero: '900', bairro: 'Cerqueira César', cep: '01426-001', volume: 2 },
-    { id_pedido: 'PED-03', cliente: 'Alpha Coworking', logradouro: 'Av Brigadeiro Faria Lima', numero: '2000', bairro: 'Pinheiros', cep: '01452-001', volume: 1 },
-    { id_pedido: 'PED-04', cliente: 'Studio Design', logradouro: 'Rua dos Pinheiros', numero: '450', bairro: 'Pinheiros', cep: '05422-000', volume: 1 },
-    { id_pedido: 'PED-05', cliente: 'Fintech SP', logradouro: 'Rua Funchal', numero: '418', bairro: 'Vila Olímpia', cep: '04551-060', volume: 3 },
-    { id_pedido: 'PED-06', cliente: 'Log Lab', logradouro: 'Av Engenheiro Luís Carlos Berrini', numero: '105', bairro: 'Brooklin', cep: '04571-010', volume: 1 }
-  ]);
-
+  // Pedidos dinâmicos via upload
+  const [pedidos, setPedidos] = useState([]);
+  const [nomeArquivo, setNomeArquivo] = useState('');
   const [resultado, setResultado] = useState(null);
 
   useEffect(() => {
@@ -72,6 +67,15 @@ export default function App() {
   };
 
   const handleOtimizar = async () => {
+    if (!origem.rua || !origem.numero) {
+      alert('Por favor, preencha o Logradouro e o Número da Loja Central.');
+      return;
+    }
+    if (pedidos.length === 0) {
+      alert('Faça o upload de uma planilha (.csv ou .xlsx) contendo os pedidos antes de otimizar.');
+      return;
+    }
+
     setLoading(true);
     try {
       const res = await axios.post(`${API_BASE}/otimizar`, {
@@ -87,7 +91,7 @@ export default function App() {
       });
       setResultado(res.data);
     } catch (err) {
-      alert('Falha na comunicação com o backend FastAPI (porta 8000). Verifique se o servidor está rodando.');
+      alert('Erro ao processar roteirização. Verifique os endereços informados e o status da API.');
     } finally {
       setLoading(false);
     }
@@ -96,6 +100,8 @@ export default function App() {
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    setNomeArquivo(file.name);
+
     const formData = new FormData();
     formData.append('file', file);
     try {
@@ -104,6 +110,7 @@ export default function App() {
       setPedidos(res.data.pedidos);
     } catch (err) {
       alert('Erro ao importar arquivo. Certifique-se de que é uma planilha válida (.csv ou .xlsx).');
+      setNomeArquivo('');
     } finally {
       setLoading(false);
     }
@@ -115,11 +122,11 @@ export default function App() {
       {/* Navbar Superior Zubale */}
       <header className="h-16 border-b border-slate-800/80 bg-slate-900/60 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-50">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl overflow-hidden flex items-center justify-center bg-[#5B2E91] border border-[#7C3AED]/50 shadow-md shadow-purple-950/40 shrink-0">
+          <div className="w-10 h-10 rounded-xl overflow-hidden flex items-center justify-center bg-blue-500/10 border border-blue-500/20 shadow-md shadow-blue-950/40 p-1.5 shrink-0">
             <img 
-              src="logo-zubale.svg" 
+              src="/zubale-logo.png" 
               alt="Zubale Logo" 
-              className="w-full h-full object-cover"
+              className="w-full h-full object-contain"
             />
           </div>
 
@@ -128,7 +135,7 @@ export default function App() {
               <span className="font-extrabold text-base tracking-tight text-white">
                 Zubale
               </span>
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-300 border border-purple-500/20 font-semibold uppercase">
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 font-semibold uppercase">
                 Operations & Routing
               </span>
             </div>
@@ -142,43 +149,28 @@ export default function App() {
             <span>Motor VRP / OSRM Ativo</span>
           </div>
           <div className="flex items-center gap-1.5 text-slate-400 font-mono text-[11px]">
-            <ShieldCheck className="w-4 h-4 text-purple-400" />
+            <ShieldCheck className="w-4 h-4 text-blue-400" />
             <span>FastAPI Core</span>
           </div>
         </div>
       </header>
 
-      {/* Espaço de Trabalho Principal */}
+      {/* Espaço de Trabalho */}
       <div className="flex-1 flex flex-col lg:flex-row">
         
-        {/* Painel Lateral de Parâmetros */}
+        {/* Painel Lateral */}
         <aside className="w-full lg:w-[410px] border-r border-slate-800/80 bg-slate-900/30 p-6 flex flex-col gap-6 backdrop-blur-sm overflow-y-auto">
           
-          {/* Importação de Arquivos */}
-          <div>
-            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-2.5">Entrada de Dados</span>
-            <label className="border border-dashed border-slate-800 hover:border-blue-500/60 transition-all rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer bg-slate-900/40 group">
-              <Upload className="w-5 h-5 text-slate-400 group-hover:text-blue-400 transition-colors mb-1.5" />
-              <span className="text-xs font-semibold text-slate-200">Importar Planilha</span>
-              <span className="text-[11px] text-slate-500 mt-0.5">Formatos .CSV ou .XLSX</span>
-              <input type="file" accept=".csv,.xlsx" onChange={handleFileUpload} className="hidden" />
-            </label>
-            <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400 px-1">
-              <span>Fila de Entregas:</span>
-              <span className="font-mono text-slate-200 font-medium">{pedidos.length} pontos cadastrados</span>
-            </div>
-          </div>
-
-          {/* Configuração do CD / Hub */}
+          {/* 1. Hub / Loja Central */}
           <div className="space-y-3">
             <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-              <MapPin className="w-3.5 h-3.5 text-blue-400" /> Centro de Distribuição (Origem)
+              <MapPin className="w-3.5 h-3.5 text-blue-400" /> Loja Central / Hub de Origem
             </span>
             <input 
               type="text" 
               value={origem.rua} 
               onChange={(e) => setOrigem({...origem, rua: e.target.value})}
-              placeholder="Logradouro"
+              placeholder="Logradouro da Loja (ex: Av. Paulista)"
               className="w-full text-xs bg-slate-900/90 border border-slate-800 focus:border-blue-500/80 rounded-lg px-3 py-2.5 text-slate-100 placeholder:text-slate-500 focus:outline-none transition-colors"
             />
             <div className="grid grid-cols-2 gap-2">
@@ -186,20 +178,39 @@ export default function App() {
                 type="text" 
                 value={origem.numero} 
                 onChange={(e) => setOrigem({...origem, numero: e.target.value})}
-                placeholder="Número"
+                placeholder="Número (ex: 1000)"
                 className="w-full text-xs bg-slate-900/90 border border-slate-800 focus:border-blue-500/80 rounded-lg px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:outline-none transition-colors"
               />
               <input 
                 type="text" 
                 value={origem.cep} 
                 onChange={(e) => setOrigem({...origem, cep: e.target.value})}
-                placeholder="CEP"
+                placeholder="CEP (ex: 01310-100)"
                 className="w-full text-xs bg-slate-900/90 border border-slate-800 focus:border-blue-500/80 rounded-lg px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:outline-none transition-colors"
               />
             </div>
           </div>
 
-          {/* Gestão de Frota e Modais */}
+          {/* 2. Importação de Pedidos */}
+          <div>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-2.5">Grade de Pedidos</span>
+            <label className="border border-dashed border-slate-800 hover:border-blue-500/60 transition-all rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer bg-slate-900/40 group">
+              <Upload className="w-5 h-5 text-slate-400 group-hover:text-blue-400 transition-colors mb-1.5" />
+              <span className="text-xs font-semibold text-slate-200">
+                {nomeArquivo ? nomeArquivo : 'Importar Planilha de Entregas'}
+              </span>
+              <span className="text-[11px] text-slate-500 mt-0.5">Formatos .CSV ou .XLSX</span>
+              <input type="file" accept=".csv,.xlsx" onChange={handleFileUpload} className="hidden" />
+            </label>
+            <div className="mt-2 flex items-center justify-between text-[11px] px-1">
+              <span className="text-slate-400">Total Carregado:</span>
+              <span className={`font-mono font-semibold ${pedidos.length > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>
+                {pedidos.length} pedidos
+              </span>
+            </div>
+          </div>
+
+          {/* 3. Frota Multimodal */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
@@ -213,7 +224,7 @@ export default function App() {
               </button>
             </div>
 
-            <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+            <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
               {frota.map((item) => (
                 <div key={item.id} className="flex items-center gap-2 bg-slate-900/90 border border-slate-800/80 p-2.5 rounded-lg">
                   <div className="flex-1">
@@ -225,7 +236,7 @@ export default function App() {
                     >
                       {Object.keys(modais).map((m) => (
                         <option key={m} value={m} className="bg-slate-900 text-slate-100">
-                          {m} (Cap: {modais[m]?.capacidade || '--'} un)
+                          {m} (Cap: {modais[m]?.capacidade || '--'} pedidos)
                         </option>
                       ))}
                     </select>
@@ -242,7 +253,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* Parâmetros Financeiros */}
+          {/* 4. Parâmetros Financeiros */}
           <div className="space-y-3">
             <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
               <Sliders className="w-3.5 h-3.5 text-blue-400" /> Parâmetros Financeiros
@@ -273,11 +284,11 @@ export default function App() {
           {/* Botão de Execução */}
           <button
             onClick={handleOtimizar}
-            disabled={loading}
-            className="mt-auto w-full py-3.5 bg-blue-600 hover:bg-blue-500 active:scale-[0.99] transition-all rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-blue-600/25 text-white disabled:opacity-50"
+            disabled={loading || pedidos.length === 0 || !origem.rua}
+            className="mt-auto w-full py-3.5 bg-blue-600 hover:bg-blue-500 active:scale-[0.99] transition-all rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-blue-600/25 text-white disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4 fill-current" />}
-            {loading ? 'Calculando Malha Viária...' : 'Executar Roteirização'}
+            {loading ? 'Processando Malha Viária...' : 'Executar Roteirização'}
           </button>
         </aside>
 
@@ -286,7 +297,6 @@ export default function App() {
           
           {/* Cards de Métricas */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            
             <div className="bg-slate-900/50 border border-slate-800/80 p-5 rounded-xl">
               <div className="flex items-center justify-between text-slate-400 mb-2">
                 <span className="text-[11px] font-semibold tracking-wider uppercase">Volume Total</span>
@@ -353,14 +363,21 @@ export default function App() {
             {resultado ? (
               <MapaLeaflet origem={resultado.origem} rotas={resultado.rotas} />
             ) : (
-              <div className="h-[460px] flex flex-col items-center justify-center border border-slate-800/80 rounded-xl bg-slate-950/40 text-slate-500 gap-2">
-                <Navigation className="w-8 h-8 text-slate-600 stroke-[1.5]" />
-                <p className="text-xs font-medium">Inicie a roteirização para projetar as rotas e alocações de frota.</p>
+              <div className="h-[460px] flex flex-col items-center justify-center border border-slate-800/80 rounded-xl bg-slate-950/40 text-slate-500 gap-3">
+                <div className="w-12 h-12 rounded-full bg-slate-900 flex items-center justify-center border border-slate-800">
+                  <Navigation className="w-6 h-6 text-slate-500" />
+                </div>
+                <div className="text-center space-y-1">
+                  <p className="text-xs font-semibold text-slate-300">Nenhuma rota ativa</p>
+                  <p className="text-[11px] text-slate-500 max-w-sm">
+                    Informe o endereço da Loja Central, anexe a planilha com as entregas e clique em Executar Roteirização.
+                  </p>
+                </div>
               </div>
             )}
           </div>
 
-          {/* Tabela de Detalhamento por Rota */}
+          {/* Tabela de Resultados */}
           {resultado && (
             <div className="bg-slate-900/50 border border-slate-800/80 rounded-xl overflow-hidden">
               <div className="p-4 border-b border-slate-800/80 flex items-center justify-between">

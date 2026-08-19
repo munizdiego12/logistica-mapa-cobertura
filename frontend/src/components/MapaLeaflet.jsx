@@ -227,7 +227,7 @@ export default function MapaLeaflet({ origem, rotas }) {
                     <p className="text-[10px] text-slate-500">{p.Bairro} • CEP {p.CEP}</p>
                     <div className="mt-2 pt-1 border-t border-slate-200 flex justify-between text-[11px] text-slate-600 font-medium">
                       <span>Volume:</span>
-                      <span className="text-slate-800 font-bold">{p.Volume} un</span>
+                      <span className="text-slate-800 font-bold">{p.Volume} {p.Volume > 1 ? 'pedidos' : 'pedido'}</span>
                     </div>
                   </div>
                 </Popup>

@@ -3,7 +3,8 @@ import axios from 'axios';
 import { 
   Truck, DollarSign, Navigation, Package, Upload, 
   MapPin, Sliders, ArrowUpRight, Play, Loader2,
-  ShieldCheck, Activity, Plus, Trash2, Users, AlertCircle, CheckCircle2
+  ShieldCheck, Activity, Plus, Trash2, Users, AlertCircle, 
+  CheckCircle2, Download, FileSpreadsheet, FileDown
 } from 'lucide-react';
 import MapaLeaflet from './components/MapaLeaflet';
 
@@ -47,6 +48,14 @@ export default function App() {
       })
       .catch(() => {});
   }, []);
+
+  // Cálculo de Capacidade Total da Frota
+  const capacidadeTotalFrota = frota.reduce((acc, f) => {
+    const cap = modais[f.modal]?.capacidade || 0;
+    return acc + cap;
+  }, 0);
+
+  const sobrecarga = pedidos.length > capacidadeTotalFrota;
 
   const adicionarMotorista = () => {
     const nextId = frota.length > 0 ? Math.max(...frota.map(m => m.id)) + 1 : 1;
@@ -114,6 +123,62 @@ export default function App() {
     } finally {
       setLoading(false);
     }
+  };
+
+  // 1. Download de Planilha Modelo (.csv)
+  const baixarPlanilhaModelo = () => {
+    const cabecalho = "id,endereco,numero,bairro,cidade,uf,cep,volume\n";
+    const linhasExemplo = [
+      "101,Avenida Brigadeiro Luis Antonio,2000,Bela Vista,Sao Paulo,SP,01318-002,1",
+      "102,Rua Augusta,1500,Consolacao,Sao Paulo,SP,01304-001,1",
+      "103,Rua Oscar Freire,800,Cerqueira Cesar,Sao Paulo,SP,01426-000,1",
+      "104,Rua da Consolacao,2400,Consolacao,Sao Paulo,SP,01301-100,1",
+      "105,Alameda Santos,1800,Cerqueira Cesar,Sao Paulo,SP,01418-102,1"
+    ].join("\n");
+
+    const csvContent = "data:text/csv;charset=utf-8," + encodeURIComponent(cabecalho + linhasExemplo);
+    const downloadAnchor = document.createElement('a');
+    downloadAnchor.setAttribute('href', csvContent);
+    downloadAnchor.setAttribute('download', 'modelo_pedidos_zubale.csv');
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    downloadAnchor.remove();
+  };
+
+  // 3. Exportar Romaneio / Manifesto de Carga (.csv)
+  const exportarRomaneio = () => {
+    if (!resultado || !resultado.rotas) return;
+
+    let csvContent = "data:text/csv;charset=utf-8,Rota,Motorista,Veiculo,Ordem_Parada,Endereco,Numero,Bairro,CEP,Volume\n";
+
+    resultado.rotas.forEach((r, idx) => {
+      const motorista = frota[idx]?.motorista || `Motorista ${r.id}`;
+      const modal = frota[idx]?.modal || 'Padrão';
+
+      if (r.paradas && r.paradas.length > 0) {
+        r.paradas.forEach((p, pIdx) => {
+          const linha = [
+            `Rota ${r.id}`,
+            `"${motorista}"`,
+            `"${modal}"`,
+            pIdx + 1,
+            `"${p.Endereco || p.rua || ''}"`,
+            `"${p.Numero || p.numero || ''}"`,
+            `"${p.Bairro || p.bairro || ''}"`,
+            `"${p.CEP || p.cep || ''}"`,
+            p.Volume || 1
+          ].join(',');
+          csvContent += linha + "\n";
+        });
+      }
+    });
+
+    const downloadAnchor = document.createElement('a');
+    downloadAnchor.setAttribute('href', encodeURI(csvContent));
+    downloadAnchor.setAttribute('download', `romaneio_expedicao_zubale_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    downloadAnchor.remove();
   };
 
   return (
@@ -191,9 +256,19 @@ export default function App() {
             </div>
           </div>
 
-          {/* 2. Importação de Pedidos */}
+          {/* 2. Importação de Pedidos + Download do Modelo */}
           <div>
-            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-2.5">Grade de Pedidos</span>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Grade de Pedidos</span>
+              <button 
+                onClick={baixarPlanilhaModelo}
+                className="inline-flex items-center gap-1 text-[10px] text-blue-400 hover:text-blue-300 font-medium transition-colors"
+                title="Baixar planilha CSV com modelo de colunas aceito"
+              >
+                <Download className="w-3 h-3" /> Baixar Modelo
+              </button>
+            </div>
+
             <label className="border border-dashed border-slate-800 hover:border-blue-500/60 transition-all rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer bg-slate-900/40 group">
               <Upload className="w-5 h-5 text-slate-400 group-hover:text-blue-400 transition-colors mb-1.5" />
               <span className="text-xs font-semibold text-slate-200">
@@ -202,6 +277,7 @@ export default function App() {
               <span className="text-[11px] text-slate-500 mt-0.5">Formatos .CSV ou .XLSX</span>
               <input type="file" accept=".csv,.xlsx" onChange={handleFileUpload} className="hidden" />
             </label>
+
             <div className="mt-2 flex items-center justify-between text-[11px] px-1">
               <span className="text-slate-400">Total Carregado:</span>
               <span className={`font-mono font-semibold ${pedidos.length > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>
@@ -210,7 +286,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* 3. Frota Multimodal */}
+          {/* 3. Frota Multimodal + Indicador de Capacidade vs Demanda */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
@@ -222,6 +298,23 @@ export default function App() {
               >
                 <Plus className="w-3 h-3" /> Adicionar
               </button>
+            </div>
+
+            {/* Barra de Capacidade vs Demanda */}
+            <div className="p-2.5 rounded-lg bg-slate-950/60 border border-slate-800 text-[11px] space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Capacidade da Frota:</span>
+                <span className="font-mono font-bold text-slate-200">
+                  {capacidadeTotalFrota} pedidos
+                </span>
+              </div>
+
+              {sobrecarga && (
+                <div className="flex items-start gap-1.5 text-amber-400 text-[10px] leading-tight pt-1 border-t border-slate-800/80">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                  <span>Atenção: A demanda ({pedidos.length}) excede a capacidade ({capacidadeTotalFrota}). Adicione mais veículos.</span>
+                </div>
+              )}
             </div>
 
             <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
@@ -377,12 +470,20 @@ export default function App() {
             )}
           </div>
 
-          {/* Tabela de Resultados */}
+          {/* Tabela de Resultados + Exportação de Romaneio */}
           {resultado && (
             <div className="bg-slate-900/50 border border-slate-800/80 rounded-xl overflow-hidden">
               <div className="p-4 border-b border-slate-800/80 flex items-center justify-between">
-                <h3 className="font-bold text-xs uppercase tracking-wider text-slate-200">Matriz de Desempenho por Rota e Motorista</h3>
-                <span className="text-[11px] text-slate-400">{resultado.rotas.length} rotas geradas</span>
+                <div>
+                  <h3 className="font-bold text-xs uppercase tracking-wider text-slate-200">Matriz de Desempenho por Rota e Motorista</h3>
+                  <p className="text-[11px] text-slate-400">{resultado.rotas.length} rotas geradas</p>
+                </div>
+                <button
+                  onClick={exportarRomaneio}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-lg text-xs font-medium transition-colors"
+                >
+                  <FileDown className="w-3.5 h-3.5" /> Exportar Romaneio (.csv)
+                </button>
               </div>
               
               <div className="overflow-x-auto">

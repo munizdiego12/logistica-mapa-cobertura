@@ -4,7 +4,8 @@ import {
   Truck, DollarSign, Navigation, Package, Upload, 
   MapPin, Sliders, ArrowUpRight, Play, Loader2,
   ShieldCheck, Activity, Plus, Trash2, Users, AlertCircle, 
-  CheckSquare, Square, Download, FileSpreadsheet, FileDown
+  CheckSquare, Square, Download, FileSpreadsheet, FileDown,
+  Settings, ChevronDown, ChevronUp, Layers, Clock
 } from 'lucide-react';
 import MapaLeaflet from './components/MapaLeaflet';
 
@@ -12,6 +13,9 @@ const API_BASE = 'https://routeflow-backend-v5ji.onrender.com/api';
 
 export default function App() {
   const [loading, setLoading] = useState(false);
+  
+  // Painel de Configuração de Capacidades Variáveis por Loja
+  const [mostrarConfigModais, setMostrarConfigModais] = useState(false);
   const [modais, setModais] = useState({
     'Moto': { capacidade: 3, consumo_kml: 30.0 },
     'Carro de Passeio': { capacidade: 5, consumo_kml: 11.5 },
@@ -22,13 +26,13 @@ export default function App() {
   const [precoGasolina, setPrecoGasolina] = useState(5.80);
   const [custoHora, setCustoHora] = useState(25.00);
 
-  // Frota configurável inicial
+  // Frota configurável
   const [frota, setFrota] = useState([
     { id: 1, motorista: 'Motorista 01', modal: 'Carro de Passeio' },
     { id: 2, motorista: 'Motorista 02', modal: 'Fiorino / Utilitário' }
   ]);
 
-  // Hub Operacional Dinâmico
+  // Hub Operacional
   const [origem, setOrigem] = useState({
     rua: '',
     numero: '',
@@ -41,25 +45,26 @@ export default function App() {
   const [loteAtivoId, setLoteAtivoId] = useState(null);
   const [resultado, setResultado] = useState(null);
 
-  // Pedidos do lote atualmente selecionado
   const loteSelecionado = lotes.find(l => l.id === loteAtivoId);
   const pedidosAtivos = loteSelecionado ? loteSelecionado.pedidos : [];
 
-  useEffect(() => {
-    axios.get(`${API_BASE}/modais`)
-      .then(res => {
-        if (Object.keys(res.data).length > 0) setModais(res.data);
-      })
-      .catch(() => {});
-  }, []);
-
-  // Capacidade Total da Frota
-  const capacidadeTotalFrota = frota.reduce((acc, f) => {
+  // Capacidade por Viagem Simultânea
+  const capacidadeSimultaneaFrota = frota.reduce((acc, f) => {
     const cap = modais[f.modal]?.capacidade || 0;
     return acc + cap;
   }, 0);
 
-  const sobrecarga = pedidosAtivos.length > capacidadeTotalFrota;
+  // Alterar capacidade variável de um modal específico
+  const atualizarCapacidadeModal = (nomeModal, novaCapacidade) => {
+    const valor = Math.max(1, parseInt(novaCapacidade) || 1);
+    setModais(prev => ({
+      ...prev,
+      [nomeModal]: {
+        ...prev[nomeModal],
+        capacidade: valor
+      }
+    }));
+  };
 
   const adicionarMotorista = () => {
     const nextId = frota.length > 0 ? Math.max(...frota.map(m => m.id)) + 1 : 1;
@@ -79,7 +84,6 @@ export default function App() {
     setFrota(frota.map(m => m.id === id ? { ...m, modal: novoModal } : m));
   };
 
-  // Upload e adição de novo lote à lista
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -98,7 +102,7 @@ export default function App() {
       };
 
       setLotes(prev => [...prev, novoLote]);
-      setLoteAtivoId(novoLote.id); // Seleciona automaticamente o recém-anexado
+      setLoteAtivoId(novoLote.id);
     } catch (err) {
       alert('Erro ao importar arquivo. Certifique-se de que é uma planilha válida (.csv ou .xlsx).');
     } finally {
@@ -107,7 +111,6 @@ export default function App() {
     }
   };
 
-  // Excluir lote específico da lista
   const removerLote = (id, e) => {
     e.stopPropagation();
     const novosLotes = lotes.filter(l => l.id !== id);
@@ -135,8 +138,8 @@ export default function App() {
         origem_num: origem.numero,
         origem_bairro: origem.bairro,
         origem_cep: origem.cep,
-        modal: frota[0]?.modal || 'Carro de Passeio',
         frota: frota,
+        modais_config: modais,
         preco_gasolina: Number(precoGasolina),
         custo_hora: Number(custoHora),
         pedidos: pedidosAtivos
@@ -149,7 +152,6 @@ export default function App() {
     }
   };
 
-  // Download de Planilha Modelo (.csv)
   const baixarPlanilhaModelo = () => {
     const cabecalho = "id,endereco,numero,bairro,cidade,uf,cep,volume\n";
     const linhasExemplo = [
@@ -169,27 +171,23 @@ export default function App() {
     downloadAnchor.remove();
   };
 
-  // Download de Planilha Modelo em Excel (.xlsx)
   const baixarModeloXLSX = () => {
     window.open(`${API_BASE}/modelo-xlsx`, '_blank');
   };
 
-  // Exportar Romaneio de Carga (.csv)
   const exportarRomaneio = () => {
     if (!resultado || !resultado.rotas) return;
 
-    let csvContent = "data:text/csv;charset=utf-8,Rota,Motorista,Veiculo,Ordem_Parada,Endereco,Numero,Bairro,CEP,Volume\n";
+    let csvContent = "data:text/csv;charset=utf-8,Rota,Motorista,Viagem,Veiculo,Ordem_Parada,Endereco,Numero,Bairro,CEP,Volume\n";
 
-    resultado.rotas.forEach((r, idx) => {
-      const motorista = frota[idx]?.motorista || `Motorista ${r.id}`;
-      const modal = frota[idx]?.modal || 'Padrão';
-
+    resultado.rotas.forEach((r) => {
       if (r.paradas && r.paradas.length > 0) {
         r.paradas.forEach((p, pIdx) => {
           const linha = [
             `Rota ${r.id}`,
-            `"${motorista}"`,
-            `"${modal}"`,
+            `"${r.motorista_base || r.motorista}"`,
+            `Viagem ${r.viagem_num || 1}`,
+            `"${r.modal}"`,
             pIdx + 1,
             `"${p.Endereco || p.rua || ''}"`,
             `"${p.Numero || p.numero || ''}"`,
@@ -213,7 +211,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#030712] text-slate-100 flex flex-col antialiased selection:bg-blue-600 selection:text-white">
       
-      {/* Navbar Superior Zubale */}
+      {/* Navbar Superior */}
       <header className="h-16 border-b border-slate-800/80 bg-slate-900/60 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-50">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl overflow-hidden flex items-center justify-center bg-blue-500/10 border border-blue-500/20 shadow-md shadow-blue-950/40 p-1.5 shrink-0">
@@ -233,14 +231,14 @@ export default function App() {
                 Operations & Routing
               </span>
             </div>
-            <p className="text-[11px] text-slate-400">Inteligência Logística • Gestão Multimodal de Frota</p>
+            <p className="text-[11px] text-slate-400">Inteligência Logística • Gestão Multimodal & Clusters</p>
           </div>
         </div>
 
         <div className="flex items-center gap-4 text-xs">
           <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900/80 border border-slate-800 text-slate-300">
             <Activity className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Motor VRP / OSRM Ativo</span>
+            <span>VRP Cluster + Multi-Trip Ativo</span>
           </div>
           <div className="flex items-center gap-1.5 text-slate-400 font-mono text-[11px]">
             <ShieldCheck className="w-4 h-4 text-blue-400" />
@@ -253,7 +251,7 @@ export default function App() {
       <div className="flex-1 flex flex-col lg:flex-row">
         
         {/* Painel Lateral */}
-        <aside className="w-full lg:w-[410px] border-r border-slate-800/80 bg-slate-900/30 p-6 flex flex-col gap-6 backdrop-blur-sm overflow-y-auto">
+        <aside className="w-full lg:w-[420px] border-r border-slate-800/80 bg-slate-900/30 p-6 flex flex-col gap-6 backdrop-blur-sm overflow-y-auto">
           
           {/* 1. Hub / Loja Central */}
           <div className="space-y-3">
@@ -285,7 +283,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* 2. Gerenciador de Múltiplos Lotes de Pedidos */}
+          {/* 2. Gerenciador de Lotes de Pedidos */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
@@ -310,17 +308,15 @@ export default function App() {
               </div>
             </div>
 
-            {/* Upload de novo arquivo */}
             <label className="border border-dashed border-slate-800 hover:border-blue-500/60 transition-all rounded-xl p-3.5 flex flex-col items-center justify-center cursor-pointer bg-slate-900/40 group">
               <Upload className="w-4 h-4 text-slate-400 group-hover:text-blue-400 transition-colors mb-1" />
-              <span className="text-xs font-semibold text-slate-200">Anexar Novo Arquivo (.csv / .xlsx)</span>
-              <span className="text-[10px] text-slate-500">Adicione múltiplos lotes de entrega</span>
+              <span className="text-xs font-semibold text-slate-200">Anexar Planilha de Entregas</span>
+              <span className="text-[10px] text-slate-500">Formatos aceitos: .csv ou .xlsx</span>
               <input type="file" accept=".csv,.xlsx" onChange={handleFileUpload} className="hidden" />
             </label>
 
-            {/* Lista de Caixas com Checkbox e Lixeira */}
             {lotes.length > 0 && (
-              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+              <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
                 {lotes.map((lote) => {
                   const ativo = lote.id === loteAtivoId;
                   return (
@@ -334,7 +330,6 @@ export default function App() {
                       }`}
                     >
                       <div className="flex items-center gap-2.5 min-w-0">
-                        {/* Checkbox quadrado */}
                         <button type="button" className="text-blue-400 shrink-0">
                           {ativo ? (
                             <CheckSquare className="w-4 h-4 text-blue-400 fill-blue-500/20" />
@@ -352,7 +347,6 @@ export default function App() {
                         </div>
                       </div>
 
-                      {/* Lixeira */}
                       <button
                         onClick={(e) => removerLote(lote.id, e)}
                         className="p-1.5 text-slate-500 hover:text-rose-400 transition-colors ml-2 shrink-0"
@@ -367,18 +361,56 @@ export default function App() {
             )}
 
             <div className="flex items-center justify-between text-[11px] px-1">
-              <span className="text-slate-400">Lote Ativo Selecionado:</span>
+              <span className="text-slate-400">Lote Selecionado:</span>
               <span className={`font-mono font-semibold ${pedidosAtivos.length > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>
                 {pedidosAtivos.length} pedidos
               </span>
             </div>
           </div>
 
-          {/* 3. Frota Multimodal + Indicador de Capacidade vs Demanda */}
+          {/* 3. Configuração de Capacidades Variáveis por Loja */}
+          <div className="p-3 bg-slate-950/70 border border-slate-800 rounded-xl space-y-2.5">
+            <button
+              onClick={() => setMostrarConfigModais(!mostrarConfigModais)}
+              className="w-full flex items-center justify-between text-[11px] font-bold text-slate-300 hover:text-white uppercase tracking-wider"
+            >
+              <div className="flex items-center gap-1.5 text-blue-400">
+                <Settings className="w-3.5 h-3.5" />
+                <span>Capacidades Máximas por Modal</span>
+              </div>
+              {mostrarConfigModais ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+            </button>
+
+            {mostrarConfigModais && (
+              <div className="pt-2 border-t border-slate-800 space-y-2">
+                <p className="text-[10px] text-slate-400">Defina o teto de pedidos por viagem para cada tipo de veículo nesta loja:</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {Object.keys(modais).map((modalKey) => (
+                    <div key={modalKey} className="bg-slate-900/90 border border-slate-800/80 p-2 rounded-lg">
+                      <span className="text-[10px] text-slate-300 font-medium block truncate">{modalKey}</span>
+                      <div className="flex items-center gap-1 mt-1">
+                        <input
+                          type="number"
+                          min="1"
+                          max="200"
+                          value={modais[modalKey].capacidade}
+                          onChange={(e) => atualizarCapacidadeModal(modalKey, e.target.value)}
+                          className="w-full text-xs font-mono font-bold bg-slate-950 border border-slate-800 rounded px-2 py-1 text-emerald-400 focus:outline-none focus:border-blue-500"
+                        />
+                        <span className="text-[10px] text-slate-500">un</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* 4. Frota Multimodal & Monitor de Viagens */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                <Users className="w-3.5 h-3.5 text-blue-400" /> Frota Disponível ({frota.length})
+                <Users className="w-3.5 h-3.5 text-blue-400" /> Frota Alocada ({frota.length})
               </span>
               <button 
                 onClick={adicionarMotorista}
@@ -388,36 +420,34 @@ export default function App() {
               </button>
             </div>
 
-            {/* Barra de Capacidade da Frota vs Demanda do Lote */}
             <div className="p-2.5 rounded-lg bg-slate-950/60 border border-slate-800 text-[11px] space-y-1.5">
               <div className="flex items-center justify-between">
-                <span className="text-slate-400">Capacidade da Frota:</span>
+                <span className="text-slate-400">Capacidade por Saída Simultânea:</span>
                 <span className="font-mono font-bold text-slate-200">
-                  {capacidadeTotalFrota} pedidos
+                  {capacidadeSimultaneaFrota} pedidos / onda
                 </span>
               </div>
-
-              {sobrecarga && (
-                <div className="flex items-start gap-1.5 text-amber-400 text-[10px] leading-tight pt-1 border-t border-slate-800/80">
-                  <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                  <span>Atenção: O lote selecionado ({pedidosAtivos.length}) supera a capacidade ({capacidadeTotalFrota}).</span>
+              {pedidosAtivos.length > capacidadeSimultaneaFrota && (
+                <div className="flex items-center gap-1.5 text-blue-400 text-[10px] pt-1 border-t border-slate-800/80">
+                  <Layers className="w-3.5 h-3.5 shrink-0" />
+                  <span>Demanda maior que a frota: o sistema gerará <b>múltiplas viagens/ondas</b> por motorista.</span>
                 </div>
               )}
             </div>
 
-            <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
+            <div className="space-y-2 max-h-36 overflow-y-auto pr-1">
               {frota.map((item) => (
-                <div key={item.id} className="flex items-center gap-2 bg-slate-900/90 border border-slate-800/80 p-2.5 rounded-lg">
+                <div key={item.id} className="flex items-center gap-2 bg-slate-900/90 border border-slate-800/80 p-2 rounded-lg">
                   <div className="flex-1">
                     <span className="text-[11px] font-medium text-slate-300 block">{item.motorista}</span>
                     <select
                       value={item.modal}
                       onChange={(e) => atualizarModalMotorista(item.id, e.target.value)}
-                      className="w-full text-[11px] bg-slate-950 border border-slate-800 focus:border-blue-500/80 rounded px-2 py-1.5 mt-1.5 text-slate-200 focus:outline-none"
+                      className="w-full text-[11px] bg-slate-950 border border-slate-800 focus:border-blue-500/80 rounded px-2 py-1 mt-1 text-slate-200 focus:outline-none"
                     >
                       {Object.keys(modais).map((m) => (
                         <option key={m} value={m} className="bg-slate-900 text-slate-100">
-                          {m} (Cap: {modais[m]?.capacidade || '--'} pedidos)
+                          {m} (Máx: {modais[m]?.capacidade} un)
                         </option>
                       ))}
                     </select>
@@ -434,7 +464,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* 4. Parâmetros Financeiros */}
+          {/* 5. Parâmetros Financeiros */}
           <div className="space-y-3">
             <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
               <Sliders className="w-3.5 h-3.5 text-blue-400" /> Parâmetros Financeiros
@@ -469,7 +499,7 @@ export default function App() {
             className="mt-auto w-full py-3.5 bg-blue-600 hover:bg-blue-500 active:scale-[0.99] transition-all rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-blue-600/25 text-white disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4 fill-current" />}
-            {loading ? 'Processando Malha Viária...' : 'Executar Roteirização'}
+            {loading ? 'Agrupando Polígonos & Otimizando...' : 'Executar Roteirização'}
           </button>
         </aside>
 
@@ -491,12 +521,16 @@ export default function App() {
 
             <div className="bg-slate-900/50 border border-slate-800/80 p-5 rounded-xl">
               <div className="flex items-center justify-between text-slate-400 mb-2">
-                <span className="text-[11px] font-semibold tracking-wider uppercase">Veículos Alocados</span>
-                <Truck className="w-4 h-4 text-indigo-400" />
+                <span className="text-[11px] font-semibold tracking-wider uppercase">Rotas / Viagens</span>
+                <Layers className="w-4 h-4 text-indigo-400" />
               </div>
               <div className="flex items-baseline gap-2">
-                <span className="text-2xl font-black text-white font-mono">{resultado ? resultado.kpis.total_veiculos : frota.length}</span>
-                <span className="text-xs text-slate-500">rotas</span>
+                <span className="text-2xl font-black text-white font-mono">
+                  {resultado ? resultado.kpis.total_rotas_viagens : frota.length}
+                </span>
+                <span className="text-xs text-slate-500">
+                  {resultado ? `(${resultado.kpis.total_veiculos} veículos)` : 'rotas'}
+                </span>
               </div>
             </div>
 
@@ -533,11 +567,11 @@ export default function App() {
           <div className="bg-slate-900/50 border border-slate-800/80 p-4 rounded-xl">
             <div className="flex items-center justify-between mb-3 px-1">
               <div>
-                <h3 className="font-bold text-xs uppercase tracking-wider text-slate-200">Traçado Geoespacial em Malha Real</h3>
-                <p className="text-[11px] text-slate-500">Isolinhas concêntricas de alcance e percursos otimizados</p>
+                <h3 className="font-bold text-xs uppercase tracking-wider text-slate-200">Polígonos Espaciais & Malha Viária OSRM</h3>
+                <p className="text-[11px] text-slate-500">Agrupamento regional inteligente por bairros próximos</p>
               </div>
               <span className="text-[10px] font-mono px-2 py-1 bg-slate-900 border border-slate-800 text-slate-400 rounded-md">
-                OSRM Routing Engine
+                Spatial Clustering VRP
               </span>
             </div>
             
@@ -551,20 +585,20 @@ export default function App() {
                 <div className="text-center space-y-1">
                   <p className="text-xs font-semibold text-slate-300">Nenhuma rota ativa</p>
                   <p className="text-[11px] text-slate-500 max-w-sm">
-                    Preencha a Loja Central, selecione uma das caixas de arquivo anexadas e execute a roteirização.
+                    Preencha a Loja Central, selecione um lote anexado e clique em Executar Roteirização.
                   </p>
                 </div>
               </div>
             )}
           </div>
 
-          {/* Tabela de Resultados + Exportação de Romaneio */}
+          {/* Tabela de Resultados por Viagem / Motorista */}
           {resultado && (
             <div className="bg-slate-900/50 border border-slate-800/80 rounded-xl overflow-hidden">
               <div className="p-4 border-b border-slate-800/80 flex items-center justify-between">
                 <div>
-                  <h3 className="font-bold text-xs uppercase tracking-wider text-slate-200">Matriz de Desempenho por Rota e Motorista</h3>
-                  <p className="text-[11px] text-slate-400">{resultado.rotas.length} rotas geradas para o lote ativo</p>
+                  <h3 className="font-bold text-xs uppercase tracking-wider text-slate-200">Matriz de Despacho & Ondas de Entrega</h3>
+                  <p className="text-[11px] text-slate-400">{resultado.rotas.length} viagens distribuídas entre a frota</p>
                 </div>
                 <button
                   onClick={exportarRomaneio}
@@ -578,23 +612,26 @@ export default function App() {
                 <table className="w-full text-left text-xs">
                   <thead className="bg-slate-950/80 text-slate-400 border-b border-slate-800/80 text-[11px] uppercase tracking-wider">
                     <tr>
-                      <th className="p-3.5 font-semibold">Rota / Veículo</th>
+                      <th className="p-3.5 font-semibold">Despacho / Motorista</th>
+                      <th className="p-3.5 font-semibold">Veículo</th>
                       <th className="p-3.5 font-semibold">Entregas</th>
                       <th className="p-3.5 font-semibold">Quilometragem</th>
-                      <th className="p-3.5 font-semibold">Tempo Previsto</th>
-                      <th className="p-3.5 font-semibold">Custo Operacional</th>
-                      <th className="p-3.5 font-semibold">Custo Médio / Un</th>
-                      <th className="p-3.5 font-semibold text-right">Ação</th>
+                      <th className="p-3.5 font-semibold">Tempo</th>
+                      <th className="p-3.5 font-semibold">Custo Rota</th>
+                      <th className="p-3.5 font-semibold">Custo / Un</th>
+                      <th className="p-3.5 font-semibold text-right">Navegação</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60 font-mono text-[12px]">
-                    {resultado.rotas.map((r, idx) => (
+                    {resultado.rotas.map((r) => (
                       <tr key={r.id} className="hover:bg-slate-800/30 transition-colors">
                         <td className="p-3.5 font-sans font-bold flex items-center gap-2">
-                          <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: r.cor }}></span>
-                          <span>Rota #{r.id}</span>
+                          <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: r.cor }}></span>
+                          <span className="text-white">{r.motorista}</span>
+                        </td>
+                        <td className="p-3.5 text-slate-300 font-sans">
                           <span className="text-[10px] font-normal px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300">
-                            {frota[idx]?.modal || 'Padrão'}
+                            {r.modal}
                           </span>
                         </td>
                         <td className="p-3.5 text-slate-300 font-sans">{r.qtd_pedidos} paradas</td>
@@ -609,7 +646,7 @@ export default function App() {
                             rel="noreferrer"
                             className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-blue-600/10 hover:bg-blue-600 text-blue-400 hover:text-white rounded-md transition-all font-medium text-[11px] border border-blue-500/20"
                           >
-                            Navegação <ArrowUpRight className="w-3 h-3" />
+                            Maps <ArrowUpRight className="w-3 h-3" />
                           </a>
                         </td>
                       </tr>

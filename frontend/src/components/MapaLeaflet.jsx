@@ -10,7 +10,6 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
-// Ícone vetorial estilizado para as paradas numeradas
 const createStopIcon = (num, color) => {
   return L.divIcon({
     className: 'custom-stop-marker',
@@ -39,7 +38,6 @@ const createStopIcon = (num, color) => {
   });
 };
 
-// Ícone vetorial da Loja Central / Hub
 const hubIcon = L.divIcon({
   className: 'custom-hub-marker',
   html: `
@@ -71,7 +69,7 @@ function AjustarZoom({ center, pontos }) {
   useEffect(() => {
     if (pontos && pontos.length > 1) {
       try {
-        map.fitBounds(pontos, { padding: [45, 45], maxZoom: 15 });
+        map.fitBounds(pontos, { padding: [45, 45], maxZoom: 14 });
       } catch (e) {
         if (center) map.setView(center, 13);
       }
@@ -104,8 +102,6 @@ export default function MapaLeaflet({ origem, rotas }) {
     });
   });
 
-  // Zonas ordenadas DO MAIOR PARA O MENOR (12km -> 7km -> 3km)
-  // Isso garante que a menor área fique no topo e possa ser clicada sem sobreposição
   const zonasCobertura = [
     {
       raio: 12000,
@@ -113,23 +109,23 @@ export default function MapaLeaflet({ origem, rotas }) {
       titulo: 'Zona Estendida (Metropolitana)',
       sla: 'Mesmo dia (Same-Day / D+0)',
       veiculoSugerido: 'VUC / Fiorino / Carro',
-      descricao: 'Região periférica e anel metropolitano. Maior impacto em km rodados e tempo de trânsito.'
+      descricao: 'Região periférica e anel metropolitano. Maior impacto em km rodados e combustível.'
     },
     {
       raio: 7000,
       cor: '#3b82f6',
       titulo: 'Zona Secundária (Padrão)',
       sla: 'Até 2 horas',
-      veiculoSugerido: 'Carro de Passeio / Utilitário',
+      veiculoSugerido: 'Carro de Passeio / Fiorino',
       descricao: 'Área intermediária com fluxo moderado de tráfego. Equilíbrio entre custo e velocidade.'
     },
     {
       raio: 3000,
       cor: '#10b981',
-      titulo: 'Zona Primária (Expressa / Ultrarrápida)',
+      titulo: 'Zona Primária (Expressa)',
       sla: 'Até 45 minutos',
-      veiculoSugerido: 'Moto / Bike / Carro Leve',
-      descricao: 'Raio central de alta densidade de pedidos, máxima agilidade e menor custo por entrega.'
+      veiculoSugerido: 'Moto / Carro Leve',
+      descricao: 'Raio central de alta densidade urbana, máxima agilidade e menor custo.'
     }
   ];
 
@@ -143,7 +139,7 @@ export default function MapaLeaflet({ origem, rotas }) {
 
         <AjustarZoom center={center} pontos={todosPontos} />
 
-        {/* 1. ZONAS CIRCULARES (DO MAIOR PARA O MENOR PARA PERMITIR CLIQUE INDIVIDUAL) */}
+        {/* 1. Zonas Concêntricas */}
         {zonasCobertura.map((zona, idx) => (
           <Circle
             key={idx}
@@ -165,7 +161,6 @@ export default function MapaLeaflet({ origem, rotas }) {
                     {zona.titulo}
                   </span>
                 </div>
-
                 <div className="mt-2 space-y-1.5 text-[11px]">
                   <div className="flex justify-between items-center">
                     <span className="text-slate-500">Raio de Alcance:</span>
@@ -178,19 +173,16 @@ export default function MapaLeaflet({ origem, rotas }) {
                     </span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-slate-500">Modal Recomendado:</span>
+                    <span className="text-slate-500">Modal Sugerido:</span>
                     <span className="font-semibold text-slate-700">{zona.veiculoSugerido}</span>
                   </div>
-                  <p className="text-[10px] text-slate-500 pt-1.5 border-t border-slate-100 leading-snug">
-                    {zona.descricao}
-                  </p>
                 </div>
               </div>
             </Popup>
           </Circle>
         ))}
 
-        {/* 2. MARCADOR DO HUB CENTRAL */}
+        {/* 2. Marcador Hub Central */}
         <Marker position={center} icon={hubIcon}>
           <Popup>
             <div className="text-slate-900 font-sans p-1 min-w-[200px]">
@@ -203,7 +195,7 @@ export default function MapaLeaflet({ origem, rotas }) {
           </Popup>
         </Marker>
 
-        {/* 3. TRAÇADOS DAS ROTAS COM POPUP DE CUSTOS */}
+        {/* 3. Traçados e Paradas */}
         {rotasArray.map((rota) => {
           const listaParadas = rota.paradas || rota.pedidos || [];
           const polylinePositions = (Array.isArray(rota.geometria) && rota.geometria.length > 0)
@@ -229,11 +221,11 @@ export default function MapaLeaflet({ origem, rotas }) {
                         <div className="flex items-center gap-1.5">
                           <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: rota.cor }}></span>
                           <span className="font-bold text-xs uppercase tracking-wider text-slate-900">
-                            Rota #{rota.id}
+                            {rota.motorista || `Rota #${rota.id}`}
                           </span>
                         </div>
-                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-700">
-                          {rota.qtd_pedidos || listaParadas.length} pedidos
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-100 text-blue-800">
+                          {rota.modal}
                         </span>
                       </div>
 
@@ -244,16 +236,14 @@ export default function MapaLeaflet({ origem, rotas }) {
                             R$ {Number(rota.custo_total || 0).toFixed(2)}
                           </span>
                         </div>
-
                         <div className="flex justify-between items-center">
                           <span className="text-slate-500 text-[11px]">Média por Pedido:</span>
                           <span className="font-semibold text-slate-800 font-mono">
                             R$ {Number(rota.custo_por_pedido || 0).toFixed(2)}
                           </span>
                         </div>
-
                         <div className="flex justify-between items-center pt-1 border-t border-slate-100 text-[11px] text-slate-500">
-                          <span>{rota.km_total} km rodados</span>
+                          <span>{rota.km_total} km</span>
                           <span>{rota.tempo_formatado}</span>
                         </div>
                       </div>
@@ -262,37 +252,41 @@ export default function MapaLeaflet({ origem, rotas }) {
                 </Polyline>
               )}
 
-              {/* 4. MARCADORES NUMERADOS DE CADA PARADA */}
+              {/* 4. Marcadores Numerados com Modal Recomendado Explicito */}
               {listaParadas.map((p, pIdx) => {
                 if (typeof p.lat !== 'number' || typeof p.lon !== 'number') return null;
                 const volume = p.Volume || p.volume || 1;
                 const logradouro = p.Endereco || p.Logradouro || p.rua || 'Endereço';
                 const numero = p.Numero || p.numero || 'S/N';
                 const bairro = p.Bairro || p.bairro || '';
-                const cep = p.CEP || p.cep || '';
-                const cliente = p.Cliente || p.cliente || `Pedido #${p.id || pIdx + 1}`;
+                const modalAlocado = p.modal_alocado || rota.modal || 'Carro de Passeio';
 
                 return (
                   <Marker
-                    key={p.id || p["ID Pedido"] || pIdx}
+                    key={p.id || pIdx}
                     position={[p.lat, p.lon]}
                     icon={createStopIcon(pIdx + 1, rota.cor)}
                   >
                     <Popup>
-                      <div className="text-slate-900 font-sans p-1 min-w-[200px]">
+                      <div className="text-slate-900 font-sans p-1 min-w-[210px]">
                         <div className="flex items-center justify-between pb-1 border-b border-slate-200">
-                          <span className="text-[10px] font-bold tracking-wider uppercase block" style={{ color: rota.cor }}>
-                            Parada {pIdx + 1} • Rota #{rota.id}
+                          <span className="text-[10px] font-bold tracking-wider uppercase" style={{ color: rota.cor }}>
+                            Parada {pIdx + 1} • {rota.motorista_base || `Rota ${rota.id}`}
                           </span>
-                          <span className="text-[10px] font-mono text-slate-400">
-                            ID: {p.id || pIdx + 1}
-                          </span>
+                          <span className="text-[10px] font-mono text-slate-400">ID #{p.id}</span>
                         </div>
-                        <p className="font-bold text-xs text-slate-900 mt-1">{cliente}</p>
-                        <p className="text-[11px] text-slate-600 leading-tight">{logradouro}, {numero}</p>
-                        <p className="text-[10px] text-slate-500">{bairro} {cep ? `• CEP ${cep}` : ''}</p>
+
+                        {/* Tag de Modal Alocado */}
+                        <div className="mt-1.5 mb-1 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-bold text-slate-800">
+                          <span>Modal:</span>
+                          <span className="text-blue-600">{modalAlocado}</span>
+                        </div>
+
+                        <p className="font-semibold text-xs text-slate-900">{logradouro}, {numero}</p>
+                        <p className="text-[11px] text-slate-500">{bairro} {p.CEP ? `• CEP ${p.CEP}` : ''}</p>
+                        
                         <div className="mt-2 pt-1 border-t border-slate-200 flex justify-between text-[11px] text-slate-600 font-medium">
-                          <span>Volume:</span>
+                          <span>Volume da Parada:</span>
                           <span className="text-slate-800 font-bold">{volume} {volume > 1 ? 'pedidos' : 'pedido'}</span>
                         </div>
                       </div>

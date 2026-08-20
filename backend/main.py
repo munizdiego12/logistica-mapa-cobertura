@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-app = FastAPI(title="Zubale Routing Core - Cluster & Multi-Trip Engine")
+app = FastAPI(title="Zubale Routing Core - Polar Clustering & Vehicle Allocation")
 
 app.add_middleware(
     CORSMiddleware,
@@ -31,49 +31,64 @@ CORES_ROTAS = [
     '#F97316', '#14B8A6', '#6366F1', '#D946EF'
 ]
 
-# Geocodificação com Fallback
+# Dicionário Geoespacial Preciso para São Paulo
+COORDENADAS_PONTOS_SP = {
+    'paulista': (-23.5614, -46.6559),
+    'augusta': (-23.5539, -46.6575),
+    'oscar freire': (-23.5630, -46.6698),
+    'santos': (-23.5670, -46.6520),
+    'consolacao': (-23.5505, -46.6542),
+    'consolação': (-23.5505, -46.6542),
+    'brigadeiro': (-23.5678, -46.6489),
+    'faria lima': (-23.5866, -46.6823),
+    'pinheiros': (-23.5663, -46.6912),
+    'fradique': (-23.5601, -46.6890),
+    'harmonia': (-23.5540, -46.6910),
+    'pedroso de morais': (-23.5580, -46.6950),
+    'maracatins': (-23.6080, -46.6610),
+    'ibirapuera': (-23.6020, -46.6600),
+    'macuco': (-23.6010, -46.6660),
+    'antonio jose dos santos': (-23.6120, -46.6880),
+    'antônio josé dos santos': (-23.6120, -46.6880),
+    'vieira de morais': (-23.6210, -46.6780),
+    'domingos de morais': (-23.5850, -46.6380),
+    'vergueiro': (-23.5780, -46.6400),
+    'tuiuti': (-23.5410, -46.5750),
+    'serra de braganca': (-23.5430, -46.5680),
+    'serra de bragança': (-23.5430, -46.5680),
+    'mooca': (-23.5580, -46.5980),
+    'braz leme': (-23.5080, -46.6420),
+    'voluntarios da patria': (-23.5010, -46.6260),
+    'voluntários da pátria': (-23.5010, -46.6260)
+}
+
 def geocode_endereco(rua: str, numero: str = "", bairro: str = "", cidade: str = "São Paulo", uf: str = "SP"):
+    r_lower = (rua or "").lower()
+    for chave, coords in COORDENADAS_PONTOS_SP.items():
+        if chave in r_lower:
+            num_offset = (int(''.join(filter(str.isdigit, str(numero))) or 1) % 50) * 0.0001
+            return coords[0] + num_offset, coords[1] + num_offset
+
     query = f"{rua}, {numero}, {bairro}, {cidade} - {uf}, Brasil"
     url = f"https://nominatim.openstreetmap.org/search?format=json&q={query}&limit=1"
-    headers = {'User-Agent': 'ZubaleLogisticsEnterprise/2.0 (operations@zubale.com)'}
+    headers = {'User-Agent': 'ZubaleSpatialRouting/3.0'}
     
     try:
-        res = requests.get(url, headers=headers, timeout=5)
+        res = requests.get(url, headers=headers, timeout=4)
         data = res.json()
         if data and len(data) > 0:
             return float(data[0]['lat']), float(data[0]['lon'])
     except Exception:
         pass
     
-    r_lower = rua.lower()
-    if 'paulista' in r_lower:
-        return -23.5614, -46.6559
-    elif 'faria lima' in r_lower:
-        return -23.5866, -46.6823
-    elif 'augusta' in r_lower:
-        return -23.5539, -46.6575
-    elif 'oscar freire' in r_lower:
-        return -23.5630, -46.6698
-    elif 'consolacao' in r_lower or 'consolação' in r_lower:
-        return -23.5505, -46.6542
-    elif 'brigadeiro' in r_lower:
-        return -23.5678, -46.6489
-    elif 'pinheiros' in r_lower:
-        return -23.5663, -46.6912
-    elif 'fradique' in r_lower:
-        return -23.5601, -46.6890
-    elif 'maracatins' in r_lower or 'ibirapuera' in r_lower or 'moema' in r_lower:
-        return -23.6050, -46.6630
-    elif 'domingos de morais' in r_lower or 'vergueiro' in r_lower:
-        return -23.5850, -46.6380
-    
-    hash_val = sum(ord(c) for c in (rua + str(numero))) % 100
-    return -23.5505 + (hash_val * 0.0005), -46.6333 + (hash_val * 0.0005)
+    # Coordenada base central com separação determinística
+    hash_val = sum(ord(c) for c in (rua + str(numero))) % 50
+    return -23.5505 + (hash_val * 0.001), -46.6333 + (hash_val * 0.001)
 
 def dist_coords(c1, c2):
     return math.sqrt((c1[0] - c2[0])**2 + (c1[1] - c2[1])**2)
 
-# Otimizador TSP 2-Opt para percurso sem cruzamentos
+# Otimização TSP 2-Opt para menor trajeto interno
 def ordenar_paradas_otimizadas(origem_coords, lista_pedidos):
     if len(lista_pedidos) <= 1:
         return lista_pedidos
@@ -114,7 +129,42 @@ def ordenar_paradas_otimizadas(origem_coords, lista_pedidos):
 
     return rota_ordenada
 
-# Traçado OSRM
+# Agrupamento Espacial por Setores Angulares (Polígonos Geográficos)
+def agrupar_pedidos_por_poligono_setorial(origem_lat, origem_lon, pedidos, max_por_rota=6):
+    if not pedidos:
+        return []
+
+    # Calcula o ângulo de cada entrega em relação ao Hub Central
+    for p in pedidos:
+        d_lat = p['lat'] - origem_lat
+        d_lon = p['lon'] - origem_lon
+        p['angulo'] = math.atan2(d_lat, d_lon)
+        p['dist_hub'] = math.sqrt(d_lat**2 + d_lon**2)
+
+    # Ordena os pedidos pela rotação angular em torno da cidade
+    pedidos_ordenados = sorted(pedidos, key=lambda x: x['angulo'])
+
+    clusters = []
+    cluster_atual = []
+
+    for p in pedidos_ordenados:
+        if len(cluster_atual) >= max_por_rota:
+            clusters.append(cluster_atual)
+            cluster_atual = []
+        elif cluster_atual:
+            # Se o novo ponto estiver em quadrante muito distante, abre novo setor
+            diff_ang = abs(p['angulo'] - cluster_atual[0]['angulo'])
+            if diff_ang > 1.2:  # ~70 graus de diferença
+                clusters.append(cluster_atual)
+                cluster_atual = []
+
+        cluster_atual.append(p)
+
+    if cluster_atual:
+        clusters.append(cluster_atual)
+
+    return clusters
+
 def get_osrm_route(pontos):
     if len(pontos) < 2:
         return 0, 0, []
@@ -145,36 +195,6 @@ def get_osrm_route(pontos):
     dist_km = round(dist_total, 2)
     tempo_min = round((dist_km / 22.0) * 60)
     return dist_km, tempo_min, geometria
-
-# Clusterização Espacial por Regiões / Polígonos
-def agrupar_pedidos_em_clusters(pedidos, max_tamanho_cluster=5):
-    if not pedidos:
-        return []
-    
-    pedidos_restantes = list(pedidos)
-    clusters = []
-
-    while pedidos_restantes:
-        p_semente = pedidos_restantes.pop(0)
-        cluster_atual = [p_semente]
-
-        while pedidos_restantes and len(cluster_atual) < max_tamanho_cluster:
-            # Encontra o pedido mais próximo do centroide do cluster atual
-            c_lat = sum(p['lat'] for p in cluster_atual) / len(cluster_atual)
-            c_lon = sum(p['lon'] for p in cluster_atual) / len(cluster_atual)
-
-            mais_proximo = min(
-                pedidos_restantes,
-                key=lambda p: dist_coords((c_lat, c_lon), (p['lat'], p['lon']))
-            )
-            
-            # Se for razoavelmente próximo, adiciona ao cluster regional
-            cluster_atual.append(mais_proximo)
-            pedidos_restantes.remove(mais_proximo)
-
-        clusters.append(cluster_atual)
-
-    return clusters
 
 class MotoristaItem(BaseModel):
     id: int
@@ -269,7 +289,6 @@ async def upload_planilha(file: UploadFile = File(...)):
 @app.post("/api/otimizar")
 def otimizar_rotas(req: OtimizarRequest):
     try:
-        # Configuração de modais dinâmicos enviados pela Loja
         modais_usar = {}
         if req.modais_config:
             for k, v in req.modais_config.items():
@@ -309,38 +328,38 @@ def otimizar_rotas(req: OtimizarRequest):
                 "lon": p_lon
             })
 
-        # 3. Frota ativa
+        # 3. Frota
         frota_usar = req.frota if req.frota and len(req.frota) > 0 else [
             MotoristaItem(id=1, motorista="Motorista 01", modal="Carro de Passeio")
         ]
 
-        # 4. Agrupamento em Polígonos/Clusters Regionais
-        # Define o tamanho médio do cluster baseado na média de capacidade configurada
-        capacidades_frota = [modais_usar.get(f.modal, {'capacidade': 5})['capacidade'] for f in frota_usar]
-        media_capacidade = max(1, sum(capacidades_frota) // len(capacidades_frota))
-        
-        clusters_regionais = agrupar_pedidos_em_clusters(pedidos_geo, max_tamanho_cluster=media_capacidade)
+        # 4. Agrupamento por Setor/Polígono Regional
+        max_setor = max(1, sum(modais_usar.get(f.modal, {'capacidade': 6})['capacidade'] for f in frota_usar) // len(frota_usar))
+        clusters_setoriais = agrupar_pedidos_por_poligono_setorial(orig_lat, orig_lon, pedidos_geo, max_por_rota=max_setor)
 
-        # 5. Distribuição em Viagens/Ondas por Motorista (Multi-Trip Routing)
+        # 5. Distribuição de Viagens e Rotas
         rotas_resultado = []
         km_total_geral = 0.0
         custo_total_geral = 0.0
-
-        # Rastreia contagem de viagens por motorista
         motorista_viagens = {f.id: 0 for f in frota_usar}
 
-        for c_idx, cluster in enumerate(clusters_regionais):
-            # Atribui ao motorista disponível em esquema round-robin
+        for c_idx, cluster in enumerate(clusters_setoriais):
             mot_idx = c_idx % len(frota_usar)
             mot_info = frota_usar[mot_idx]
             motorista_viagens[mot_info.id] += 1
             num_viagem = motorista_viagens[mot_info.id]
 
-            modal_config = modais_usar.get(mot_info.modal, {'consumo_kml': 11.5, 'capacidade': 5})
+            modal_config = modais_usar.get(mot_info.modal, {'consumo_kml': 11.5, 'capacidade': 6})
             consumo_kml = modal_config.get('consumo_kml', 11.5)
 
-            # Otimização TSP sequencial da rota dentro do cluster regional
+            # Rota interna otimizada no setor
             pts_rota = ordenar_paradas_otimizadas((orig_lat, orig_lon), cluster)
+
+            # Carimba em cada pedido o modal e motorista alocado
+            for p in pts_rota:
+                p['modal_alocado'] = mot_info.modal
+                p['motorista_alocado'] = mot_info.motorista
+                p['viagem_alocada'] = num_viagem
 
             pontos_coords = [(orig_lat, orig_lon)] + [(p['lat'], p['lon']) for p in pts_rota] + [(orig_lat, orig_lon)]
             dist_km, tempo_min, geometria = get_osrm_route(pontos_coords)
@@ -356,8 +375,7 @@ def otimizar_rotas(req: OtimizarRequest):
             waypoint_coords = "/".join([f"{p['lat']},{p['lon']}" for p in pts_rota])
             link_maps = f"https://www.google.com/maps/dir/{orig_lat},{orig_lon}/{waypoint_coords}/{orig_lat},{orig_lon}"
 
-            # Identificador do motorista com Viagem/Onda
-            titulo_viagem = f"{mot_info.motorista} • Viagem {num_viagem}" if len(clusters_regionais) > len(frota_usar) else mot_info.motorista
+            titulo_viagem = f"{mot_info.motorista} • Viagem {num_viagem}" if len(clusters_setoriais) > len(frota_usar) else mot_info.motorista
 
             rotas_resultado.append({
                 "id": c_idx + 1,

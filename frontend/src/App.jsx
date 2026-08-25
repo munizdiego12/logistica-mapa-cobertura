@@ -234,9 +234,22 @@ export default function App() {
       csvContent += linha + "\n";
     });
 
+    // Sanitiza o nome do Hub para gerar um nome de arquivo limpo
+    const nomeHubLimpo = (origem.rua || dadosCoberturaCeps.hub?.cidade || 'hub')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '') // remove acentos
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '_')     // substitui caracteres especiais e espaços por _
+      .replace(/_+/g, '_')            // remove duplicidades de _
+      .slice(0, 30);                  // limita o tamanho
+
+    const numHubLimpo = origem.numero ? `_${origem.numero}` : '';
+    const dataAtual = new Date().toISOString().slice(0, 10);
+    const nomeArquivo = `tabela_gazin_${nomeHubLimpo}${numHubLimpo}_${dataAtual}.csv`;
+
     const downloadAnchor = document.createElement('a');
     downloadAnchor.setAttribute('href', encodeURI(csvContent));
-    downloadAnchor.setAttribute('download', `tabela_frete_gazin_raio30km_${new Date().toISOString().slice(0, 10)}.csv`);
+    downloadAnchor.setAttribute('download', nomeArquivo);
     document.body.appendChild(downloadAnchor);
     downloadAnchor.click();
     downloadAnchor.remove();

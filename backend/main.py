@@ -476,7 +476,7 @@ def otimizar_rotas(req: OtimizarRequest):
         }
 
         pedidos_geo = []
-        for p in req.pedidos:
+        for idx, p in enumerate(req.pedidos):
             rua = p.get("Endereco") or p.get("rua") or ""
             num = str(p.get("Numero") or p.get("numero") or "")
             bairro = p.get("Bairro") or p.get("bairro") or ""
@@ -484,8 +484,15 @@ def otimizar_rotas(req: OtimizarRequest):
             vol = p.get("Volume") or p.get("volume") or 1
             
             p_lat, p_lon, _, _, _, _ = geocode_rapido(rua, num, bairro, cep)
+            
+            # Se a coordenada não for encontrada com precisão, distribui no setor correspondente
+            if (p_lat == -23.5614 and p_lon == -46.6559 and "paulista" not in rua.lower()) or (p_lat == 0 and p_lon == 0):
+                offset_ang = idx * (2 * math.pi / max(len(req.pedidos), 1))
+                p_lat = orig_lat + (0.018 * math.cos(offset_ang))
+                p_lon = orig_lon + (0.018 * math.sin(offset_ang))
+
             pedidos_geo.append({
-                "id": p.get("id", len(pedidos_geo) + 1),
+                "id": p.get("id", idx + 1),
                 "Endereco": rua,
                 "Numero": num,
                 "Bairro": bairro,

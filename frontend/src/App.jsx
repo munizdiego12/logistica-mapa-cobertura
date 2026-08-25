@@ -5,7 +5,7 @@ import {
   MapPin, Sliders, ArrowUpRight, Play, Loader2,
   ShieldCheck, Activity, Plus, Trash2, Users, AlertCircle, 
   CheckSquare, Square, Download, FileSpreadsheet, FileDown,
-  Settings, ChevronDown, ChevronUp, Layers, Clock
+  Settings, ChevronDown, ChevronUp, Layers, Compass, Table as TableIcon
 } from 'lucide-react';
 import MapaLeaflet from './components/MapaLeaflet';
 
@@ -13,6 +13,8 @@ const API_BASE = 'https://routeflow-backend-v5ji.onrender.com/api';
 
 export default function App() {
   const [loading, setLoading] = useState(false);
+  const [loadingCeps, setLoadingCeps] = useState(false);
+  const [dadosCoberturaCeps, setDadosCoberturaCeps] = useState(null);
   
   // Painel de Configuração de Capacidades Variáveis por Loja
   const [mostrarConfigModais, setMostrarConfigModais] = useState(false);
@@ -121,6 +123,29 @@ export default function App() {
     }
   };
 
+  // 1. Consultar Cobertura de CEPs por Haversine (0 a 30 km)
+  const consultarCoberturaCeps = async () => {
+    if (!origem.rua || !origem.numero) {
+      alert('Por favor, preencha o Logradouro e o Número da Loja Central.');
+      return;
+    }
+
+    setLoadingCeps(true);
+    try {
+      const res = await axios.post(`${API_BASE}/cobertura-ceps`, {
+        origem_rua: origem.rua,
+        origem_num: origem.numero,
+        origem_cep: origem.cep,
+        raio_km: 30.0
+      });
+      setDadosCoberturaCeps(res.data);
+    } catch (err) {
+      alert('Erro ao calcular cobertura de CEPs via Haversine. Verifique a API.');
+    } finally {
+      setLoadingCeps(false);
+    }
+  };
+
   const handleOtimizar = async () => {
     if (!origem.rua || !origem.numero) {
       alert('Por favor, preencha o Logradouro e o Número da Loja Central.');
@@ -173,6 +198,34 @@ export default function App() {
 
   const baixarModeloXLSX = () => {
     window.open(`${API_BASE}/modelo-xlsx`, '_blank');
+  };
+
+  // Exportar Tabela Gazin Log com Faixas de CEP
+  const exportarTabelaGazin = () => {
+    if (!dadosCoberturaCeps || !dadosCoberturaCeps.pontos_cobertos) {
+      alert('Clique primeiro em "Consultar Faixas de CEP (30 km)" para gerar a base de cobertura.');
+      return;
+    }
+
+    let csvContent = "data:text/csv;charset=utf-8,Codigo IBGE,UF,Cidade,Faixa Precificacao,Distancia KM,Raio Limite\n";
+    dadosCoberturaCeps.pontos_cobertos.forEach((p, idx) => {
+      const linha = [
+        3550308, // IBGE SP Capital
+        "SP",
+        `"${p.localidade}"`,
+        `"Raio ${p.distancia_km} km"`,
+        p.distancia_km,
+        "30 km"
+      ].join(',');
+      csvContent += linha + "\n";
+    });
+
+    const downloadAnchor = document.createElement('a');
+    downloadAnchor.setAttribute('href', encodeURI(csvContent));
+    downloadAnchor.setAttribute('download', `tabela_frete_gazin_raio30km_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    downloadAnchor.remove();
   };
 
   const exportarRomaneio = () => {
@@ -231,14 +284,14 @@ export default function App() {
                 Operations & Routing
               </span>
             </div>
-            <p className="text-[11px] text-slate-400">Inteligência Logística • Gestão Multimodal & Clusters</p>
+            <p className="text-[11px] text-slate-400">Inteligência Logística • Gestão Multimodal & Haversine 30km</p>
           </div>
         </div>
 
         <div className="flex items-center gap-4 text-xs">
           <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900/80 border border-slate-800 text-slate-300">
-            <Activity className="w-3.5 h-3.5 text-emerald-400" />
-            <span>VRP Cluster + Multi-Trip Ativo</span>
+            <Compass className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Haversine Raio 30km Ativo</span>
           </div>
           <div className="flex items-center gap-1.5 text-slate-400 font-mono text-[11px]">
             <ShieldCheck className="w-4 h-4 text-blue-400" />
@@ -255,9 +308,21 @@ export default function App() {
           
           {/* 1. Hub / Loja Central */}
           <div className="space-y-3">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-              <MapPin className="w-3.5 h-3.5 text-blue-400" /> Loja Central / Hub de Origem
-            </span>
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                <MapPin className="w-3.5 h-3.5 text-blue-400" /> Loja Central / Hub de Origem
+              </span>
+              <button
+                onClick={consultarCoberturaCeps}
+                disabled={loadingCeps || !origem.rua}
+                className="text-[10px] font-semibold text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded transition-colors flex items-center gap-1 disabled:opacity-40"
+                title="Consultar Faixa de CEPs até 30km"
+              >
+                {loadingCeps ? <Loader2 className="w-3 h-3 animate-spin" /> : <Compass className="w-3 h-3" />}
+                Raio 30 km
+              </button>
+            </div>
+
             <input 
               type="text" 
               value={origem.rua} 
@@ -281,6 +346,22 @@ export default function App() {
                 className="w-full text-xs bg-slate-900/90 border border-slate-800 focus:border-blue-500/80 rounded-lg px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:outline-none transition-colors"
               />
             </div>
+
+            {/* Painel Informativo da Consulta de Raio 30km */}
+            {dadosCoberturaCeps && (
+              <div className="p-2.5 rounded-lg bg-emerald-950/30 border border-emerald-500/30 text-[11px] space-y-1">
+                <div className="flex justify-between items-center text-emerald-400 font-bold">
+                  <span>Cobertura Haversine:</span>
+                  <span>{dadosCoberturaCeps.total_pontos} CEPs no Raio de 30 km</span>
+                </div>
+                <button
+                  onClick={exportarTabelaGazin}
+                  className="w-full mt-1.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-semibold text-[10px] flex items-center justify-center gap-1 transition-colors"
+                >
+                  <TableIcon className="w-3 h-3" /> Baixar Tabela de Frete (Gazin Log)
+                </button>
+              </div>
+            )}
           </div>
 
           {/* 2. Gerenciador de Lotes de Pedidos */}
@@ -567,16 +648,16 @@ export default function App() {
           <div className="bg-slate-900/50 border border-slate-800/80 p-4 rounded-xl">
             <div className="flex items-center justify-between mb-3 px-1">
               <div>
-                <h3 className="font-bold text-xs uppercase tracking-wider text-slate-200">Polígonos Espaciais & Malha Viária OSRM</h3>
-                <p className="text-[11px] text-slate-500">Agrupamento regional inteligente por bairros próximos</p>
+                <h3 className="font-bold text-xs uppercase tracking-wider text-slate-200">Polígonos Espaciais & Raio de Cobertura</h3>
+                <p className="text-[11px] text-slate-500">Isolinhas concêntricas até 30 km com cálculo de Haversine e traçado viário OSRM</p>
               </div>
               <span className="text-[10px] font-mono px-2 py-1 bg-slate-900 border border-slate-800 text-slate-400 rounded-md">
-                Spatial Clustering VRP
+                Haversine + Polar VRP
               </span>
             </div>
             
             {resultado ? (
-              <MapaLeaflet origem={resultado.origem} rotas={resultado.rotas} />
+              <MapaLeaflet origem={resultado.origem} rotas={resultado.rotas} mostrarRaio30km={true} />
             ) : (
               <div className="h-[460px] flex flex-col items-center justify-center border border-slate-800/80 rounded-xl bg-slate-950/40 text-slate-500 gap-3">
                 <div className="w-12 h-12 rounded-full bg-slate-900 flex items-center justify-center border border-slate-800">
@@ -600,12 +681,14 @@ export default function App() {
                   <h3 className="font-bold text-xs uppercase tracking-wider text-slate-200">Matriz de Despacho & Ondas de Entrega</h3>
                   <p className="text-[11px] text-slate-400">{resultado.rotas.length} viagens distribuídas entre a frota</p>
                 </div>
-                <button
-                  onClick={exportarRomaneio}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-lg text-xs font-medium transition-colors"
-                >
-                  <FileDown className="w-3.5 h-3.5" /> Exportar Romaneio (.csv)
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={exportarRomaneio}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-lg text-xs font-medium transition-colors"
+                  >
+                    <FileDown className="w-3.5 h-3.5" /> Romaneio (.csv)
+                  </button>
+                </div>
               </div>
               
               <div className="overflow-x-auto">

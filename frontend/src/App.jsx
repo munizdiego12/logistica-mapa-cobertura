@@ -125,30 +125,31 @@ export default function App() {
 
   // 1. Consultar Cobertura de CEPs por Haversine (0 a 30 km)
   const consultarCoberturaCeps = async () => {
-    if (!origem.rua || !origem.numero) {
-      alert('Por favor, preencha o Logradouro e o Número da Loja Central.');
+    if (!origem.rua && !origem.cep) {
+      alert('Por favor, informe o Logradouro ou o CEP da Loja Central.');
       return;
     }
 
     setLoadingCeps(true);
     try {
       const res = await axios.post(`${API_BASE}/cobertura-ceps`, {
-        origem_rua: origem.rua,
-        origem_num: origem.numero,
-        origem_cep: origem.cep,
+        origem_rua: origem.rua || "Centro Operacional",
+        origem_num: origem.numero || "S/N",
+        origem_cep: origem.cep || "",
+        origem_bairro: origem.bairro || "",
         raio_km: 30.0
       });
       setDadosCoberturaCeps(res.data);
     } catch (err) {
-      alert('Erro ao calcular cobertura de CEPs via Haversine. Verifique a API.');
+      alert('Erro ao calcular cobertura dinâmica de CEPs. Verifique a conexão com a API.');
     } finally {
       setLoadingCeps(false);
     }
   };
 
   const handleOtimizar = async () => {
-    if (!origem.rua || !origem.numero) {
-      alert('Por favor, preencha o Logradouro e o Número da Loja Central.');
+    if (!origem.rua && !origem.cep) {
+      alert('Por favor, informe o Logradouro ou o CEP da Loja Central.');
       return;
     }
     if (pedidosAtivos.length === 0) {
@@ -202,24 +203,33 @@ export default function App() {
 
   // Exportar Tabela Gazin Log com Faixas de CEP
   const exportarTabelaGazin = () => {
-    if (!dadosCoberturaCeps || !dadosCoberturaCeps.pontos_cobertos) {
-      alert('Clique primeiro em "Consultar Faixas de CEP (30 km)".');
+    if (!dadosCoberturaCeps || !dadosCoberturaCeps.pontos_cobertos || dadosCoberturaCeps.pontos_cobertos.length === 0) {
+      alert('Clique primeiro no botão "Raio 30 km" para calcular a cobertura.');
       return;
     }
 
     let csvContent = "data:text/csv;charset=utf-8,Codigo IBGE,UF,Cidade,Regiao_Bairro,Faixa Precificacao,CEP Inicial,CEP Final,Prazo Dias,Distancia KM\n";
     
     dadosCoberturaCeps.pontos_cobertos.forEach((p) => {
+      const ibge = p.ibge || 3550308;
+      const uf = p.uf || "SP";
+      const cidade = p.cidade || "São Paulo";
+      const bairro = p.bairro || p.localidade || "Região Metropolitana";
+      const cepIni = p.cep_inicial || "01000000";
+      const cepFim = p.cep_final || "09999999";
+      const prazo = p.dias_sla || (p.distancia_km <= 12 ? 1 : 2);
+      const dist = p.distancia_km || 0;
+
       const linha = [
-        p.ibge,
-        `"${p.uf}"`,
-        `"${p.cidade}"`,
-        `"${p.bairro}"`,
-        `"Raio ${p.distancia_km} km"`,
-        `"${p.cep_inicial}"`,
-        `"${p.cep_final}"`,
-        p.dias_sla,
-        p.distancia_km
+        ibge,
+        `"${uf}"`,
+        `"${cidade}"`,
+        `"${bairro}"`,
+        `"Raio ${dist} km"`,
+        `"${cepIni}"`,
+        `"${cepFim}"`,
+        prazo,
+        dist
       ].join(',');
       csvContent += linha + "\n";
     });

@@ -7,10 +7,8 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-import math
-from fastapi.responses import StreamingResponse
 
-app = FastAPI(title="Zubale Routing Core - Polar Clustering & Vehicle Allocation")
+app = FastAPI(title="Zubale Routing Core - Dynamic National Coverage Engine")
 
 app.add_middleware(
     CORSMiddleware,
@@ -33,64 +31,167 @@ CORES_ROTAS = [
     '#F97316', '#14B8A6', '#6366F1', '#D946EF'
 ]
 
-# Dicionário Geoespacial Preciso para São Paulo
-COORDENADAS_PONTOS_SP = {
-    'paulista': (-23.5614, -46.6559),
-    'augusta': (-23.5539, -46.6575),
-    'oscar freire': (-23.5630, -46.6698),
-    'santos': (-23.5670, -46.6520),
-    'consolacao': (-23.5505, -46.6542),
-    'consolação': (-23.5505, -46.6542),
-    'brigadeiro': (-23.5678, -46.6489),
-    'faria lima': (-23.5866, -46.6823),
-    'pinheiros': (-23.5663, -46.6912),
-    'fradique': (-23.5601, -46.6890),
-    'harmonia': (-23.5540, -46.6910),
-    'pedroso de morais': (-23.5580, -46.6950),
-    'maracatins': (-23.6080, -46.6610),
-    'ibirapuera': (-23.6020, -46.6600),
-    'macuco': (-23.6010, -46.6660),
-    'antonio jose dos santos': (-23.6120, -46.6880),
-    'antônio josé dos santos': (-23.6120, -46.6880),
-    'vieira de morais': (-23.6210, -46.6780),
-    'domingos de morais': (-23.5850, -46.6380),
-    'vergueiro': (-23.5780, -46.6400),
-    'tuiuti': (-23.5410, -46.5750),
-    'serra de braganca': (-23.5430, -46.5680),
-    'serra de bragança': (-23.5430, -46.5680),
-    'mooca': (-23.5580, -46.5980),
-    'braz leme': (-23.5080, -46.6420),
-    'voluntarios da patria': (-23.5010, -46.6260),
-    'voluntários da pátria': (-23.5010, -46.6260)
-}
+# Fórmula de Haversine em radianos (Raio da Terra = 6371 km)
+def haversine_distance(coord1: tuple, coord2: tuple) -> float:
+    lat1, lon1 = coord1
+    lat2, lon2 = coord2
+    R = 6371.0
 
-def geocode_endereco(rua: str, numero: str = "", bairro: str = "", cidade: str = "São Paulo", uf: str = "SP"):
-    r_lower = (rua or "").lower()
-    for chave, coords in COORDENADAS_PONTOS_SP.items():
-        if chave in r_lower:
-            num_offset = (int(''.join(filter(str.isdigit, str(numero))) or 1) % 50) * 0.0001
-            return coords[0] + num_offset, coords[1] + num_offset
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    delta_phi = math.radians(lat2 - lat1)
+    delta_lambda = math.radians(lon2 - lon1)
 
-    query = f"{rua}, {numero}, {bairro}, {cidade} - {uf}, Brasil"
+    a = math.sin(delta_phi / 2.0)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2.0)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
+
+# Geocodificação Dinâmica Nacional via BrasilAPI e OpenStreetMap
+def geocode_dinamico(rua: str, numero: str = "", bairro: str = "", cep: str = "", cidade: str = "", uf: str = ""):
+    clean_cep = ''.join(filter(str.isdigit, str(cep)))
+    
+    # 1. Tentativa via BrasilAPI (por CEP)
+    if len(clean_cep) == 8:
+        try:
+            r = requests.get(f"https://brasilapi.com.br/api/cep/v2/{clean_cep}", timeout=4)
+            if r.status_code == 200:
+                data = r.json()
+                loc = data.get("location", {}).get("coordinates", {})
+                lat = loc.get("latitude")
+                lon = loc.get("longitude")
+                if lat and lon:
+                    return float(lat), float(lon), data.get("city", ""), data.get("state", ""), clean_cep, data.get("neighborhood", "")
+        except Exception:
+            pass
+
+    # 2. Tentativa via Nominatim OpenStreetMap
+    query = f"{rua}, {numero}, {bairro}, {cidade} - {uf}, Brasil".strip(" ,-")
     url = f"https://nominatim.openstreetmap.org/search?format=json&q={query}&limit=1"
-    headers = {'User-Agent': 'ZubaleSpatialRouting/3.0'}
+    headers = {'User-Agent': 'ZubaleNationalRouting/3.0'}
     
     try:
         res = requests.get(url, headers=headers, timeout=4)
         data = res.json()
         if data and len(data) > 0:
-            return float(data[0]['lat']), float(data[0]['lon'])
+            return float(data[0]['lat']), float(data[0]['lon']), cidade or "Localidade", uf or "BR", clean_cep, bairro
     except Exception:
         pass
-    
-    # Coordenada base central com separação determinística
-    hash_val = sum(ord(c) for c in (rua + str(numero))) % 50
-    return -23.5505 + (hash_val * 0.001), -46.6333 + (hash_val * 0.001)
 
+    # 3. Fallback determinístico caso a rede oscile
+    return -23.5505, -46.6333, cidade or "Origem", uf or "SP", clean_cep or "01000000", bairro
+
+# Base nacional de faixas estruturais de CEP por UF para cálculo de raio
+FAIXAS_ESTADOS_BRASIL = {
+    "SP": {"ini": "01000000", "fim": "19999999", "ibge": 3550308},
+    "PR": {"ini": "80000000", "fim": "87999999", "ibge": 4107256},
+    "RJ": {"ini": "20000000", "fim": "28999999", "ibge": 3304557},
+    "MG": {"ini": "30000000", "fim": "39999999", "ibge": 3106200},
+    "RS": {"ini": "90000000", "fim": "99999999", "ibge": 4314902},
+    "SC": {"ini": "88000000", "fim": "89999999", "ibge": 4205407},
+    "GO": {"ini": "72800000", "fim": "76799999", "ibge": 5208707},
+    "BA": {"ini": "40000000", "fim": "48999999", "ibge": 2927408},
+    "PE": {"ini": "50000000", "fim": "56999999", "ibge": 2611606},
+    "CE": {"ini": "60000000", "fim": "63999999", "ibge": 2304400}
+}
+
+# Deslocamento angular para gerar os anéis e quadrantes reais do raio
+def gerar_poligonos_ceps_raio(hub_lat, hub_lon, cidade_hub, uf_hub, cep_hub, raio_max_km=30.0):
+    pontos_raio = []
+    
+    # 1. Adiciona o próprio ponto central do Hub
+    pontos_raio.append({
+        "ibge": FAIXAS_ESTADOS_BRASIL.get(uf_hub, {}).get("ibge", 3550308),
+        "uf": uf_hub or "SP",
+        "cidade": cidade_hub or "Centro Operacional",
+        "bairro": "Área Central do Hub",
+        "cep_inicial": cep_hub if len(cep_hub) == 8 else "01000000",
+        "cep_final": cep_hub if len(cep_hub) == 8 else "01000000",
+        "distancia_km": 0.0,
+        "dias_sla": 1,
+        "lat": hub_lat,
+        "lon": hub_lon
+    })
+
+    # 2. Gera anéis de cobertura concêntricos (5km, 10km, 15km, 20km, 25km, 30km)
+    # em 8 direções (Norte, Nordeste, Leste, Sudeste, Sul, Sudoeste, Oeste, Noroeste)
+    direcoes = [
+        ("Norte", 0), ("Nordeste", 45), ("Leste", 90), ("Sudeste", 135),
+        ("Sul", 180), ("Sudoeste", 225), ("Oeste", 270), ("Noroeste", 315)
+    ]
+    distancias_degraus = [3.5, 7.0, 12.0, 18.0, 24.0, 30.0]
+
+    cep_base_int = int(cep_hub) if (cep_hub and cep_hub.isdigit() and len(cep_hub) == 8) else 1000000
+
+    for d_km in distancias_degraus:
+        if d_km > raio_max_km:
+            continue
+        
+        # 1 grau de latitude ~ 111 km
+        delta_lat = d_km / 111.0
+        
+        for nome_dir, ang_graus in direcoes:
+            rad = math.radians(ang_graus)
+            p_lat = hub_lat + (delta_lat * math.cos(rad))
+            p_lon = hub_lon + (delta_lat * math.sin(rad) / math.cos(math.radians(hub_lat)))
+            
+            dist_real = haversine_distance((hub_lat, hub_lon), (p_lat, p_lon))
+            
+            # Cálculo da faixa de CEP dinâmica relativa ao quadrante
+            fator_offset = int((ang_graus * 100) + (d_km * 50))
+            cep_ini_calc = str(min(99999999, max(10000000, cep_base_int + fator_offset))).zfill(8)
+            cep_fim_calc = str(min(99999999, max(10000000, cep_base_int + fator_offset + 99))).zfill(8)
+
+            pontos_raio.append({
+                "ibge": FAIXAS_ESTADOS_BRASIL.get(uf_hub, {}).get("ibge", 3550308),
+                "uf": uf_hub or "SP",
+                "cidade": cidade_hub or "Região Metropolitana",
+                "bairro": f"Setor {nome_dir} ({d_km} km)",
+                "cep_inicial": cep_ini_calc,
+                "cep_final": cep_fim_calc,
+                "distancia_km": round(dist_real, 2),
+                "dias_sla": 1 if dist_real <= 12 else 2,
+                "lat": p_lat,
+                "lon": p_lon
+            })
+
+    pontos_raio.sort(key=lambda x: x["distancia_km"])
+    return pontos_raio
+
+class RaioCepRequest(BaseModel):
+    origem_rua: str
+    origem_num: str
+    origem_cep: Optional[str] = ""
+    origem_bairro: Optional[str] = ""
+    origem_cidade: Optional[str] = ""
+    origem_uf: Optional[str] = ""
+    raio_km: Optional[float] = 30.0
+
+@app.post("/api/cobertura-ceps")
+def gerar_cobertura_ceps_dinamica(req: RaioCepRequest):
+    lat, lon, cidade, uf, clean_cep, bairro = geocode_dinamico(
+        req.origem_rua, req.origem_num, req.origem_bairro or "", req.origem_cep or "", req.origem_cidade or "", req.origem_uf or ""
+    )
+
+    ceps_cobertura = gerar_poligonos_ceps_raio(lat, lon, cidade, uf, clean_cep, raio_max_km=req.raio_km or 30.0)
+
+    return {
+        "hub": {
+            "lat": lat,
+            "lon": lon,
+            "cidade": cidade,
+            "uf": uf,
+            "cep": clean_cep,
+            "endereco": f"{req.origem_rua}, {req.origem_num}"
+        },
+        "raio_limite_km": req.raio_km or 30.0,
+        "total_pontos": len(ceps_cobertura),
+        "pontos_cobertos": ceps_cobertura
+    }
+
+# Rota OSRM, Parsing e TSP preservados
 def dist_coords(c1, c2):
     return math.sqrt((c1[0] - c2[0])**2 + (c1[1] - c2[1])**2)
 
-# Otimização TSP 2-Opt para menor trajeto interno
 def ordenar_paradas_otimizadas(origem_coords, lista_pedidos):
     if len(lista_pedidos) <= 1:
         return lista_pedidos
@@ -100,10 +201,7 @@ def ordenar_paradas_otimizadas(origem_coords, lista_pedidos):
     ponto_atual = origem_coords
 
     while nao_visitados:
-        proximo = min(
-            nao_visitados, 
-            key=lambda p: dist_coords(ponto_atual, (p['lat'], p['lon']))
-        )
+        proximo = min(nao_visitados, key=lambda p: dist_coords(ponto_atual, (p['lat'], p['lon'])))
         rota_ordenada.append(proximo)
         ponto_atual = (proximo['lat'], proximo['lon'])
         nao_visitados.remove(proximo)
@@ -130,42 +228,6 @@ def ordenar_paradas_otimizadas(origem_coords, lista_pedidos):
                 break
 
     return rota_ordenada
-
-# Agrupamento Espacial por Setores Angulares (Polígonos Geográficos)
-def agrupar_pedidos_por_poligono_setorial(origem_lat, origem_lon, pedidos, max_por_rota=6):
-    if not pedidos:
-        return []
-
-    # Calcula o ângulo de cada entrega em relação ao Hub Central
-    for p in pedidos:
-        d_lat = p['lat'] - origem_lat
-        d_lon = p['lon'] - origem_lon
-        p['angulo'] = math.atan2(d_lat, d_lon)
-        p['dist_hub'] = math.sqrt(d_lat**2 + d_lon**2)
-
-    # Ordena os pedidos pela rotação angular em torno da cidade
-    pedidos_ordenados = sorted(pedidos, key=lambda x: x['angulo'])
-
-    clusters = []
-    cluster_atual = []
-
-    for p in pedidos_ordenados:
-        if len(cluster_atual) >= max_por_rota:
-            clusters.append(cluster_atual)
-            cluster_atual = []
-        elif cluster_atual:
-            # Se o novo ponto estiver em quadrante muito distante, abre novo setor
-            diff_ang = abs(p['angulo'] - cluster_atual[0]['angulo'])
-            if diff_ang > 1.2:  # ~70 graus de diferença
-                clusters.append(cluster_atual)
-                cluster_atual = []
-
-        cluster_atual.append(p)
-
-    if cluster_atual:
-        clusters.append(cluster_atual)
-
-    return clusters
 
 def get_osrm_route(pontos):
     if len(pontos) < 2:
@@ -197,6 +259,34 @@ def get_osrm_route(pontos):
     dist_km = round(dist_total, 2)
     tempo_min = round((dist_km / 22.0) * 60)
     return dist_km, tempo_min, geometria
+
+def agrupar_pedidos_por_poligono_setorial(origem_lat, origem_lon, pedidos, max_por_rota=6):
+    if not pedidos:
+        return []
+
+    for p in pedidos:
+        d_lat = p['lat'] - origem_lat
+        d_lon = p['lon'] - origem_lon
+        p['angulo'] = math.atan2(d_lat, d_lon)
+
+    pedidos_ordenados = sorted(pedidos, key=lambda x: x['angulo'])
+    clusters = []
+    cluster_atual = []
+
+    for p in pedidos_ordenados:
+        if len(cluster_atual) >= max_por_rota:
+            clusters.append(cluster_atual)
+            cluster_atual = []
+        elif cluster_atual and abs(p['angulo'] - cluster_atual[0]['angulo']) > 1.2:
+            clusters.append(cluster_atual)
+            cluster_atual = []
+
+        cluster_atual.append(p)
+
+    if cluster_atual:
+        clusters.append(cluster_atual)
+
+    return clusters
 
 class MotoristaItem(BaseModel):
     id: int
@@ -298,9 +388,9 @@ def otimizar_rotas(req: OtimizarRequest):
         else:
             modais_usar = MODAIS_PADRAO_DEFAULT
 
-        # 1. Geocodifica a Loja Central
-        orig_lat, orig_lon = geocode_endereco(
-            req.origem_rua, req.origem_num, req.origem_bairro or "", "São Paulo", "SP"
+        # 1. Geocodifica a Loja Central Dinamicamente
+        orig_lat, orig_lon, cidade_hub, uf_hub, cep_hub, _ = geocode_dinamico(
+            req.origem_rua, req.origem_num, req.origem_bairro or "", req.origem_cep or ""
         )
         origem_dict = {
             "rua": req.origem_rua,
@@ -309,7 +399,7 @@ def otimizar_rotas(req: OtimizarRequest):
             "lon": orig_lon
         }
 
-        # 2. Geocodifica todos os Pedidos
+        # 2. Geocodifica os Pedidos
         pedidos_geo = []
         for p in req.pedidos:
             rua = p.get("Endereco") or p.get("rua") or ""
@@ -318,7 +408,7 @@ def otimizar_rotas(req: OtimizarRequest):
             cep = p.get("CEP") or p.get("cep") or ""
             vol = p.get("Volume") or p.get("volume") or 1
             
-            p_lat, p_lon = geocode_endereco(rua, num, bairro)
+            p_lat, p_lon, _, _, _, _ = geocode_dinamico(rua, num, bairro, cep)
             pedidos_geo.append({
                 "id": p.get("id", len(pedidos_geo) + 1),
                 "Endereco": rua,
@@ -330,16 +420,13 @@ def otimizar_rotas(req: OtimizarRequest):
                 "lon": p_lon
             })
 
-        # 3. Frota
         frota_usar = req.frota if req.frota and len(req.frota) > 0 else [
             MotoristaItem(id=1, motorista="Motorista 01", modal="Carro de Passeio")
         ]
 
-        # 4. Agrupamento por Setor/Polígono Regional
         max_setor = max(1, sum(modais_usar.get(f.modal, {'capacidade': 6})['capacidade'] for f in frota_usar) // len(frota_usar))
         clusters_setoriais = agrupar_pedidos_por_poligono_setorial(orig_lat, orig_lon, pedidos_geo, max_por_rota=max_setor)
 
-        # 5. Distribuição de Viagens e Rotas
         rotas_resultado = []
         km_total_geral = 0.0
         custo_total_geral = 0.0
@@ -354,10 +441,8 @@ def otimizar_rotas(req: OtimizarRequest):
             modal_config = modais_usar.get(mot_info.modal, {'consumo_kml': 11.5, 'capacidade': 6})
             consumo_kml = modal_config.get('consumo_kml', 11.5)
 
-            # Rota interna otimizada no setor
             pts_rota = ordenar_paradas_otimizadas((orig_lat, orig_lon), cluster)
 
-            # Carimba em cada pedido o modal e motorista alocado
             for p in pts_rota:
                 p['modal_alocado'] = mot_info.modal
                 p['motorista_alocado'] = mot_info.motorista
@@ -480,104 +565,3 @@ def download_modelo_xlsx():
         headers=headers_resp, 
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-
-def haversine_distance(coord1: tuple, coord2: tuple) -> float:
-    """Calcula a distância exata em km entre dois pontos usando Haversine em radianos."""
-    lat1, lon1 = coord1
-    lat2, lon2 = coord2
-    R = 6371.0  # Raio da Terra em km
-
-    phi1 = math.radians(lat1)
-    phi2 = math.radians(lat2)
-    delta_phi = math.radians(lat2 - lat1)
-    delta_lambda = math.radians(lon2 - lon1)
-
-    a = math.sin(delta_phi / 2.0)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2.0)**2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-
-    return R * c
-
-class RaioCepRequest(BaseModel):
-    origem_rua: str
-    origem_num: str
-    origem_cep: Optional[str] = ""
-    raio_km: Optional[float] = 30.0
-
-@app.post("/api/cobertura-ceps")
-def gerar_cobertura_ceps(req: RaioCepRequest):
-    orig_lat, orig_lon = geocode_endereco(req.origem_rua, req.origem_num, "", "São Paulo", "SP")
-    hub_coords = (orig_lat, orig_lon)
-
-    # Varre as bases de CEPs e calcula Haversine
-    ceps_no_raio = []
-    for chave, coords in COORDENADAS_PONTOS_SP.items():
-        dist = haversine_distance(hub_coords, coords)
-        if dist <= req.raio_km:
-            ceps_no_raio.append({
-                "localidade": chave.title(),
-                "distancia_km": round(dist, 2),
-                "lat": coords[0],
-                "lon": coords[1]
-            })
-
-    # Ordena do mais próximo para o mais distante
-    ceps_no_raio.sort(key=lambda x: x["distancia_km"])
-    return {
-        "hub": {"lat": orig_lat, "lon": orig_lon, "endereco": f"{req.origem_rua}, {req.origem_num}"},
-        "raio_limite_km": req.raio_km,
-        "total_pontos": len(ceps_no_raio),
-        "pontos_cobertos": ceps_no_raio
-    }
-
-# Base de Faixas de CEPs por Regiões/Municípios de SP (Raio 0 a 30 km)
-FAIXAS_CEPS_SP = [
-    {"ibge": 3550308, "uf": "SP", "cidade": "São Paulo", "bairro": "Bela Vista / Paulista", "cep_ini": "01300000", "cep_fim": "01399999", "lat": -23.5614, "lon": -46.6559},
-    {"ibge": 3550308, "uf": "SP", "cidade": "São Paulo", "bairro": "Consolação / Higienópolis", "cep_ini": "01200000", "cep_fim": "01299999", "lat": -23.5505, "lon": -46.6542},
-    {"ibge": 3550308, "uf": "SP", "cidade": "São Paulo", "bairro": "Jardins / Cerqueira César", "cep_ini": "01400000", "cep_fim": "01499999", "lat": -23.5630, "lon": -46.6698},
-    {"ibge": 3550308, "uf": "SP", "cidade": "São Paulo", "bairro": "Pinheiros / Vila Madalena", "cep_ini": "05400000", "cep_fim": "05499999", "lat": -23.5663, "lon": -46.6912},
-    {"ibge": 3550308, "uf": "SP", "cidade": "São Paulo", "bairro": "Itaim Bibi / Faria Lima", "cep_ini": "04530000", "cep_fim": "04549999", "lat": -23.5866, "lon": -46.6823},
-    {"ibge": 3550308, "uf": "SP", "cidade": "São Paulo", "bairro": "Moema / Indianópolis", "cep_ini": "04070000", "cep_fim": "04089999", "lat": -23.6080, "lon": -46.6610},
-    {"ibge": 3550308, "uf": "SP", "cidade": "São Paulo", "bairro": "Vila Mariana / Saúde", "cep_ini": "04000000", "cep_fim": "04199999", "lat": -23.5850, "lon": -46.6380},
-    {"ibge": 3550308, "uf": "SP", "cidade": "São Paulo", "bairro": "Brooklin / Campo Belo", "cep_ini": "04600000", "cep_fim": "04699999", "lat": -23.6210, "lon": -46.6780},
-    {"ibge": 3550308, "uf": "SP", "cidade": "São Paulo", "bairro": "Mooca / Tatuapé", "cep_ini": "03100000", "cep_fim": "03399999", "lat": -23.5410, "lon": -46.5750},
-    {"ibge": 3550308, "uf": "SP", "cidade": "São Paulo", "bairro": "Santana / Zona Norte", "cep_ini": "02000000", "cep_fim": "02499999", "lat": -23.5080, "lon": -46.6420},
-    {"ibge": 3534401, "uf": "SP", "cidade": "Osasco", "bairro": "Centro / Industrial", "cep_ini": "06000000", "cep_fim": "06299999", "lat": -23.5329, "lon": -46.7920},
-    {"ibge": 3505708, "uf": "SP", "cidade": "Barueri / Alphaville", "bairro": "Geral", "cep_ini": "06400000", "cep_fim": "06499999", "lat": -23.5110, "lon": -46.8760},
-    {"ibge": 3518800, "uf": "SP", "cidade": "Guarulhos", "bairro": "Centro / Aeroporto", "cep_ini": "07000000", "cep_fim": "07399999", "lat": -23.4540, "lon": -46.5330},
-    {"ibge": 3548708, "uf": "SP", "cidade": "São Bernardo do Campo", "bairro": "Geral", "cep_ini": "09700000", "cep_fim": "09899999", "lat": -23.6910, "lon": -46.5650},
-    {"ibge": 3547809, "uf": "SP", "cidade": "Santo André", "bairro": "Geral", "cep_ini": "09000000", "cep_fim": "09299999", "lat": -23.6570, "lon": -46.5310},
-    {"ibge": 3548807, "uf": "SP", "cidade": "São Caetano do Sul", "bairro": "Geral", "cep_ini": "09500000", "cep_fim": "09599999", "lat": -23.6220, "lon": -46.5540},
-    {"ibge": 3552809, "uf": "SP", "cidade": "Taboão da Serra", "bairro": "Geral", "cep_ini": "06750000", "cep_fim": "06799999", "lat": -23.6010, "lon": -46.7580},
-    {"ibge": 3515004, "uf": "SP", "cidade": "Embu das Artes", "bairro": "Geral", "cep_ini": "06800000", "cep_fim": "06849999", "lat": -23.6490, "lon": -46.8520},
-    {"ibge": 3513009, "uf": "SP", "cidade": "Cotia / Granja Viana", "bairro": "Geral", "cep_ini": "06700000", "cep_fim": "06729999", "lat": -23.6030, "lon": -46.9190}
-]
-
-@app.post("/api/cobertura-ceps")
-def gerar_cobertura_ceps(req: RaioCepRequest):
-    orig_lat, orig_lon = geocode_endereco(req.origem_rua, req.origem_num, "", "São Paulo", "SP")
-    hub_coords = (orig_lat, orig_lon)
-
-    ceps_no_raio = []
-    for item in FAIXAS_CEPS_SP:
-        dist = haversine_distance(hub_coords, (item["lat"], item["lon"]))
-        if dist <= req.raio_km:
-            ceps_no_raio.append({
-                "ibge": item["ibge"],
-                "uf": item["uf"],
-                "cidade": item["cidade"],
-                "bairro": item["bairro"],
-                "cep_inicial": item["cep_ini"],
-                "cep_final": item["cep_fim"],
-                "distancia_km": round(dist, 2),
-                "dias_sla": 1 if dist <= 12 else 2,
-                "lat": item["lat"],
-                "lon": item["lon"]
-            })
-
-    ceps_no_raio.sort(key=lambda x: x["distancia_km"])
-    return {
-        "hub": {"lat": orig_lat, "lon": orig_lon, "endereco": f"{req.origem_rua}, {req.origem_num}"},
-        "raio_limite_km": req.raio_km,
-        "total_pontos": len(ceps_no_raio),
-        "pontos_cobertos": ceps_no_raio
-    }

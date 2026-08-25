@@ -202,9 +202,9 @@ export default function App() {
   };
 
   // Exportar Tabela Gazin Log com Faixas de CEP
-  const exportarTabelaGazin = () => {
+  const exportarTabelaCsv = () => {
     if (!dadosCoberturaCeps || !dadosCoberturaCeps.pontos_cobertos || dadosCoberturaCeps.pontos_cobertos.length === 0) {
-      alert('Clique primeiro no botão "Raio 30 km" para calcular a cobertura.');
+      alert('Calcule a cobertura no raio de 30 km primeiro.');
       return;
     }
 
@@ -234,18 +234,45 @@ export default function App() {
       csvContent += linha + "\n";
     });
 
+    // 2. Exportação em XLSX Completo (63 colunas)
+    const exportarTabelaXlsx = async () => {
+      if (!dadosCoberturaCeps || !dadosCoberturaCeps.pontos_cobertos || dadosCoberturaCeps.pontos_cobertos.length === 0) {
+        alert('Calcule a cobertura no raio de 30 km primeiro.');
+        return;
+      }
+
+      try {
+        const response = await axios.post(`${API_BASE}/exportar-tabela-frete-xlsx`, {
+          hub: dadosCoberturaCeps.hub,
+          pontos_cobertos: dadosCoberturaCeps.pontos_cobertos
+        }, { responseType: 'blob' });
+
+        const nomeHubLimpo = (origem.rua || dadosCoberturaCeps.hub?.cidade || 'hub')
+          .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+          .replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').slice(0, 30);
+        const numHubLimpo = origem.numero ? `_${origem.numero}` : '';
+        const dataAtual = new Date().toISOString().slice(0, 10);
+        const nomeArquivo = `tabela_frete_completa_${nomeHubLimpo}${numHubLimpo}_${dataAtual}.xlsx`;
+
+        const url = window.URL.createObjectURL(new Blob([response.data]));
+        const link = document.createElement('a');
+        link.href = url;
+        link.setAttribute('download', nomeArquivo);
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      } catch (err) {
+        alert('Erro ao gerar planilha Excel completa.');
+      }
+    };
+
     // Sanitiza o nome do Hub para gerar um nome de arquivo limpo
     const nomeHubLimpo = (origem.rua || dadosCoberturaCeps.hub?.cidade || 'hub')
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '') // remove acentos
-      .toLowerCase()
-      .replace(/[^a-z0-9]/g, '_')     // substitui caracteres especiais e espaços por _
-      .replace(/_+/g, '_')            // remove duplicidades de _
-      .slice(0, 30);                  // limita o tamanho
-
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+      .replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').slice(0, 30);
     const numHubLimpo = origem.numero ? `_${origem.numero}` : '';
     const dataAtual = new Date().toISOString().slice(0, 10);
-    const nomeArquivo = `tabela_gazin_${nomeHubLimpo}${numHubLimpo}_${dataAtual}.csv`;
+    const nomeArquivo = `tabela_frete_${nomeHubLimpo}${numHubLimpo}_${dataAtual}.csv`;
 
     const downloadAnchor = document.createElement('a');
     downloadAnchor.setAttribute('href', encodeURI(csvContent));

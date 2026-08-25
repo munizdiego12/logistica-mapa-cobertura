@@ -168,24 +168,117 @@ class RaioCepRequest(BaseModel):
 
 @app.post("/api/cobertura-ceps")
 def gerar_cobertura_ceps_dinamica(req: RaioCepRequest):
-    lat, lon, cidade, uf, clean_cep, bairro = geocode_dinamico(
-        req.origem_rua, req.origem_num, req.origem_bairro or "", req.origem_cep or "", req.origem_cidade or "", req.origem_uf or ""
-    )
+    clean_cep = ''.join(filter(str.isdigit, str(req.origem_cep or "")))
+    
+    hub_lat = None
+    hub_lon = None
+    cidade_hub = "Origem"
+    uf_hub = "BR"
+    ibge_hub = 3550308
 
-    ceps_cobertura = gerar_poligonos_ceps_raio(lat, lon, cidade, uf, clean_cep, raio_max_km=req.raio_km or 30.0)
+    # 1. Consulta CEP de Origem na BrasilAPI / ViaCEP
+    if len(clean_cep) == 8:
+        try:
+            r = requests.get(f"https://brasilapi.com.br/api/cep/v2/{clean_cep}", timeout=4)
+            if r.status_code == 200:
+                data = r.json()
+                cidade_hub = data.get("city", "")
+                uf_hub = data.get("state", "")
+                loc = data.get("location", {}).get("coordinates", {})
+                if loc.get("latitude") and loc.get("longitude"):
+                    hub_lat = float(loc["latitude"])
+                    hub_lon = float(loc["longitude"])
+                
+                # Busca código IBGE da cidade
+                r_ibge = requests.get(f"https://brasilapi.com.br/api/ibge/municipios/v1/{uf_hub}?providers=dados-abertos-br,gov,wikipedia", timeout=4)
+                if r_ibge.status_code == 200:
+                    for mun in r_ibge.json():
+                        if mun.get("nome", "").lower() == cidade_hub.lower():
+                            ibge_hub = int(mun.get("codigo_ibge", ibge_hub))
+                            break
+        except Exception:
+            pass
+
+    # 2. Se não pegou coordenadas pelo CEP, busca pelo Logradouro / Nominatim
+    if hub_lat is None or hub_lon is None:
+        hub_lat, hub_lon, cid, uf_n, _, _ = geocode_dinamico(req.origem_rua, req.origem_num, req.origem_bairro or "", clean_cep)
+        if cidade_hub == "Origem":
+            cidade_hub = cid
+            uf_hub = uf_n
+
+    hub_coords = (hub_lat, hub_lon)
+
+    # 3. Busca municípios do estado na API do IBGE para calcular Haversine real
+    pontos_cobertos = []
+    
+    # Adiciona a própria cidade/hub de origem
+    pontos_cobertos.append({
+        "ibge": ibge_hub,
+        "uf": uf_hub,
+        "cidade": cidade_hub,
+        "bairro": "Sede / Centro Operacional",
+        "cep_inicial": clean_cep if len(clean_cep) == 8 else f"{clean_cep[:5]}000" if len(clean_cep) >= 5 else "01000000",
+        "cep_final": clean_cep if len(clean_cep) == 8 else f"{clean_cep[:5]}999" if len(clean_cep) >= 5 else "01000000",
+        "distancia_km": 0.0,
+        "dias_sla": 1,
+        "lat": hub_lat,
+        "lon": hub_lon
+    })
+
+    # Busca cidades do mesmo estado para calcular distância em raio de 30 km
+    try:
+        r_muns = requests.get(f"https://servicodados.ibge.gov.br/api/v1/localidades/estados/{uf_hub}/municipios", timeout=4)
+        if r_muns.status_code == 200:
+            municipios = r_muns.json()
+            for m in municipios:
+                nome_mun = m.get("nome")
+                cod_ibge = m.get("id")
+                
+                # Se for a mesma cidade sede, pula pois já adicionamos
+                if nome_mun.lower() == cidade_hub.lower():
+                    continue
+
+                # Geocodifica o município vizinho
+                m_lat, m_lon, _, _, cep_mun, _ = geocode_dinamico(nome_mun, "", "", "", nome_mun, uf_hub)
+                dist = haversine_distance(hub_coords, (m_lat, m_lon))
+
+                if dist <= (req.raio_km or 30.0) and dist > 0.1:
+                    # Gera a faixa do município
+                    cep_base = clean_cep[:2] if len(clean_cep) == 8 else "87"
+                    pontos_cobertos.append({
+                        "ibge": cod_ibge,
+                        "uf": uf_hub,
+                        "cidade": nome_mun,
+                        "bairro": "Geral / Município Atendido",
+                        "cep_inicial": f"{cep_base}{str(cod_ibge)[-3:]}000",
+                        "cep_final": f"{cep_base}{str(cod_ibge)[-3:]}999",
+                        "distancia_km": round(dist, 2),
+                        "dias_sla": 1 if dist <= 15 else 2,
+                        "lat": m_lat,
+                        "lon": m_lon
+                    })
+    except Exception:
+        pass
+
+    # Se a API externa do IBGE demorar, gera os anéis setoriais dinâmicos
+    if len(pontos_cobertos) <= 1:
+        pontos_cobertos = gerar_poligonos_ceps_raio(hub_lat, hub_lon, cidade_hub, uf_hub, clean_cep, req.raio_km or 30.0)
+
+    pontos_cobertos.sort(key=lambda x: x["distancia_km"])
 
     return {
         "hub": {
-            "lat": lat,
-            "lon": lon,
-            "cidade": cidade,
-            "uf": uf,
+            "lat": hub_lat,
+            "lon": hub_lon,
+            "cidade": cidade_hub,
+            "uf": uf_hub,
             "cep": clean_cep,
+            "ibge": ibge_hub,
             "endereco": f"{req.origem_rua}, {req.origem_num}"
         },
         "raio_limite_km": req.raio_km or 30.0,
-        "total_pontos": len(ceps_cobertura),
-        "pontos_cobertos": ceps_cobertura
+        "total_pontos": len(pontos_cobertos),
+        "pontos_cobertos": pontos_cobertos
     }
 
 # Rota OSRM, Parsing e TSP preservados

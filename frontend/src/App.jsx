@@ -211,13 +211,13 @@ export default function App() {
     let csvContent = "data:text/csv;charset=utf-8,Codigo IBGE,UF,Cidade,Regiao_Bairro,Faixa Precificacao,CEP Inicial,CEP Final,Prazo Dias,Distancia KM\n";
     
     dadosCoberturaCeps.pontos_cobertos.forEach((p) => {
-      const ibge = p.ibge || 3550308;
-      const uf = p.uf || "SP";
-      const cidade = p.cidade || "São Paulo";
-      const bairro = p.bairro || p.localidade || "Região Metropolitana";
-      const cepIni = p.cep_inicial || "01000000";
-      const cepFim = p.cep_final || "09999999";
-      const prazo = p.dias_sla || (p.distancia_km <= 12 ? 1 : 2);
+      const ibge = p.ibge || dadosCoberturaCeps.hub?.ibge || "";
+      const uf = p.uf || dadosCoberturaCeps.hub?.uf || "";
+      const cidade = p.cidade || dadosCoberturaCeps.hub?.cidade || "";
+      const bairro = p.bairro || "Área Atendida";
+      const cepIni = p.cep_inicial || "";
+      const cepFim = p.cep_final || "";
+      const prazo = p.dias_sla || (p.distancia_km <= 15 ? 1 : 2);
       const dist = p.distancia_km || 0;
 
       const linha = [

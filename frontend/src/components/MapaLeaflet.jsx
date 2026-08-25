@@ -10,6 +10,10 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
+const isCoordValid = (lat, lon) => {
+  return typeof lat === 'number' && !isNaN(lat) && typeof lon === 'number' && !isNaN(lon);
+};
+
 const createStopIcon = (num, color) => {
   return L.divIcon({
     className: 'custom-stop-marker',
@@ -38,31 +42,29 @@ const createStopIcon = (num, color) => {
   });
 };
 
-const createCityPinIcon = () => {
-  return L.divIcon({
-    className: 'custom-city-pin',
-    html: `
-      <div style="
-        background-color: #059669;
-        color: #ffffff;
-        width: 22px;
-        height: 22px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 10px;
-        border: 2px solid #ffffff;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.4);
-      ">
-        📍
-      </div>
-    `,
-    iconSize: [22, 22],
-    iconAnchor: [11, 11],
-    popupAnchor: [0, -11]
-  });
-};
+const cityPinIcon = L.divIcon({
+  className: 'custom-city-pin',
+  html: `
+    <div style="
+      background-color: #059669;
+      color: #ffffff;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 9px;
+      border: 2px solid #ffffff;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+    ">
+      📍
+    </div>
+  `,
+  iconSize: [20, 20],
+  iconAnchor: [10, 10],
+  popupAnchor: [0, -10]
+});
 
 const hubIcon = L.divIcon({
   className: 'custom-hub-marker',
@@ -93,21 +95,27 @@ const hubIcon = L.divIcon({
 function AjustarZoom({ center, pontos }) {
   const map = useMap();
   useEffect(() => {
-    if (pontos && pontos.length > 1) {
-      try {
-        map.fitBounds(pontos, { padding: [45, 45], maxZoom: 14 });
-      } catch (e) {
-        if (center) map.setView(center, 12);
+    try {
+      const pontosValidos = (pontos || []).filter(p => Array.isArray(p) && isCoordValid(p[0], p[1]));
+      if (pontosValidos.length > 1) {
+        map.fitBounds(pontosValidos, { padding: [45, 45], maxZoom: 14 });
+      } else if (center && isCoordValid(center[0], center[1])) {
+        map.setView(center, 12);
       }
-    } else if (center) {
-      map.setView(center, 12);
+    } catch (e) {
+      if (center && isCoordValid(center[0], center[1])) {
+        map.setView(center, 12);
+      }
     }
   }, [center, pontos, map]);
   return null;
 }
 
 export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
-  if (!origem || typeof origem.lat !== 'number' || typeof origem.lon !== 'number') {
+  const hubLat = origem ? Number(origem.lat) : NaN;
+  const hubLon = origem ? Number(origem.lon) : NaN;
+
+  if (!isCoordValid(hubLat, hubLon)) {
     return (
       <div className="w-full h-[540px] rounded-xl flex items-center justify-center bg-slate-950/40 border border-slate-800 text-slate-400 text-xs">
         Aguardando coordenadas da Loja Central...
@@ -115,22 +123,26 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
     );
   }
 
-  const center = [origem.lat, origem.lon];
+  const center = [hubLat, hubLon];
   const rotasArray = Array.isArray(rotas) ? rotas : [];
-  const cidadesCobertas = (dadosCeps && dadosCeps.pontos_cobertos) ? dadosCeps.pontos_cobertos : [];
+  const cidadesCobertas = (dadosCeps && Array.isArray(dadosCeps.pontos_cobertos)) ? dadosCeps.pontos_cobertos : [];
 
   const todosPontos = [center];
   rotasArray.forEach(r => {
     (r.paradas || r.pedidos || []).forEach(p => {
-      if (typeof p.lat === 'number' && typeof p.lon === 'number') {
-        todosPontos.push([p.lat, p.lon]);
+      const pLat = Number(p.lat);
+      const pLon = Number(p.lon);
+      if (isCoordValid(pLat, pLon)) {
+        todosPontos.push([pLat, pLon]);
       }
     });
   });
 
   cidadesCobertas.forEach(c => {
-    if (typeof c.lat === 'number' && typeof c.lon === 'number' && c.distancia_km > 0) {
-      todosPontos.push([c.lat, c.lon]);
+    const cLat = Number(c.lat);
+    const cLon = Number(c.lon);
+    if (isCoordValid(cLat, cLon) && Number(c.distancia_km) > 0) {
+      todosPontos.push([cLat, cLon]);
     }
   });
 
@@ -179,7 +191,7 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
 
         <AjustarZoom center={center} pontos={todosPontos} />
 
-        {/* 1. Zonas Concêntricas até 30 km */}
+        {/* 1. Zonas Concêntricas */}
         {zonasCobertura.map((zona, idx) => (
           <Circle
             key={idx}
@@ -233,12 +245,15 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
 
         {/* 3. Marcadores de Cidades/Municípios no Raio de 30 km */}
         {cidadesCobertas.map((c, cIdx) => {
-          if (c.distancia_km === 0 || typeof c.lat !== 'number' || typeof c.lon !== 'number') return null;
+          const cLat = Number(c.lat);
+          const cLon = Number(c.lon);
+          if (Number(c.distancia_km) === 0 || !isCoordValid(cLat, cLon)) return null;
+
           return (
             <Marker
               key={`city-${cIdx}`}
-              position={[c.lat, c.lon]}
-              icon={createCityPinIcon()}
+              position={[cLat, cLon]}
+              icon={cityPinIcon}
             >
               <Popup>
                 <div className="text-slate-900 font-sans p-1 min-w-[210px]">
@@ -270,8 +285,8 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
         {rotasArray.map((rota) => {
           const listaParadas = rota.paradas || rota.pedidos || [];
           const polylinePositions = (Array.isArray(rota.geometria) && rota.geometria.length > 0)
-            ? rota.geometria
-            : [center, ...listaParadas.map(p => [p.lat, p.lon]), center];
+            ? rota.geometria.filter(pt => Array.isArray(pt) && isCoordValid(Number(pt[0]), Number(pt[1])))
+            : [center, ...listaParadas.map(p => [Number(p.lat), Number(p.lon)]).filter(pt => isCoordValid(pt[0], pt[1])), center];
 
           return (
             <React.Fragment key={rota.id}>
@@ -289,7 +304,10 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
               )}
 
               {listaParadas.map((p, pIdx) => {
-                if (typeof p.lat !== 'number' || typeof p.lon !== 'number') return null;
+                const pLat = Number(p.lat);
+                const pLon = Number(p.lon);
+                if (!isCoordValid(pLat, pLon)) return null;
+
                 const volume = p.Volume || p.volume || 1;
                 const logradouro = p.Endereco || p.Logradouro || p.rua || 'Endereço';
                 const numero = p.Numero || p.numero || 'S/N';
@@ -299,7 +317,7 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
                 return (
                   <Marker
                     key={p.id || pIdx}
-                    position={[p.lat, p.lon]}
+                    position={[pLat, pLon]}
                     icon={createStopIcon(pIdx + 1, rota.cor)}
                   >
                     <Popup>

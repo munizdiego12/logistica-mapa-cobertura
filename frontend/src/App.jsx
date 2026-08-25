@@ -203,19 +203,23 @@ export default function App() {
   // Exportar Tabela Gazin Log com Faixas de CEP
   const exportarTabelaGazin = () => {
     if (!dadosCoberturaCeps || !dadosCoberturaCeps.pontos_cobertos) {
-      alert('Clique primeiro em "Consultar Faixas de CEP (30 km)" para gerar a base de cobertura.');
+      alert('Clique primeiro em "Consultar Faixas de CEP (30 km)".');
       return;
     }
 
-    let csvContent = "data:text/csv;charset=utf-8,Codigo IBGE,UF,Cidade,Faixa Precificacao,Distancia KM,Raio Limite\n";
-    dadosCoberturaCeps.pontos_cobertos.forEach((p, idx) => {
+    let csvContent = "data:text/csv;charset=utf-8,Codigo IBGE,UF,Cidade,Regiao_Bairro,Faixa Precificacao,CEP Inicial,CEP Final,Prazo Dias,Distancia KM\n";
+    
+    dadosCoberturaCeps.pontos_cobertos.forEach((p) => {
       const linha = [
-        3550308, // IBGE SP Capital
-        "SP",
-        `"${p.localidade}"`,
+        p.ibge,
+        `"${p.uf}"`,
+        `"${p.cidade}"`,
+        `"${p.bairro}"`,
         `"Raio ${p.distancia_km} km"`,
-        p.distancia_km,
-        "30 km"
+        `"${p.cep_inicial}"`,
+        `"${p.cep_final}"`,
+        p.dias_sla,
+        p.distancia_km
       ].join(',');
       csvContent += linha + "\n";
     });

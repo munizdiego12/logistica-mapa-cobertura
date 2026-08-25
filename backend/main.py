@@ -528,3 +528,56 @@ def gerar_cobertura_ceps(req: RaioCepRequest):
         "total_pontos": len(ceps_no_raio),
         "pontos_cobertos": ceps_no_raio
     }
+
+# Base de Faixas de CEPs por Regiões/Municípios de SP (Raio 0 a 30 km)
+FAIXAS_CEPS_SP = [
+    {"ibge": 3550308, "uf": "SP", "cidade": "São Paulo", "bairro": "Bela Vista / Paulista", "cep_ini": "01300000", "cep_fim": "01399999", "lat": -23.5614, "lon": -46.6559},
+    {"ibge": 3550308, "uf": "SP", "cidade": "São Paulo", "bairro": "Consolação / Higienópolis", "cep_ini": "01200000", "cep_fim": "01299999", "lat": -23.5505, "lon": -46.6542},
+    {"ibge": 3550308, "uf": "SP", "cidade": "São Paulo", "bairro": "Jardins / Cerqueira César", "cep_ini": "01400000", "cep_fim": "01499999", "lat": -23.5630, "lon": -46.6698},
+    {"ibge": 3550308, "uf": "SP", "cidade": "São Paulo", "bairro": "Pinheiros / Vila Madalena", "cep_ini": "05400000", "cep_fim": "05499999", "lat": -23.5663, "lon": -46.6912},
+    {"ibge": 3550308, "uf": "SP", "cidade": "São Paulo", "bairro": "Itaim Bibi / Faria Lima", "cep_ini": "04530000", "cep_fim": "04549999", "lat": -23.5866, "lon": -46.6823},
+    {"ibge": 3550308, "uf": "SP", "cidade": "São Paulo", "bairro": "Moema / Indianópolis", "cep_ini": "04070000", "cep_fim": "04089999", "lat": -23.6080, "lon": -46.6610},
+    {"ibge": 3550308, "uf": "SP", "cidade": "São Paulo", "bairro": "Vila Mariana / Saúde", "cep_ini": "04000000", "cep_fim": "04199999", "lat": -23.5850, "lon": -46.6380},
+    {"ibge": 3550308, "uf": "SP", "cidade": "São Paulo", "bairro": "Brooklin / Campo Belo", "cep_ini": "04600000", "cep_fim": "04699999", "lat": -23.6210, "lon": -46.6780},
+    {"ibge": 3550308, "uf": "SP", "cidade": "São Paulo", "bairro": "Mooca / Tatuapé", "cep_ini": "03100000", "cep_fim": "03399999", "lat": -23.5410, "lon": -46.5750},
+    {"ibge": 3550308, "uf": "SP", "cidade": "São Paulo", "bairro": "Santana / Zona Norte", "cep_ini": "02000000", "cep_fim": "02499999", "lat": -23.5080, "lon": -46.6420},
+    {"ibge": 3534401, "uf": "SP", "cidade": "Osasco", "bairro": "Centro / Industrial", "cep_ini": "06000000", "cep_fim": "06299999", "lat": -23.5329, "lon": -46.7920},
+    {"ibge": 3505708, "uf": "SP", "cidade": "Barueri / Alphaville", "bairro": "Geral", "cep_ini": "06400000", "cep_fim": "06499999", "lat": -23.5110, "lon": -46.8760},
+    {"ibge": 3518800, "uf": "SP", "cidade": "Guarulhos", "bairro": "Centro / Aeroporto", "cep_ini": "07000000", "cep_fim": "07399999", "lat": -23.4540, "lon": -46.5330},
+    {"ibge": 3548708, "uf": "SP", "cidade": "São Bernardo do Campo", "bairro": "Geral", "cep_ini": "09700000", "cep_fim": "09899999", "lat": -23.6910, "lon": -46.5650},
+    {"ibge": 3547809, "uf": "SP", "cidade": "Santo André", "bairro": "Geral", "cep_ini": "09000000", "cep_fim": "09299999", "lat": -23.6570, "lon": -46.5310},
+    {"ibge": 3548807, "uf": "SP", "cidade": "São Caetano do Sul", "bairro": "Geral", "cep_ini": "09500000", "cep_fim": "09599999", "lat": -23.6220, "lon": -46.5540},
+    {"ibge": 3552809, "uf": "SP", "cidade": "Taboão da Serra", "bairro": "Geral", "cep_ini": "06750000", "cep_fim": "06799999", "lat": -23.6010, "lon": -46.7580},
+    {"ibge": 3515004, "uf": "SP", "cidade": "Embu das Artes", "bairro": "Geral", "cep_ini": "06800000", "cep_fim": "06849999", "lat": -23.6490, "lon": -46.8520},
+    {"ibge": 3513009, "uf": "SP", "cidade": "Cotia / Granja Viana", "bairro": "Geral", "cep_ini": "06700000", "cep_fim": "06729999", "lat": -23.6030, "lon": -46.9190}
+]
+
+@app.post("/api/cobertura-ceps")
+def gerar_cobertura_ceps(req: RaioCepRequest):
+    orig_lat, orig_lon = geocode_endereco(req.origem_rua, req.origem_num, "", "São Paulo", "SP")
+    hub_coords = (orig_lat, orig_lon)
+
+    ceps_no_raio = []
+    for item in FAIXAS_CEPS_SP:
+        dist = haversine_distance(hub_coords, (item["lat"], item["lon"]))
+        if dist <= req.raio_km:
+            ceps_no_raio.append({
+                "ibge": item["ibge"],
+                "uf": item["uf"],
+                "cidade": item["cidade"],
+                "bairro": item["bairro"],
+                "cep_inicial": item["cep_ini"],
+                "cep_final": item["cep_fim"],
+                "distancia_km": round(dist, 2),
+                "dias_sla": 1 if dist <= 12 else 2,
+                "lat": item["lat"],
+                "lon": item["lon"]
+            })
+
+    ceps_no_raio.sort(key=lambda x: x["distancia_km"])
+    return {
+        "hub": {"lat": orig_lat, "lon": orig_lon, "endereco": f"{req.origem_rua}, {req.origem_num}"},
+        "raio_limite_km": req.raio_km,
+        "total_pontos": len(ceps_no_raio),
+        "pontos_cobertos": ceps_no_raio
+    }

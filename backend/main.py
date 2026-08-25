@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-app = FastAPI(title="Zubale Routing Core - High Performance National Engine")
+app = FastAPI(title="Zubale Routing Core - Dynamic National Engine")
 
 app.add_middleware(
     CORSMiddleware,
@@ -33,7 +33,6 @@ CORES_ROTAS = [
     '#F97316', '#14B8A6', '#6366F1', '#D946EF'
 ]
 
-# Tabela Nacional de Códigos IBGE e Faixas Iniciais por Estado
 ESTADOS_IBGE_BRASIL = {
     "SP": {"ibge": 3550308, "nome": "São Paulo"},
     "PR": {"ibge": 4106902, "nome": "Curitiba"},
@@ -65,7 +64,6 @@ def haversine_distance(coord1: tuple, coord2: tuple) -> float:
 def geocode_rapido(rua: str = "", numero: str = "", bairro: str = "", cep: str = "", cidade: str = "", uf: str = ""):
     clean_cep = ''.join(filter(str.isdigit, str(cep or "")))
     
-    # Consulta direta e atômica por CEP na BrasilAPI (~100ms)
     if len(clean_cep) == 8:
         try:
             r = requests.get(f"https://brasilapi.com.br/api/cep/v2/{clean_cep}", timeout=3)
@@ -76,11 +74,10 @@ def geocode_rapido(rua: str = "", numero: str = "", bairro: str = "", cep: str =
                 lon = loc.get("longitude")
                 if lat and lon:
                     return float(lat), float(lon), data.get("city", cidade), data.get("state", uf), clean_cep, data.get("neighborhood", bairro)
-                return -3.7319, -38.5267, data.get("city", cidade), data.get("state", uf), clean_cep, data.get("neighborhood", bairro)
+                return -23.5614, -46.6559, data.get("city", cidade), data.get("state", uf), clean_cep, data.get("neighborhood", bairro)
         except Exception:
             pass
 
-    # Consulta por Endereço
     query_parts = [p for p in [rua, numero, bairro, cidade, uf, "Brasil"] if p]
     query = ", ".join(query_parts)
     url = f"https://nominatim.openstreetmap.org/search?format=json&q={requests.utils.quote(query)}&limit=1"
@@ -94,7 +91,7 @@ def geocode_rapido(rua: str = "", numero: str = "", bairro: str = "", cep: str =
     except Exception:
         pass
 
-    return -3.7319, -38.5267, cidade or "Origem", uf or "BR", clean_cep, bairro
+    return -23.5614, -46.6559, cidade or "Origem", uf or "SP", clean_cep, bairro
 
 class RaioCepRequest(BaseModel):
     origem_rua: str
@@ -111,12 +108,11 @@ def gerar_cobertura_ceps_instantanea(req: RaioCepRequest):
         req.origem_rua, req.origem_num, req.origem_bairro or "", req.origem_cep or "", req.origem_cidade or "", req.origem_uf or ""
     )
 
-    clean_cep = str(clean_cep).zfill(8)
+    clean_cep = str(clean_cep).replace("-", "").strip().zfill(8)
     ibge_base = ESTADOS_IBGE_BRASIL.get(uf, {}).get("ibge", 3550308 if uf == "SP" else 2304400)
 
-    # Prefixo de 5 dígitos do CEP de origem (ex: "01310" para Av. Paulista ou "60165" para Fortaleza)
-    prefixo_cep = clean_cep[:5] if len(clean_cep) == 8 else "01000"
-    prefixo_num = int(prefixo_cep)
+    prefixo_5 = clean_cep[:5] if len(clean_cep) == 8 else "01310"
+    prefixo_num = int(prefixo_5)
 
     raio_max = req.raio_km or 30.0
     pontos_cobertos = []
@@ -124,11 +120,11 @@ def gerar_cobertura_ceps_instantanea(req: RaioCepRequest):
     # 1. Ponto Central (Hub - Faixa Sede)
     pontos_cobertos.append({
         "ibge": ibge_base,
-        "uf": uf or "BR",
+        "uf": uf or "SP",
         "cidade": cidade or "Sede do Hub",
         "bairro": "Centro / Sede Operacional",
-        "cep_inicial": f"{prefixo_cep}000",
-        "cep_final": f"{prefixo_cep}999",
+        "cep_inicial": f"{prefixo_5}000",
+        "cep_final": f"{prefixo_5}999",
         "distancia_km": 0.0,
         "dias_sla": 1,
         "lat": lat,
@@ -154,16 +150,16 @@ def gerar_cobertura_ceps_instantanea(req: RaioCepRequest):
             
             dist_real = haversine_distance((lat, lon), (p_lat, p_lon))
             
-            # Variação do prefixo mantendo os 8 dígitos e gerando faixa de 000 a 999
+            # Variação do prefixo de 5 dígitos mantendo os zeros à esquerda
             offset_prefixo = int((dir_idx + 1) * 10 + (d_km * 2))
-            novo_prefixo = str(max(1000, prefixo_num + offset_prefixo)).zfill(5)
+            novo_prefixo = str(max(100, prefixo_num + offset_prefixo)).zfill(5)
             
             cep_ini_calc = f"{novo_prefixo}000"
             cep_fim_calc = f"{novo_prefixo}999"
 
             pontos_cobertos.append({
                 "ibge": ibge_base,
-                "uf": uf or "BR",
+                "uf": uf or "SP",
                 "cidade": cidade or "Região Metropolitana",
                 "bairro": f"Setor {nome_dir} ({d_km} km)",
                 "cep_inicial": cep_ini_calc,
@@ -191,7 +187,85 @@ def gerar_cobertura_ceps_instantanea(req: RaioCepRequest):
         "pontos_cobertos": pontos_cobertos
     }
 
-# Algoritmo TSP 2-Opt e Roteirização
+class ExportarXlsxRequest(BaseModel):
+    hub: Dict[str, Any]
+    pontos_cobertos: List[Dict[str, Any]]
+
+@app.post("/api/exportar-tabela-frete-xlsx")
+def exportar_tabela_frete_xlsx(req: ExportarXlsxRequest):
+    wb = openpyxl.Workbook()
+    
+    # Aba 1: Prazos e Preços
+    ws1 = wb.active
+    ws1.title = "Prazos e preços"
+    
+    header_l1 = [None]*8 + ["Faixa Peso (Kg)", "De / Até", "De / Até", "De / Até", "De / Até", "De / Até"]
+    header_l2 = ["Faixa Destino", None, None, None, None, None, None, "Prazo entrega", 0.000001, 10.000001, 20.000001, 30.000001, 50.000001, 70.000001, "Excedente", None, "Taxa", None, None, "Advalorem", None, None, None, None, "ADEME", None, None, "GRIS", None, None, None, None, None, "TRT", None, None, "TDA", None, None, None, None, None, None, None, "Taxa Fluvial", None, None, "EMEX", None, None, None, None, "Pedágio", None, None, None, None, "Restrição de Dimensões Máximas (Centímetros)", None, "Restrição de Dimensões (Centímetros)", None, "ICMS", None]
+    header_l3 = [
+        "Código IBGE", "Descrição (Município ou distrito)", "UF", "Cidade", "Faixa de precificação", "CEP Inicial", "CEP Final", "Dias",
+        10, 20, 30, 50, 70, 100, "Taxa Excedente x KG", "Excedente fixo (R$)", "Coleta (R$)", "Despacho (R$)", "Entrega (R$)",
+        "ADV1 (%)", "Base cálculo para ADV2 (R$)", "ADV2 (%)", "Mínimo (R$)", "Máximo (R$)",
+        "% Percentual", "Mínimo (R$)", "Máximo (R$)", "Base cálculo para GRIS1 (R$)", "GRIS1 (%)", "Base cálculo para GRIS2 (R$)", "GRIS2 (%)", "Mínimo (R$)", "Máximo (R$)",
+        "% Percentual", "Mínimo (R$)", "Máximo (R$)", "% Percentual", "Mínimo (R$)", "Máximo (R$)",
+        "Balsa (R$)", "Suframa Valor (R$)", "TAS (R$)", "SEC CAT (R$)", "DAT (R$)",
+        "% Percentual", "Mínimo (R$)", "Máximo (R$)", "% Percentual NF", "Valor por fração 100Kg (R$)", "Valor fixo (R$)", "Mínimo (R$)", "Máximo (R$)",
+        "Valor (R$)", "Fração KG", "Mínimo (R$)", "Máximo (R$)", "Fator de Cubagem",
+        "Altura Máxima", "Largura Máxima", "Comprimento Máximo", "Soma Máxima", "% Percentual da rota", "ICMS sobre o pedágio"
+    ]
+    
+    ws1.append(header_l1)
+    ws1.append(header_l2)
+    ws1.append(header_l3)
+    
+    for p in req.pontos_cobertos:
+        ibge = p.get("ibge") or req.hub.get("ibge") or 3550308
+        uf = p.get("uf") or req.hub.get("uf") or "SP"
+        cidade = p.get("cidade") or req.hub.get("cidade") or "Município"
+        bairro = p.get("bairro") or ""
+        cep_ini = str(p.get("cep_inicial", "00000000")).zfill(8)
+        cep_fim = str(p.get("cep_final", "99999999")).zfill(8)
+        dias = p.get("dias_sla") or (1 if p.get("distancia_km", 0) <= 12 else 2)
+        dist = p.get("distancia_km", 0)
+        
+        linha = [
+            ibge, bairro, uf, cidade, f"Raio {dist} km", cep_ini, cep_fim, dias,
+            1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0,
+            0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0,
+            0, 100, 0, 0, 250,
+            0, 0, 0, 0, 0, 0
+        ]
+        ws1.append(linha)
+
+    header_fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
+    header_font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+    
+    for col_idx in range(1, len(header_l3) + 1):
+        cell = ws1.cell(row=3, column=col_idx)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    ws2 = wb.create_sheet(title="TZR e TDE")
+    ws2.append(["CNPJ", "TZR", "TDE"])
+    ws2.append(["00.000.000/0000-00", 0, 0])
+    
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    headers_resp = {
+        'Content-Disposition': 'attachment; filename="tabela_frete_completa.xlsx"'
+    }
+    return StreamingResponse(
+        output,
+        headers=headers_resp,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
 def dist_coords(c1, c2):
     return math.sqrt((c1[0] - c2[0])**2 + (c1[1] - c2[1])**2)
 
@@ -561,88 +635,5 @@ def download_modelo_xlsx():
     return StreamingResponse(
         output, 
         headers=headers_resp, 
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-
-class ExportarXlsxRequest(BaseModel):
-    hub: Dict[str, Any]
-    pontos_cobertos: List[Dict[str, Any]]
-
-@app.post("/api/exportar-tabela-frete-xlsx")
-def exportar_tabela_frete_xlsx(req: ExportarXlsxRequest):
-    wb = openpyxl.Workbook()
-    
-    # Aba 1: Prazos e Preços
-    ws1 = wb.active
-    ws1.title = "Prazos e preços"
-    
-    # Estrutura de Cabeçalhos (Padrão Completo de 63 Colunas)
-    header_l1 = [None]*8 + ["Faixa Peso (Kg)", "De / Até", "De / Até", "De / Até", "De / Até", "De / Até"]
-    header_l2 = ["Faixa Destino", None, None, None, None, None, None, "Prazo entrega", 0.000001, 10.000001, 20.000001, 30.000001, 50.000001, 70.000001, "Excedente", None, "Taxa", None, None, "Advalorem", None, None, None, None, "ADEME", None, None, "GRIS", None, None, None, None, None, "TRT", None, None, "TDA", None, None, None, None, None, None, None, "Taxa Fluvial", None, None, "EMEX", None, None, None, None, "Pedágio", None, None, None, None, "Restrição de Dimensões Máximas (Centímetros)", None, "Restrição de Dimensões (Centímetros)", None, "ICMS", None]
-    header_l3 = [
-        "Código IBGE", "Descrição (Município ou distrito)", "UF", "Cidade", "Faixa de precificação", "CEP Inicial", "CEP Final", "Dias",
-        10, 20, 30, 50, 70, 100, "Taxa Excedente x KG", "Excedente fixo (R$)", "Coleta (R$)", "Despacho (R$)", "Entrega (R$)",
-        "ADV1 (%)", "Base cálculo para ADV2 (R$)", "ADV2 (%)", "Mínimo (R$)", "Máximo (R$)",
-        "% Percentual", "Mínimo (R$)", "Máximo (R$)", "Base cálculo para GRIS1 (R$)", "GRIS1 (%)", "Base cálculo para GRIS2 (R$)", "GRIS2 (%)", "Mínimo (R$)", "Máximo (R$)",
-        "% Percentual", "Mínimo (R$)", "Máximo (R$)", "% Percentual", "Mínimo (R$)", "Máximo (R$)",
-        "Balsa (R$)", "Suframa Valor (R$)", "TAS (R$)", "SEC CAT (R$)", "DAT (R$)",
-        "% Percentual", "Mínimo (R$)", "Máximo (R$)", "% Percentual NF", "Valor por fração 100Kg (R$)", "Valor fixo (R$)", "Mínimo (R$)", "Máximo (R$)",
-        "Valor (R$)", "Fração KG", "Mínimo (R$)", "Máximo (R$)", "Fator de Cubagem",
-        "Altura Máxima", "Largura Máxima", "Comprimento Máximo", "Soma Máxima", "% Percentual da rota", "ICMS sobre o pedágio"
-    ]
-    
-    ws1.append(header_l1)
-    ws1.append(header_l2)
-    ws1.append(header_l3)
-    
-    # Preenchimento dinâmico das linhas
-    for p in req.pontos_cobertos:
-        ibge = p.get("ibge") or req.hub.get("ibge") or 3550308
-        uf = p.get("uf") or req.hub.get("uf") or "SP"
-        cidade = p.get("cidade") or req.hub.get("cidade") or "Município"
-        bairro = p.get("bairro") or ""
-        cep_ini = str(p.get("cep_inicial", "00000000")).zfill(8)
-        cep_fim = str(p.get("cep_final", "99999999")).zfill(8)
-        dias = p.get("dias_sla") or (1 if p.get("distancia_km", 0) <= 12 else 2)
-        dist = p.get("distancia_km", 0)
-        
-        linha = [
-            ibge, bairro, uf, cidade, f"Raio {dist} km", cep_ini, cep_fim, dias,
-            1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0,
-            0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0,
-            0, 100, 0, 0, 250,
-            0, 0, 0, 0, 0, 0
-        ]
-        ws1.append(linha)
-
-    # Estilização do cabeçalho
-    header_fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
-    header_font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
-    
-    for col_idx in range(1, len(header_l3) + 1):
-        cell = ws1.cell(row=3, column=col_idx)
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
-    # Aba 2: TZR e TDE
-    ws2 = wb.create_sheet(title="TZR e TDE")
-    ws2.append(["CNPJ", "TZR", "TDE"])
-    ws2.append(["00.000.000/0000-00", 0, 0])
-    
-    output = io.BytesIO()
-    wb.save(output)
-    output.seek(0)
-    
-    headers_resp = {
-        'Content-Disposition': 'attachment; filename="tabela_frete_completa.xlsx"'
-    }
-    return StreamingResponse(
-        output,
-        headers=headers_resp,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )

@@ -201,7 +201,7 @@ export default function App() {
     window.open(`${API_BASE}/modelo-xlsx`, '_blank');
   };
 
-  // Exportar Tabela Gazin Log com Faixas de CEP
+  // 1. Exportação em CSV Simples
   const exportarTabelaCsv = () => {
     if (!dadosCoberturaCeps || !dadosCoberturaCeps.pontos_cobertos || dadosCoberturaCeps.pontos_cobertos.length === 0) {
       alert('Calcule a cobertura no raio de 30 km primeiro.');
@@ -234,39 +234,6 @@ export default function App() {
       csvContent += linha + "\n";
     });
 
-    // 2. Exportação em XLSX Completo (63 colunas)
-    const exportarTabelaXlsx = async () => {
-      if (!dadosCoberturaCeps || !dadosCoberturaCeps.pontos_cobertos || dadosCoberturaCeps.pontos_cobertos.length === 0) {
-        alert('Calcule a cobertura no raio de 30 km primeiro.');
-        return;
-      }
-
-      try {
-        const response = await axios.post(`${API_BASE}/exportar-tabela-frete-xlsx`, {
-          hub: dadosCoberturaCeps.hub,
-          pontos_cobertos: dadosCoberturaCeps.pontos_cobertos
-        }, { responseType: 'blob' });
-
-        const nomeHubLimpo = (origem.rua || dadosCoberturaCeps.hub?.cidade || 'hub')
-          .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
-          .replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').slice(0, 30);
-        const numHubLimpo = origem.numero ? `_${origem.numero}` : '';
-        const dataAtual = new Date().toISOString().slice(0, 10);
-        const nomeArquivo = `tabela_frete_completa_${nomeHubLimpo}${numHubLimpo}_${dataAtual}.xlsx`;
-
-        const url = window.URL.createObjectURL(new Blob([response.data]));
-        const link = document.createElement('a');
-        link.href = url;
-        link.setAttribute('download', nomeArquivo);
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-      } catch (err) {
-        alert('Erro ao gerar planilha Excel completa.');
-      }
-    };
-
-    // Sanitiza o nome do Hub para gerar um nome de arquivo limpo
     const nomeHubLimpo = (origem.rua || dadosCoberturaCeps.hub?.cidade || 'hub')
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
       .replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').slice(0, 30);
@@ -280,6 +247,38 @@ export default function App() {
     document.body.appendChild(downloadAnchor);
     downloadAnchor.click();
     downloadAnchor.remove();
+  };
+
+  // 2. Exportação em XLSX Completo (63 colunas)
+  const exportarTabelaXlsx = async () => {
+    if (!dadosCoberturaCeps || !dadosCoberturaCeps.pontos_cobertos || dadosCoberturaCeps.pontos_cobertos.length === 0) {
+      alert('Calcule a cobertura no raio de 30 km primeiro.');
+      return;
+    }
+
+    try {
+      const response = await axios.post(`${API_BASE}/exportar-tabela-frete-xlsx`, {
+        hub: dadosCoberturaCeps.hub,
+        pontos_cobertos: dadosCoberturaCeps.pontos_cobertos
+      }, { responseType: 'blob' });
+
+      const nomeHubLimpo = (origem.rua || dadosCoberturaCeps.hub?.cidade || 'hub')
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+        .replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').slice(0, 30);
+      const numHubLimpo = origem.numero ? `_${origem.numero}` : '';
+      const dataAtual = new Date().toISOString().slice(0, 10);
+      const nomeArquivo = `tabela_frete_completa_${nomeHubLimpo}${numHubLimpo}_${dataAtual}.xlsx`;
+
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', nomeArquivo);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (err) {
+      alert('Erro ao gerar planilha Excel completa.');
+    }
   };
 
   const exportarRomaneio = () => {
@@ -571,7 +570,7 @@ export default function App() {
                   {capacidadeSimultaneaFrota} pedidos / onda
                 </span>
               </div>
-              {pedidosAtivos.length > capacidadeSimultaneaFrota && (
+              {pedidosAtivos.length > capacityCheck(modais, frota) && (
                 <div className="flex items-center gap-1.5 text-blue-400 text-[10px] pt-1 border-t border-slate-800/80">
                   <Layers className="w-3.5 h-3.5 shrink-0" />
                   <span>Demanda maior que a frota: o sistema gerará <b>múltiplas viagens/ondas</b> por motorista.</span>
@@ -807,4 +806,8 @@ export default function App() {
       </div>
     </div>
   );
+}
+
+function capacityCheck(modais, frota) {
+  return frota.reduce((acc, f) => acc + (modais[f.modal]?.capacidade || 0), 0);
 }

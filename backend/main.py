@@ -556,3 +556,86 @@ def download_modelo_xlsx():
         headers=headers_resp, 
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
+class ExportarXlsxRequest(BaseModel):
+    hub: Dict[str, Any]
+    pontos_cobertos: List[Dict[str, Any]]
+
+@app.post("/api/exportar-tabela-frete-xlsx")
+def exportar_tabela_frete_xlsx(req: ExportarXlsxRequest):
+    wb = openpyxl.Workbook()
+    
+    # Aba 1: Prazos e Preços
+    ws1 = wb.active
+    ws1.title = "Prazos e preços"
+    
+    # Estrutura de Cabeçalhos (Padrão Completo de 63 Colunas)
+    header_l1 = [None]*8 + ["Faixa Peso (Kg)", "De / Até", "De / Até", "De / Até", "De / Até", "De / Até"]
+    header_l2 = ["Faixa Destino", None, None, None, None, None, None, "Prazo entrega", 0.000001, 10.000001, 20.000001, 30.000001, 50.000001, 70.000001, "Excedente", None, "Taxa", None, None, "Advalorem", None, None, None, None, "ADEME", None, None, "GRIS", None, None, None, None, None, "TRT", None, None, "TDA", None, None, None, None, None, None, None, "Taxa Fluvial", None, None, "EMEX", None, None, None, None, "Pedágio", None, None, None, None, "Restrição de Dimensões Máximas (Centímetros)", None, "Restrição de Dimensões (Centímetros)", None, "ICMS", None]
+    header_l3 = [
+        "Código IBGE", "Descrição (Município ou distrito)", "UF", "Cidade", "Faixa de precificação", "CEP Inicial", "CEP Final", "Dias",
+        10, 20, 30, 50, 70, 100, "Taxa Excedente x KG", "Excedente fixo (R$)", "Coleta (R$)", "Despacho (R$)", "Entrega (R$)",
+        "ADV1 (%)", "Base cálculo para ADV2 (R$)", "ADV2 (%)", "Mínimo (R$)", "Máximo (R$)",
+        "% Percentual", "Mínimo (R$)", "Máximo (R$)", "Base cálculo para GRIS1 (R$)", "GRIS1 (%)", "Base cálculo para GRIS2 (R$)", "GRIS2 (%)", "Mínimo (R$)", "Máximo (R$)",
+        "% Percentual", "Mínimo (R$)", "Máximo (R$)", "% Percentual", "Mínimo (R$)", "Máximo (R$)",
+        "Balsa (R$)", "Suframa Valor (R$)", "TAS (R$)", "SEC CAT (R$)", "DAT (R$)",
+        "% Percentual", "Mínimo (R$)", "Máximo (R$)", "% Percentual NF", "Valor por fração 100Kg (R$)", "Valor fixo (R$)", "Mínimo (R$)", "Máximo (R$)",
+        "Valor (R$)", "Fração KG", "Mínimo (R$)", "Máximo (R$)", "Fator de Cubagem",
+        "Altura Máxima", "Largura Máxima", "Comprimento Máximo", "Soma Máxima", "% Percentual da rota", "ICMS sobre o pedágio"
+    ]
+    
+    ws1.append(header_l1)
+    ws1.append(header_l2)
+    ws1.append(header_l3)
+    
+    # Preenchimento dinâmico das linhas
+    for p in req.pontos_cobertos:
+        ibge = p.get("ibge") or req.hub.get("ibge") or 3550308
+        uf = p.get("uf") or req.hub.get("uf") or "SP"
+        cidade = p.get("cidade") or req.hub.get("cidade") or "Município"
+        bairro = p.get("bairro") or ""
+        cep_ini = p.get("cep_inicial") or "00000000"
+        cep_fim = p.get("cep_final") or "99999999"
+        dias = p.get("dias_sla") or (1 if p.get("distancia_km", 0) <= 15 else 2)
+        dist = p.get("distancia_km", 0)
+        
+        linha = [
+            ibge, bairro, uf, cidade, f"Raio {dist} km", int(cep_ini) if str(cep_ini).isdigit() else cep_ini, int(cep_fim) if str(cep_fim).isdigit() else cep_fim, dias,
+            1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0,
+            0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0,
+            0, 100, 0, 0, 250,
+            0, 0, 0, 0, 0, 0
+        ]
+        ws1.append(linha)
+
+    # Estilização do cabeçalho
+    header_fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
+    header_font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+    
+    for col_idx in range(1, len(header_l3) + 1):
+        cell = ws1.cell(row=3, column=col_idx)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    # Aba 2: TZR e TDE
+    ws2 = wb.create_sheet(title="TZR e TDE")
+    ws2.append(["CNPJ", "TZR", "TDE"])
+    ws2.append(["00.000.000/0000-00", 0, 0])
+    
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    headers_resp = {
+        'Content-Disposition': 'attachment; filename="tabela_frete_completa.xlsx"'
+    }
+    return StreamingResponse(
+        output,
+        headers=headers_resp,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )

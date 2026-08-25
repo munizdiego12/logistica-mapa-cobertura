@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { 
-  Truck, DollarSign, Navigation, Package, Upload, 
+import {
+  Truck, DollarSign, Navigation, Package, Upload,
   MapPin, Sliders, ArrowUpRight, Play, Loader2,
-  ShieldCheck, Activity, Plus, Trash2, Users, AlertCircle, 
+  ShieldCheck, Activity, Plus, Trash2, Users, AlertCircle,
   CheckSquare, Square, Download, FileSpreadsheet, FileDown,
   Settings, ChevronDown, ChevronUp, Layers, Compass, Table as TableIcon
 } from 'lucide-react';
@@ -15,7 +15,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [loadingCeps, setLoadingCeps] = useState(false);
   const [dadosCoberturaCeps, setDadosCoberturaCeps] = useState(null);
-  
+
   // Painel de Configuração de Capacidades Variáveis por Loja
   const [mostrarConfigModais, setMostrarConfigModais] = useState(false);
   const [modais, setModais] = useState({
@@ -95,7 +95,7 @@ export default function App() {
     try {
       setLoading(true);
       const res = await axios.post(`${API_BASE}/upload`, formData);
-      
+
       const novoLote = {
         id: Date.now(),
         nome: file.name,
@@ -209,7 +209,7 @@ export default function App() {
     }
 
     let csvContent = "data:text/csv;charset=utf-8,Codigo IBGE,UF,Cidade,Regiao_Bairro,Faixa Precificacao,CEP Inicial,CEP Final,Prazo Dias,Distancia KM\n";
-    
+
     dadosCoberturaCeps.pontos_cobertos.forEach((p) => {
       const ibge = p.ibge || dadosCoberturaCeps.hub?.ibge || "";
       const uf = p.uf || dadosCoberturaCeps.hub?.uf || "";
@@ -290,14 +290,14 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#030712] text-slate-100 flex flex-col antialiased selection:bg-blue-600 selection:text-white">
-      
+
       {/* Navbar Superior */}
       <header className="h-16 border-b border-slate-800/80 bg-slate-900/60 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-50">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl overflow-hidden flex items-center justify-center bg-blue-500/10 border border-blue-500/20 shadow-md shadow-blue-950/40 p-1.5 shrink-0">
-            <img 
-              src="logo-zubale.svg" 
-              alt="Zubale Logo" 
+            <img
+              src="logo-zubale.svg"
+              alt="Zubale Logo"
               className="w-full h-full object-contain"
             />
           </div>
@@ -329,10 +329,10 @@ export default function App() {
 
       {/* Espaço de Trabalho */}
       <div className="flex-1 flex flex-col lg:flex-row">
-        
+
         {/* Painel Lateral */}
         <aside className="w-full lg:w-[420px] border-r border-slate-800/80 bg-slate-900/30 p-6 flex flex-col gap-6 backdrop-blur-sm overflow-y-auto">
-          
+
           {/* 1. Hub / Loja Central */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
@@ -350,43 +350,53 @@ export default function App() {
               </button>
             </div>
 
-            <input 
-              type="text" 
-              value={origem.rua} 
-              onChange={(e) => setOrigem({...origem, rua: e.target.value})}
+            <input
+              type="text"
+              value={origem.rua}
+              onChange={(e) => setOrigem({ ...origem, rua: e.target.value })}
               placeholder="Logradouro da Loja (ex: Av. Paulista)"
               className="w-full text-xs bg-slate-900/90 border border-slate-800 focus:border-blue-500/80 rounded-lg px-3 py-2.5 text-slate-100 placeholder:text-slate-500 focus:outline-none transition-colors"
             />
             <div className="grid grid-cols-2 gap-2">
-              <input 
-                type="text" 
-                value={origem.numero} 
-                onChange={(e) => setOrigem({...origem, numero: e.target.value})}
+              <input
+                type="text"
+                value={origem.numero}
+                onChange={(e) => setOrigem({ ...origem, numero: e.target.value })}
                 placeholder="Número (ex: 1000)"
                 className="w-full text-xs bg-slate-900/90 border border-slate-800 focus:border-blue-500/80 rounded-lg px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:outline-none transition-colors"
               />
-              <input 
-                type="text" 
-                value={origem.cep} 
-                onChange={(e) => setOrigem({...origem, cep: e.target.value})}
+              <input
+                type="text"
+                value={origem.cep}
+                onChange={(e) => setOrigem({ ...origem, cep: e.target.value })}
                 placeholder="CEP (ex: 01310-100)"
                 className="w-full text-xs bg-slate-900/90 border border-slate-800 focus:border-blue-500/80 rounded-lg px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:outline-none transition-colors"
               />
             </div>
 
-            {/* Painel Informativo da Consulta de Raio 30km */}
+            {/* Painel Informativo da Consulta de Raio 30km com 2 Botões Lado a Lado */}
             {dadosCoberturaCeps && (
-              <div className="p-2.5 rounded-lg bg-emerald-950/30 border border-emerald-500/30 text-[11px] space-y-1">
+              <div className="p-2.5 rounded-lg bg-emerald-950/30 border border-emerald-500/30 text-[11px] space-y-2">
                 <div className="flex justify-between items-center text-emerald-400 font-bold">
                   <span>Cobertura Haversine:</span>
                   <span>{dadosCoberturaCeps.total_pontos} CEPs no Raio de 30 km</span>
                 </div>
-                <button
-                  onClick={exportarTabelaGazin}
-                  className="w-full mt-1.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-semibold text-[10px] flex items-center justify-center gap-1 transition-colors"
-                >
-                  <TableIcon className="w-3 h-3" /> Baixar Tabela de Frete (Gazin Log)
-                </button>
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <button
+                    onClick={exportarTabelaCsv}
+                    className="py-1.5 px-2 bg-slate-900 hover:bg-slate-800 text-emerald-400 border border-emerald-500/30 rounded font-semibold text-[10px] flex items-center justify-center gap-1 transition-colors"
+                    title="Baixar CSV com colunas essenciais"
+                  >
+                    <FileDown className="w-3 h-3" /> Tabela CSV (Simples)
+                  </button>
+                  <button
+                    onClick={exportarTabelaXlsx}
+                    className="py-1.5 px-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-semibold text-[10px] flex items-center justify-center gap-1 transition-colors shadow-sm"
+                    title="Baixar Excel (.xlsx) completo com 63 colunas"
+                  >
+                    <TableIcon className="w-3 h-3" /> Tabela XLSX (Completa)
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -397,16 +407,16 @@ export default function App() {
               <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                 <FileSpreadsheet className="w-3.5 h-3.5 text-blue-400" /> Lotes de Pedidos ({lotes.length})
               </span>
-              
+
               <div className="flex items-center gap-1.5">
-                <button 
+                <button
                   onClick={baixarPlanilhaModelo}
                   className="inline-flex items-center gap-1 text-[10px] text-blue-400 hover:text-blue-300 font-medium px-2 py-0.5 rounded bg-blue-500/10 border border-blue-500/20 transition-colors"
                   title="Baixar Modelo CSV"
                 >
                   <Download className="w-2.5 h-2.5" /> CSV
                 </button>
-                <button 
+                <button
                   onClick={baixarModeloXLSX}
                   className="inline-flex items-center gap-1 text-[10px] text-emerald-400 hover:text-emerald-300 font-medium px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 transition-colors"
                   title="Baixar Modelo Excel (.xlsx)"
@@ -428,14 +438,13 @@ export default function App() {
                 {lotes.map((lote) => {
                   const ativo = lote.id === loteAtivoId;
                   return (
-                    <div 
-                      key={lote.id} 
+                    <div
+                      key={lote.id}
                       onClick={() => { setLoteAtivoId(lote.id); setResultado(null); }}
-                      className={`flex items-center justify-between p-2.5 rounded-lg cursor-pointer border transition-all ${
-                        ativo 
-                          ? 'bg-blue-500/10 border-blue-500/50 shadow-sm shadow-blue-500/10' 
-                          : 'bg-slate-900/90 border-slate-800/80 hover:border-slate-700'
-                      }`}
+                      className={`flex items-center justify-between p-2.5 rounded-lg cursor-pointer border transition-all ${ativo
+                        ? 'bg-blue-500/10 border-blue-500/50 shadow-sm shadow-blue-500/10'
+                        : 'bg-slate-900/90 border-slate-800/80 hover:border-slate-700'
+                        }`}
                     >
                       <div className="flex items-center gap-2.5 min-w-0">
                         <button type="button" className="text-blue-400 shrink-0">
@@ -520,7 +529,7 @@ export default function App() {
               <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                 <Users className="w-3.5 h-3.5 text-blue-400" /> Frota Alocada ({frota.length})
               </span>
-              <button 
+              <button
                 onClick={adicionarMotorista}
                 className="flex items-center gap-1 text-[11px] text-blue-400 hover:text-blue-300 font-semibold px-2 py-1 rounded bg-blue-500/10 border border-blue-500/20 transition-colors"
               >
@@ -581,18 +590,18 @@ export default function App() {
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="text-[10px] text-slate-400 block mb-1">Combustível (R$/L)</label>
-                <input 
-                  type="number" step="0.1" 
-                  value={precoGasolina} 
+                <input
+                  type="number" step="0.1"
+                  value={precoGasolina}
                   onChange={(e) => setPrecoGasolina(e.target.value)}
                   className="w-full text-xs bg-slate-900/90 border border-slate-800 focus:border-blue-500/80 rounded-lg px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:outline-none transition-colors"
                 />
               </div>
               <div>
                 <label className="text-[10px] text-slate-400 block mb-1">Motorista (R$/h)</label>
-                <input 
-                  type="number" step="1.0" 
-                  value={custoHora} 
+                <input
+                  type="number" step="1.0"
+                  value={custoHora}
                   onChange={(e) => setCustoHora(e.target.value)}
                   className="w-full text-xs bg-slate-900/90 border border-slate-800 focus:border-blue-500/80 rounded-lg px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:outline-none transition-colors"
                 />
@@ -613,7 +622,7 @@ export default function App() {
 
         {/* Dashboard de Métricas e Mapa */}
         <main className="flex-1 p-6 lg:p-8 space-y-6 overflow-y-auto">
-          
+
           {/* Cards de Métricas */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="bg-slate-900/50 border border-slate-800/80 p-5 rounded-xl">
@@ -682,9 +691,9 @@ export default function App() {
                 Haversine + Polar VRP
               </span>
             </div>
-            
+
             {resultado ? (
-              <MapaLeaflet origem={resultado ? resultado.origem : (dadosCoberturaCeps ? dadosCoberturaCeps.hub : null)} rotas={resultado ? resultado.rotas : []} dadosCeps={dadosCoberturaCeps}/>
+              <MapaLeaflet origem={resultado ? resultado.origem : (dadosCoberturaCeps ? dadosCoberturaCeps.hub : null)} rotas={resultado ? resultado.rotas : []} dadosCeps={dadosCoberturaCeps} />
             ) : (
               <div className="h-[460px] flex flex-col items-center justify-center border border-slate-800/80 rounded-xl bg-slate-950/40 text-slate-500 gap-3">
                 <div className="w-12 h-12 rounded-full bg-slate-900 flex items-center justify-center border border-slate-800">
@@ -717,7 +726,7 @@ export default function App() {
                   </button>
                 </div>
               </div>
-              
+
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
                   <thead className="bg-slate-950/80 text-slate-400 border-b border-slate-800/80 text-[11px] uppercase tracking-wider">
@@ -750,9 +759,9 @@ export default function App() {
                         <td className="p-3.5 font-semibold text-emerald-400">R$ {r.custo_total.toFixed(2)}</td>
                         <td className="p-3.5 text-slate-300">R$ {r.custo_por_pedido.toFixed(2)}</td>
                         <td className="p-3.5 text-right font-sans">
-                          <a 
-                            href={r.link_maps} 
-                            target="_blank" 
+                          <a
+                            href={r.link_maps}
+                            target="_blank"
                             rel="noreferrer"
                             className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-blue-600/10 hover:bg-blue-600 text-blue-400 hover:text-white rounded-md transition-all font-medium text-[11px] border border-blue-500/20"
                           >

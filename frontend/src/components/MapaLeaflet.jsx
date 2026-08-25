@@ -80,7 +80,7 @@ function AjustarZoom({ center, pontos }) {
   return null;
 }
 
-export default function MapaLeaflet({ origem, rotas }) {
+export default function MapaLeaflet({ origem, rotas, mostrarRaio30km = true }) {
   if (!origem || typeof origem.lat !== 'number' || typeof origem.lon !== 'number') {
     return (
       <div className="w-full h-[540px] rounded-xl flex items-center justify-center bg-slate-950/40 border border-slate-800 text-slate-400 text-xs">
@@ -102,7 +102,16 @@ export default function MapaLeaflet({ origem, rotas }) {
     });
   });
 
+  // Zonas de cobertura ordenadas da MAIOR para a MENOR (para permitir cliques em camadas inferiores)
   const zonasCobertura = [
+    ...(mostrarRaio30km ? [{
+      raio: 30000,
+      cor: '#94a3b8',
+      titulo: 'Limite de Cobertura de Frete / CEPs (0 a 30 km)',
+      sla: 'Raio de Atendimento do Cliente',
+      veiculoSugerido: 'Todos os Modais Atendidos',
+      descricao: 'Perímetro máximo de cálculo de Haversine para cotação e faixas de CEP atendidas.'
+    }] : []),
     {
       raio: 12000,
       cor: '#f59e0b',
@@ -131,7 +140,7 @@ export default function MapaLeaflet({ origem, rotas }) {
 
   return (
     <div className="w-full h-[540px] rounded-xl overflow-hidden border border-slate-800 shadow-inner relative z-0">
-      <MapContainer center={center} zoom={13} style={{ height: '100%', width: '100%' }}>
+      <MapContainer center={center} zoom={12} style={{ height: '100%', width: '100%' }}>
         <TileLayer
           attribution='&copy; <a href="https://carto.com/">CARTO</a>'
           url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
@@ -139,7 +148,7 @@ export default function MapaLeaflet({ origem, rotas }) {
 
         <AjustarZoom center={center} pontos={todosPontos} />
 
-        {/* 1. Zonas Concêntricas */}
+        {/* 1. Zonas Concêntricas (30km -> 12km -> 7km -> 3km) */}
         {zonasCobertura.map((zona, idx) => (
           <Circle
             key={idx}
@@ -148,9 +157,9 @@ export default function MapaLeaflet({ origem, rotas }) {
             pathOptions={{
               color: zona.cor,
               fillColor: zona.cor,
-              fillOpacity: 0.05,
-              weight: 2,
-              dashArray: '5, 5'
+              fillOpacity: zona.raio === 30000 ? 0.02 : 0.05,
+              weight: zona.raio === 30000 ? 1.5 : 2,
+              dashArray: zona.raio === 30000 ? '8, 8' : '5, 5'
             }}
           >
             <Popup>
@@ -167,15 +176,18 @@ export default function MapaLeaflet({ origem, rotas }) {
                     <span className="font-bold text-slate-800">{zona.raio / 1000} km do Hub</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-slate-500">SLA Previsto:</span>
-                    <span className="font-semibold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                    <span className="text-slate-500">Classificação:</span>
+                    <span className="font-semibold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
                       {zona.sla}
                     </span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-slate-500">Modal Sugerido:</span>
+                    <span className="text-slate-500">Modal:</span>
                     <span className="font-semibold text-slate-700">{zona.veiculoSugerido}</span>
                   </div>
+                  <p className="text-[10px] text-slate-500 pt-1 border-t border-slate-100">
+                    {zona.descricao}
+                  </p>
                 </div>
               </div>
             </Popup>
@@ -252,7 +264,7 @@ export default function MapaLeaflet({ origem, rotas }) {
                 </Polyline>
               )}
 
-              {/* 4. Marcadores Numerados com Modal Recomendado Explicito */}
+              {/* 4. Marcadores Numerados com Modal Recomendado */}
               {listaParadas.map((p, pIdx) => {
                 if (typeof p.lat !== 'number' || typeof p.lon !== 'number') return null;
                 const volume = p.Volume || p.volume || 1;
@@ -276,7 +288,6 @@ export default function MapaLeaflet({ origem, rotas }) {
                           <span className="text-[10px] font-mono text-slate-400">ID #{p.id}</span>
                         </div>
 
-                        {/* Tag de Modal Alocado */}
                         <div className="mt-1.5 mb-1 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-bold text-slate-800">
                           <span>Modal:</span>
                           <span className="text-blue-600">{modalAlocado}</span>

@@ -7,7 +7,8 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-
+import math
+from fastapi.responses import StreamingResponse
 
 app = FastAPI(title="Zubale Routing Core - Polar Clustering & Vehicle Allocation")
 
@@ -479,3 +480,51 @@ def download_modelo_xlsx():
         headers=headers_resp, 
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
+def haversine_distance(coord1: tuple, coord2: tuple) -> float:
+    """Calcula a distância exata em km entre dois pontos usando Haversine em radianos."""
+    lat1, lon1 = coord1
+    lat2, lon2 = coord2
+    R = 6371.0  # Raio da Terra em km
+
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    delta_phi = math.radians(lat2 - lat1)
+    delta_lambda = math.radians(lon2 - lon1)
+
+    a = math.sin(delta_phi / 2.0)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2.0)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+    return R * c
+
+class RaioCepRequest(BaseModel):
+    origem_rua: str
+    origem_num: str
+    origem_cep: Optional[str] = ""
+    raio_km: Optional[float] = 30.0
+
+@app.post("/api/cobertura-ceps")
+def gerar_cobertura_ceps(req: RaioCepRequest):
+    orig_lat, orig_lon = geocode_endereco(req.origem_rua, req.origem_num, "", "São Paulo", "SP")
+    hub_coords = (orig_lat, orig_lon)
+
+    # Varre as bases de CEPs e calcula Haversine
+    ceps_no_raio = []
+    for chave, coords in COORDENADAS_PONTOS_SP.items():
+        dist = haversine_distance(hub_coords, coords)
+        if dist <= req.raio_km:
+            ceps_no_raio.append({
+                "localidade": chave.title(),
+                "distancia_km": round(dist, 2),
+                "lat": coords[0],
+                "lon": coords[1]
+            })
+
+    # Ordena do mais próximo para o mais distante
+    ceps_no_raio.sort(key=lambda x: x["distancia_km"])
+    return {
+        "hub": {"lat": orig_lat, "lon": orig_lon, "endereco": f"{req.origem_rua}, {req.origem_num}"},
+        "raio_limite_km": req.raio_km,
+        "total_pontos": len(ceps_no_raio),
+        "pontos_cobertos": ceps_no_raio
+    }

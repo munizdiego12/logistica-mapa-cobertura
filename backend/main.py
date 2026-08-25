@@ -111,27 +111,31 @@ def gerar_cobertura_ceps_instantanea(req: RaioCepRequest):
         req.origem_rua, req.origem_num, req.origem_bairro or "", req.origem_cep or "", req.origem_cidade or "", req.origem_uf or ""
     )
 
-    ibge_base = ESTADOS_IBGE_BRASIL.get(uf, {}).get("ibge", 2304400 if uf == "CE" else 3550308)
-    cep_base_int = int(clean_cep) if (clean_cep and clean_cep.isdigit() and len(clean_cep) == 8) else 60000000
+    clean_cep = str(clean_cep).zfill(8)
+    ibge_base = ESTADOS_IBGE_BRASIL.get(uf, {}).get("ibge", 3550308 if uf == "SP" else 2304400)
+
+    # Prefixo de 5 dígitos do CEP de origem (ex: "01310" para Av. Paulista ou "60165" para Fortaleza)
+    prefixo_cep = clean_cep[:5] if len(clean_cep) == 8 else "01000"
+    prefixo_num = int(prefixo_cep)
 
     raio_max = req.raio_km or 30.0
     pontos_cobertos = []
 
-    # 1. Ponto Central (Hub)
+    # 1. Ponto Central (Hub - Faixa Sede)
     pontos_cobertos.append({
         "ibge": ibge_base,
-        "uf": uf or "CE",
+        "uf": uf or "BR",
         "cidade": cidade or "Sede do Hub",
         "bairro": "Centro / Sede Operacional",
-        "cep_inicial": clean_cep if len(clean_cep) == 8 else f"{str(cep_base_int)[:5]}000",
-        "cep_final": clean_cep if len(clean_cep) == 8 else f"{str(cep_base_int)[:5]}999",
+        "cep_inicial": f"{prefixo_cep}000",
+        "cep_final": f"{prefixo_cep}999",
         "distancia_km": 0.0,
         "dias_sla": 1,
         "lat": lat,
         "lon": lon
     })
 
-    # 2. Cálculo Geodésico em Memória (Instantâneo)
+    # 2. Quadrantes e Anéis de Distância
     direcoes = [
         ("Norte", 0), ("Nordeste", 45), ("Leste", 90), ("Sudeste", 135),
         ("Sul", 180), ("Sudoeste", 225), ("Oeste", 270), ("Noroeste", 315)
@@ -143,20 +147,23 @@ def gerar_cobertura_ceps_instantanea(req: RaioCepRequest):
             continue
         delta_lat = d_km / 111.0
         
-        for nome_dir, ang_graus in direcoes:
+        for dir_idx, (nome_dir, ang_graus) in enumerate(direcoes):
             rad = math.radians(ang_graus)
             p_lat = lat + (delta_lat * math.cos(rad))
             p_lon = lon + (delta_lat * math.sin(rad) / max(0.1, math.cos(math.radians(lat))))
             
             dist_real = haversine_distance((lat, lon), (p_lat, p_lon))
-            offset = int((ang_graus * 20) + (d_km * 30))
             
-            cep_ini_calc = str(min(99999999, max(10000000, cep_base_int + offset))).zfill(8)
-            cep_fim_calc = str(min(99999999, max(10000000, cep_base_int + offset + 99))).zfill(8)
+            # Variação do prefixo mantendo os 8 dígitos e gerando faixa de 000 a 999
+            offset_prefixo = int((dir_idx + 1) * 10 + (d_km * 2))
+            novo_prefixo = str(max(1000, prefixo_num + offset_prefixo)).zfill(5)
+            
+            cep_ini_calc = f"{novo_prefixo}000"
+            cep_fim_calc = f"{novo_prefixo}999"
 
             pontos_cobertos.append({
                 "ibge": ibge_base,
-                "uf": uf or "CE",
+                "uf": uf or "BR",
                 "cidade": cidade or "Região Metropolitana",
                 "bairro": f"Setor {nome_dir} ({d_km} km)",
                 "cep_inicial": cep_ini_calc,
@@ -594,13 +601,13 @@ def exportar_tabela_frete_xlsx(req: ExportarXlsxRequest):
         uf = p.get("uf") or req.hub.get("uf") or "SP"
         cidade = p.get("cidade") or req.hub.get("cidade") or "Município"
         bairro = p.get("bairro") or ""
-        cep_ini = p.get("cep_inicial") or "00000000"
-        cep_fim = p.get("cep_final") or "99999999"
-        dias = p.get("dias_sla") or (1 if p.get("distancia_km", 0) <= 15 else 2)
+        cep_ini = str(p.get("cep_inicial", "00000000")).zfill(8)
+        cep_fim = str(p.get("cep_final", "99999999")).zfill(8)
+        dias = p.get("dias_sla") or (1 if p.get("distancia_km", 0) <= 12 else 2)
         dist = p.get("distancia_km", 0)
         
         linha = [
-            ibge, bairro, uf, cidade, f"Raio {dist} km", int(cep_ini) if str(cep_ini).isdigit() else cep_ini, int(cep_fim) if str(cep_fim).isdigit() else cep_fim, dias,
+            ibge, bairro, uf, cidade, f"Raio {dist} km", cep_ini, cep_fim, dias,
             1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0,
             0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0,

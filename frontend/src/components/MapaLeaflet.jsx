@@ -154,12 +154,16 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
       coordsContador[chaveCoord] = (coordsContador[chaveCoord] || 0) + 1;
       const repeticoes = coordsContador[chaveCoord];
 
-      // Se mais de um pedido tiver a mesma coordenada, afasta radialmente em ~30 metros
+      // Se mais de um pedido tiver a mesma coordenada, afasta em ESPIRAL usando o ângulo
+      // áureo (~137.5°). Isso nunca repete a mesma posição, não importa quantos pedidos
+      // caiam no mesmo ponto (o método antigo, de 8 posições fixas em círculo, colidia
+      // consigo mesmo a partir do 9º pedido repetido).
       if (repeticoes > 1) {
-        const angulo = (repeticoes - 1) * (Math.PI / 4);
-        const offset = 0.00035; // ~30 metros
-        lat = lat + (offset * Math.cos(angulo));
-        lon = lon + (offset * Math.sin(angulo));
+        const ANGULO_AUREO = 2.399963; // radianos
+        const angulo = repeticoes * ANGULO_AUREO;
+        const raio = 0.00012 * Math.sqrt(repeticoes); // cresce a cada repetição (~15m, ~20m, ~25m...)
+        lat = lat + (raio * Math.cos(angulo));
+        lon = lon + (raio * Math.sin(angulo));
       }
 
       todasParadasProcessadas.push({

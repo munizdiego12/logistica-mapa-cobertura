@@ -15,6 +15,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [loadingCeps, setLoadingCeps] = useState(false);
   const [dadosCoberturaCeps, setDadosCoberturaCeps] = useState(null);
+  const [progresso, setProgresso] = useState(null); // { etapa, atual, total } | null
 
   // Painel de Configuração de Capacidades Variáveis por Loja
   const [mostrarConfigModais, setMostrarConfigModais] = useState(false);
@@ -158,8 +159,11 @@ export default function App() {
     }
 
     setLoading(true);
+    setProgresso({ etapa: 'Iniciando...', atual: 0, total: pedidosAtivos.length });
+
     try {
-      const res = await axios.post(`${API_BASE}/otimizar`, {
+      // 1. Inicia o job em segundo plano — a resposta chega na hora, com um job_id.
+      const inicio = await axios.post(`${API_BASE}/otimizar`, {
         origem_rua: origem.rua,
         origem_num: origem.numero,
         origem_bairro: origem.bairro,
@@ -170,11 +174,37 @@ export default function App() {
         custo_hora: Number(custoHora),
         pedidos: pedidosAtivos
       });
-      setResultado(res.data);
+
+      const jobId = inicio.data.job_id;
+
+      // 2. Consulta o andamento a cada 1.2s até o job terminar (ou dar erro).
+      await new Promise((resolve, reject) => {
+        const intervalo = setInterval(async () => {
+          try {
+            const status = await axios.get(`${API_BASE}/otimizar/status/${jobId}`);
+            const dados = status.data;
+
+            setProgresso({ etapa: dados.etapa, atual: dados.atual, total: dados.total });
+
+            if (dados.status === 'concluido') {
+              clearInterval(intervalo);
+              setResultado(dados.resultado);
+              resolve();
+            } else if (dados.status === 'erro') {
+              clearInterval(intervalo);
+              reject(new Error(dados.erro || 'Erro desconhecido na roteirização.'));
+            }
+          } catch (errPolling) {
+            clearInterval(intervalo);
+            reject(errPolling);
+          }
+        }, 1200);
+      });
     } catch (err) {
       alert('Erro ao processar roteirização. Verifique os endereços informados e o status da API.');
     } finally {
       setLoading(false);
+      setProgresso(null);
     }
   };
 
@@ -635,15 +665,33 @@ export default function App() {
             </div>
           </div>
 
-          {/* Botão de Execução */}
-          <button
-            onClick={handleOtimizar}
-            disabled={loading || pedidosAtivos.length === 0 || !origem.rua}
-            className="mt-auto w-full py-3.5 bg-blue-600 hover:bg-blue-500 active:scale-[0.99] transition-all rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-blue-600/25 text-white disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4 fill-current" />}
-            {loading ? 'Agrupando Polígonos & Otimizando...' : 'Executar Roteirização'}
-          </button>
+          {/* Botão de Execução + Barra de Progresso */}
+          <div className="mt-auto space-y-2">
+            {progresso && (
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-center text-[10px] text-slate-400 font-mono">
+                  <span className="truncate pr-2">{progresso.etapa}</span>
+                  <span className="shrink-0">{progresso.atual}/{progresso.total}</span>
+                </div>
+                <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-blue-500 transition-all duration-300 ease-out rounded-full"
+                    style={{
+                      width: `${progresso.total > 0 ? Math.min(100, (progresso.atual / progresso.total) * 100) : 0}%`
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+            <button
+              onClick={handleOtimizar}
+              disabled={loading || pedidosAtivos.length === 0 || !origem.rua}
+              className="w-full py-3.5 bg-blue-600 hover:bg-blue-500 active:scale-[0.99] transition-all rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-blue-600/25 text-white disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4 fill-current" />}
+              {loading ? (progresso ? progresso.etapa : 'Agrupando Polígonos & Otimizando...') : 'Executar Roteirização'}
+            </button>
+          </div>
         </aside>
 
         {/* Dashboard de Métricas e Mapa */}

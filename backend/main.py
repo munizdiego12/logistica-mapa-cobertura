@@ -1,5 +1,9 @@
 import io
 import math
+import time
+import asyncio
+import uuid
+import httpx
 import requests
 import pandas as pd
 import openpyxl
@@ -10,6 +14,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+import database
+
 app = FastAPI(title="Zubale Routing Core - Dynamic National Engine")
 
 app.add_middleware(
@@ -19,6 +25,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+async def _on_startup():
+    await database.init_db()
 
 MODAIS_PADRAO_DEFAULT = {
     'Moto': {'capacidade': 3, 'consumo_kml': 30.0},
@@ -61,37 +71,153 @@ def haversine_distance(coord1: tuple, coord2: tuple) -> float:
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
 
-def geocode_rapido(rua: str = "", numero: str = "", bairro: str = "", cep: str = "", cidade: str = "", uf: str = ""):
+_GEOCODE_CACHE_MEMORIA: Dict[str, tuple] = {}
+
+# Controla o rate-limit do Nominatim (1 req/s) de forma assíncrona e SEGURA
+# mesmo quando várias geocodificações rodam "em paralelo" (asyncio.gather).
+_nominatim_lock = asyncio.Lock()
+_nominatim_ultima_chamada = 0.0
+
+# BrasilAPI não exige 1 req/s, então aqui só limitamos concorrência (não velocidade).
+_brasilapi_semaforo = asyncio.Semaphore(8)
+
+
+def _chave_cache(rua, numero, bairro, cep, cidade, uf):
+    return "|".join([str(x or "").strip().lower() for x in [rua, numero, bairro, cep, cidade, uf]])
+
+
+async def _respeitar_rate_limit_nominatim():
+    global _nominatim_ultima_chamada
+    async with _nominatim_lock:
+        agora = time.monotonic()
+        espera = 1.05 - (agora - _nominatim_ultima_chamada)
+        if espera > 0:
+            await asyncio.sleep(espera)
+        _nominatim_ultima_chamada = time.monotonic()
+
+
+async def geocode_async(client: httpx.AsyncClient, rua: str = "", numero: str = "",
+                         bairro: str = "", cep: str = "", cidade: str = "", uf: str = ""):
+    """
+    Versão assíncrona da geocodificação. Ordem de prioridade:
+    1) Cache em memória (instantâneo, válido durante a execução do processo)
+    2) Cache Postgres (instantâneo, sobrevive a reinícios do servidor)
+    3) Endereço completo via Nominatim (preciso, mas limitado a 1 req/s)
+    4) CEP via BrasilAPI (aproximado, mas pode rodar em paralelo)
+    5) Bairro/cidade via Nominatim (último recurso)
+    Nunca retorna coordenada fixa "chumbada".
+    """
     clean_cep = ''.join(filter(str.isdigit, str(cep or "")))
-    
-    if len(clean_cep) == 8:
+    chave = _chave_cache(rua, numero, bairro, cep, cidade, uf)
+
+    if chave in _GEOCODE_CACHE_MEMORIA:
+        return _GEOCODE_CACHE_MEMORIA[chave]
+
+    cache_db = await database.cache_get(chave)
+    if cache_db:
+        _GEOCODE_CACHE_MEMORIA[chave] = cache_db
+        return cache_db
+
+    resultado = None
+    headers = {'User-Agent': 'ZubaleRoutingCore/6.1 (contato@zubale.com)'}
+
+    # 1) Endereço completo (rua + número) via Nominatim
+    if rua and numero:
+        query = ", ".join([p for p in [f"{rua}, {numero}", bairro, cidade, uf, "Brasil"] if p])
         try:
-            r = requests.get(f"https://brasilapi.com.br/api/cep/v2/{clean_cep}", timeout=3)
-            if r.status_code == 200:
-                data = r.json()
-                loc = data.get("location", {}).get("coordinates", {})
-                lat = loc.get("latitude")
-                lon = loc.get("longitude")
-                if lat and lon:
-                    return float(lat), float(lon), data.get("city", cidade), data.get("state", uf), clean_cep, data.get("neighborhood", bairro)
-                return -23.5614, -46.6559, data.get("city", cidade), data.get("state", uf), clean_cep, data.get("neighborhood", bairro)
+            await _respeitar_rate_limit_nominatim()
+            res = await client.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={"format": "json", "q": query, "limit": 1},
+                headers=headers, timeout=4,
+            )
+            data = res.json()
+            if data:
+                resultado = (float(data[0]['lat']), float(data[0]['lon']),
+                             cidade or "Centro", uf or "BR", clean_cep, bairro)
         except Exception:
             pass
 
-    query_parts = [p for p in [rua, numero, bairro, cidade, uf, "Brasil"] if p]
-    query = ", ".join(query_parts)
-    url = f"https://nominatim.openstreetmap.org/search?format=json&q={requests.utils.quote(query)}&limit=1"
-    headers = {'User-Agent': 'ZubaleFastEngine/5.0'}
-    
-    try:
-        res = requests.get(url, headers=headers, timeout=3)
-        data = res.json()
-        if data and len(data) > 0:
-            return float(data[0]['lat']), float(data[0]['lon']), cidade or "Centro", uf or "BR", clean_cep, bairro
-    except Exception:
-        pass
+    # 2) CEP via BrasilAPI (pode rodar em paralelo, sem rate-limit rígido)
+    if resultado is None and len(clean_cep) == 8:
+        async with _brasilapi_semaforo:
+            try:
+                r = await client.get(f"https://brasilapi.com.br/api/cep/v2/{clean_cep}", timeout=3)
+                if r.status_code == 200:
+                    data = r.json()
+                    loc = data.get("location", {}).get("coordinates", {})
+                    lat, lon = loc.get("latitude"), loc.get("longitude")
+                    if lat and lon:
+                        resultado = (float(lat), float(lon), data.get("city", cidade),
+                                     data.get("state", uf), clean_cep, data.get("neighborhood", bairro))
+            except Exception:
+                pass
 
-    return -23.5614, -46.6559, cidade or "Origem", uf or "SP", clean_cep, bairro
+    # 3) Fallback final: bairro/cidade via Nominatim
+    if resultado is None:
+        query = ", ".join([p for p in [bairro, cidade, uf, "Brasil"] if p]) or "São Paulo, Brasil"
+        try:
+            await _respeitar_rate_limit_nominatim()
+            res = await client.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={"format": "json", "q": query, "limit": 1},
+                headers=headers, timeout=4,
+            )
+            data = res.json()
+            if data:
+                resultado = (float(data[0]['lat']), float(data[0]['lon']),
+                             cidade or "Centro", uf or "BR", clean_cep, bairro)
+        except Exception:
+            pass
+
+    if resultado is None:
+        resultado = (-23.5614, -46.6559, cidade or "Origem", uf or "SP", clean_cep, bairro)
+
+    _GEOCODE_CACHE_MEMORIA[chave] = resultado
+    await database.cache_set(chave, resultado)
+    return resultado
+
+
+async def geocodificar_lote(pedidos_raw: List[Dict[str, Any]]) -> Dict[str, tuple]:
+    """
+    Geocodifica uma lista de pedidos de forma otimizada:
+    - Deduplica endereços idênticos (ex: 2 pedidos no mesmo prédio geocodificam 1x só).
+    - Roda em paralelo o que der (BrasilAPI, cache), respeitando o rate-limit do Nominatim.
+    Retorna um dicionário {chave_do_endereco: (lat, lon, cidade, uf, cep, bairro)}.
+    """
+    enderecos_unicos = {}
+    for p in pedidos_raw:
+        rua = p.get("Endereco") or p.get("rua") or ""
+        num = str(p.get("Numero") or p.get("numero") or "")
+        bairro = p.get("Bairro") or p.get("bairro") or ""
+        cep = p.get("CEP") or p.get("cep") or ""
+        cidade = p.get("Cidade") or p.get("cidade") or ""
+        uf = p.get("UF") or p.get("uf") or ""
+        chave = _chave_cache(rua, numero=num, bairro=bairro, cep=cep, cidade=cidade, uf=uf)
+        enderecos_unicos[chave] = (rua, num, bairro, cep, cidade, uf)
+
+    resultados: Dict[str, tuple] = {}
+    async with httpx.AsyncClient() as client:
+        tarefas = [
+            geocode_async(client, rua, num, bairro, cep, cidade, uf)
+            for chave, (rua, num, bairro, cep, cidade, uf) in enderecos_unicos.items()
+        ]
+        respostas = await asyncio.gather(*tarefas)
+        for chave, resposta in zip(enderecos_unicos.keys(), respostas):
+            resultados[chave] = resposta
+
+    return resultados
+
+
+def geocode_rapido(rua: str = "", numero: str = "", bairro: str = "", cep: str = "", cidade: str = "", uf: str = ""):
+    """
+    Wrapper SÍNCRONO mantido para compatibilidade com endpoints não convertidos
+    (ex: /api/cobertura-ceps, que geocodifica só 1 endereço por vez).
+    """
+    async def _run():
+        async with httpx.AsyncClient() as client:
+            return await geocode_async(client, rua, numero, bairro, cep, cidade, uf)
+    return asyncio.run(_run())
 
 class RaioCepRequest(BaseModel):
     origem_rua: str
@@ -306,15 +432,15 @@ def ordenar_paradas_otimizadas(origem_coords, lista_pedidos):
 
     return rota_ordenada
 
-def get_osrm_route(pontos):
+async def get_osrm_route_async(client: httpx.AsyncClient, pontos):
     if len(pontos) < 2:
         return 0, 0, []
-    
+
     coords_str = ";".join([f"{lon},{lat}" for lat, lon in pontos])
     url = f"http://router.project-osrm.org/route/v1/driving/{coords_str}?overview=full&geometries=geojson"
-    
+
     try:
-        res = requests.get(url, timeout=5)
+        res = await client.get(url, timeout=6)
         data = res.json()
         if data.get("code") == "Ok":
             route = data["routes"][0]
@@ -324,15 +450,15 @@ def get_osrm_route(pontos):
             return dist_km, tempo_min, geometria
     except Exception:
         pass
-    
+
     dist_total = 0
     geometria = []
     for i in range(len(pontos) - 1):
         lat1, lon1 = pontos[i]
-        lat2, lon2 = pontos[i+1]
-        dist_total += math.sqrt((lat2 - lat1)**2 + (lon2 - lon1)**2) * 111 * 1.3
+        lat2, lon2 = pontos[i + 1]
+        dist_total += math.sqrt((lat2 - lat1) ** 2 + (lon2 - lon1) ** 2) * 111 * 1.3
         geometria.extend([[lat1, lon1], [lat2, lon2]])
-    
+
     dist_km = round(dist_total, 2)
     tempo_min = round((dist_km / 22.0) * 60)
     return dist_km, tempo_min, geometria
@@ -455,8 +581,29 @@ async def upload_planilha(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.post("/api/otimizar")
-def otimizar_rotas(req: OtimizarRequest):
+# ==========================================================================
+# SISTEMA DE JOB COM PROGRESSO
+# Como geocodificar pode levar segundos, a otimização roda em segundo plano
+# e o frontend consulta o andamento em /api/otimizar/status/{job_id}.
+# ==========================================================================
+JOBS: Dict[str, Dict[str, Any]] = {}
+
+
+def _novo_job() -> str:
+    job_id = str(uuid.uuid4())
+    JOBS[job_id] = {
+        "status": "em_andamento",   # em_andamento | concluido | erro
+        "etapa": "Iniciando...",
+        "atual": 0,
+        "total": 1,
+        "resultado": None,
+        "erro": None,
+    }
+    return job_id
+
+
+async def _processar_otimizacao(job_id: str, req: "OtimizarRequest"):
+    job = JOBS[job_id]
     try:
         modais_usar = {}
         if req.modais_config:
@@ -465,15 +612,24 @@ def otimizar_rotas(req: OtimizarRequest):
         else:
             modais_usar = MODAIS_PADRAO_DEFAULT
 
-        orig_lat, orig_lon, cidade_hub, uf_hub, cep_hub, _ = geocode_rapido(
-            req.origem_rua, req.origem_num, req.origem_bairro or "", req.origem_cep or ""
-        )
-        origem_dict = {
-            "rua": req.origem_rua,
-            "numero": req.origem_num,
-            "lat": orig_lat,
-            "lon": orig_lon
-        }
+        # --- Etapa 1: geocodificar o Hub ---
+        job["etapa"] = "Localizando a Loja Central..."
+        async with httpx.AsyncClient() as client:
+            orig_lat, orig_lon, cidade_hub, uf_hub, cep_hub, _ = await geocode_async(
+                client, req.origem_rua, req.origem_num, req.origem_bairro or "", req.origem_cep or ""
+            )
+
+        origem_dict = {"rua": req.origem_rua, "numero": req.origem_num, "lat": orig_lat, "lon": orig_lon}
+
+        # --- Etapa 2: geocodificar todos os pedidos (deduplicado + paralelo) ---
+        total_pedidos = len(req.pedidos)
+        job["etapa"] = f"Geocodificando endereços (0/{total_pedidos})..."
+        job["atual"] = 0
+        job["total"] = total_pedidos
+
+        mapa_geocode = await geocodificar_lote(req.pedidos)
+        job["atual"] = total_pedidos
+        job["etapa"] = f"Endereços geocodificados ({total_pedidos}/{total_pedidos})."
 
         pedidos_geo = []
         for idx, p in enumerate(req.pedidos):
@@ -481,106 +637,118 @@ def otimizar_rotas(req: OtimizarRequest):
             num = str(p.get("Numero") or p.get("numero") or "")
             bairro = p.get("Bairro") or p.get("bairro") or ""
             cep = p.get("CEP") or p.get("cep") or ""
+            cidade_p = p.get("Cidade") or p.get("cidade") or ""
+            uf_p = p.get("UF") or p.get("uf") or ""
             vol = p.get("Volume") or p.get("volume") or 1
-            
-            p_lat, p_lon, _, _, _, _ = geocode_rapido(rua, num, bairro, cep)
-            
-            # Se a coordenada não for encontrada com precisão, distribui no setor correspondente
-            if (p_lat == -23.5614 and p_lon == -46.6559 and "paulista" not in rua.lower()) or (p_lat == 0 and p_lon == 0):
-                offset_ang = idx * (2 * math.pi / max(len(req.pedidos), 1))
-                p_lat = orig_lat + (0.018 * math.cos(offset_ang))
-                p_lon = orig_lon + (0.018 * math.sin(offset_ang))
+
+            chave = _chave_cache(rua, numero=num, bairro=bairro, cep=cep, cidade=cidade_p, uf=uf_p)
+            p_lat, p_lon, _, _, _, _ = mapa_geocode.get(chave, (orig_lat, orig_lon, "", "", "", ""))
 
             pedidos_geo.append({
-                "id": p.get("id", idx + 1),
-                "Endereco": rua,
-                "Numero": num,
-                "Bairro": bairro,
-                "CEP": cep,
-                "Volume": vol,
-                "lat": p_lat,
-                "lon": p_lon
+                "id": p.get("id", idx + 1), "Endereco": rua, "Numero": num, "Bairro": bairro,
+                "CEP": cep, "Volume": vol, "lat": p_lat, "lon": p_lon
             })
 
+        # --- Etapa 3: agrupar em rotas/ondas ---
         frota_usar = req.frota if req.frota and len(req.frota) > 0 else [
             MotoristaItem(id=1, motorista="Motorista 01", modal="Carro de Passeio")
         ]
-
         max_setor = max(1, sum(modais_usar.get(f.modal, {'capacidade': 6})['capacidade'] for f in frota_usar) // len(frota_usar))
         clusters_setoriais = agrupar_pedidos_por_poligono_setorial(orig_lat, orig_lon, pedidos_geo, max_por_rota=max_setor)
 
+        # --- Etapa 4: calcular cada rota (traçado OSRM em paralelo) ---
+        job["etapa"] = f"Calculando rotas (0/{len(clusters_setoriais)})..."
+        job["atual"] = 0
+        job["total"] = len(clusters_setoriais)
+
+        motorista_viagens = {f.id: 0 for f in frota_usar}
         rotas_resultado = []
         km_total_geral = 0.0
         custo_total_geral = 0.0
-        motorista_viagens = {f.id: 0 for f in frota_usar}
 
-        for c_idx, cluster in enumerate(clusters_setoriais):
-            mot_idx = c_idx % len(frota_usar)
-            mot_info = frota_usar[mot_idx]
-            motorista_viagens[mot_info.id] += 1
-            num_viagem = motorista_viagens[mot_info.id]
+        async with httpx.AsyncClient() as client:
+            for c_idx, cluster in enumerate(clusters_setoriais):
+                mot_idx = c_idx % len(frota_usar)
+                mot_info = frota_usar[mot_idx]
+                motorista_viagens[mot_info.id] += 1
+                num_viagem = motorista_viagens[mot_info.id]
 
-            modal_config = modais_usar.get(mot_info.modal, {'consumo_kml': 11.5, 'capacidade': 6})
-            consumo_kml = modal_config.get('consumo_kml', 11.5)
+                modal_config = modais_usar.get(mot_info.modal, {'consumo_kml': 11.5, 'capacidade': 6})
+                consumo_kml = modal_config.get('consumo_kml', 11.5)
 
-            pts_rota = ordenar_paradas_otimizadas((orig_lat, orig_lon), cluster)
+                pts_rota = ordenar_paradas_otimizadas((orig_lat, orig_lon), cluster)
+                for p in pts_rota:
+                    p['modal_alocado'] = mot_info.modal
+                    p['motorista_alocado'] = mot_info.motorista
+                    p['viagem_alocada'] = num_viagem
 
-            for p in pts_rota:
-                p['modal_alocado'] = mot_info.modal
-                p['motorista_alocado'] = mot_info.motorista
-                p['viagem_alocada'] = num_viagem
+                pontos_coords = [(orig_lat, orig_lon)] + [(p['lat'], p['lon']) for p in pts_rota] + [(orig_lat, orig_lon)]
+                dist_km, tempo_min, geometria = await get_osrm_route_async(client, pontos_coords)
 
-            pontos_coords = [(orig_lat, orig_lon)] + [(p['lat'], p['lon']) for p in pts_rota] + [(orig_lat, orig_lon)]
-            dist_km, tempo_min, geometria = get_osrm_route(pontos_coords)
+                litros = dist_km / consumo_kml
+                custo_comb = litros * req.preco_gasolina
+                custo_mot = (tempo_min / 60.0) * req.custo_hora
+                custo_rota = custo_comb + custo_mot
+                km_total_geral += dist_km
+                custo_total_geral += custo_rota
 
-            litros = dist_km / consumo_kml
-            custo_comb = litros * req.preco_gasolina
-            custo_mot = (tempo_min / 60.0) * req.custo_hora
-            custo_rota = custo_comb + custo_mot
+                waypoint_coords = "/".join([f"{p['lat']},{p['lon']}" for p in pts_rota])
+                link_maps = f"https://www.google.com/maps/dir/{orig_lat},{orig_lon}/{waypoint_coords}/{orig_lat},{orig_lon}"
+                titulo_viagem = f"{mot_info.motorista} • Viagem {num_viagem}" if len(clusters_setoriais) > len(frota_usar) else mot_info.motorista
 
-            km_total_geral += dist_km
-            custo_total_geral += custo_rota
+                rotas_resultado.append({
+                    "id": c_idx + 1, "motorista": titulo_viagem, "motorista_base": mot_info.motorista,
+                    "viagem_num": num_viagem, "modal": mot_info.modal, "cor": CORES_ROTAS[c_idx % len(CORES_ROTAS)],
+                    "qtd_pedidos": len(pts_rota), "km_total": dist_km,
+                    "tempo_formatado": f"{tempo_min // 60}h {tempo_min % 60}m" if tempo_min >= 60 else f"{tempo_min} min",
+                    "custo_total": round(custo_rota, 2), "custo_por_pedido": round(custo_rota / max(len(pts_rota), 1), 2),
+                    "geometria": geometria, "paradas": pts_rota, "link_maps": link_maps
+                })
 
-            waypoint_coords = "/".join([f"{p['lat']},{p['lon']}" for p in pts_rota])
-            link_maps = f"https://www.google.com/maps/dir/{orig_lat},{orig_lon}/{waypoint_coords}/{orig_lat},{orig_lon}"
-
-            titulo_viagem = f"{mot_info.motorista} • Viagem {num_viagem}" if len(clusters_setoriais) > len(frota_usar) else mot_info.motorista
-
-            rotas_resultado.append({
-                "id": c_idx + 1,
-                "motorista": titulo_viagem,
-                "motorista_base": mot_info.motorista,
-                "viagem_num": num_viagem,
-                "modal": mot_info.modal,
-                "cor": CORES_ROTAS[c_idx % len(CORES_ROTAS)],
-                "qtd_pedidos": len(pts_rota),
-                "km_total": dist_km,
-                "tempo_formatado": f"{tempo_min // 60}h {tempo_min % 60}m" if tempo_min >= 60 else f"{tempo_min} min",
-                "custo_total": round(custo_rota, 2),
-                "custo_por_pedido": round(custo_rota / max(len(pts_rota), 1), 2),
-                "geometria": geometria,
-                "paradas": pts_rota,
-                "link_maps": link_maps
-            })
+                job["atual"] = c_idx + 1
+                job["etapa"] = f"Calculando rotas ({c_idx + 1}/{len(clusters_setoriais)})..."
 
         total_p = len(pedidos_geo)
         kpis = {
-            "total_pedidos": total_p,
-            "total_veiculos": len(frota_usar),
-            "total_rotas_viagens": len(rotas_resultado),
-            "km_total": round(km_total_geral, 2),
+            "total_pedidos": total_p, "total_veiculos": len(frota_usar),
+            "total_rotas_viagens": len(rotas_resultado), "km_total": round(km_total_geral, 2),
             "custo_total": round(custo_total_geral, 2),
             "custo_medio_pedido": round(custo_total_geral / max(total_p, 1), 2)
         }
 
-        return {
-            "origem": origem_dict,
-            "rotas": rotas_resultado,
-            "kpis": kpis
-        }
+        job["status"] = "concluido"
+        job["etapa"] = "Concluído."
+        job["resultado"] = {"origem": origem_dict, "rotas": rotas_resultado, "kpis": kpis}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro interno no algoritmo de roteirização: {str(e)}")
+        job["status"] = "erro"
+        job["erro"] = f"Erro interno no algoritmo de roteirização: {str(e)}"
+
+
+@app.post("/api/otimizar")
+async def iniciar_otimizacao(req: "OtimizarRequest"):
+    """Inicia a roteirização em segundo plano e devolve um job_id na hora."""
+    job_id = _novo_job()
+    asyncio.create_task(_processar_otimizacao(job_id, req))
+    return {"job_id": job_id}
+
+
+@app.get("/api/otimizar/status/{job_id}")
+def status_otimizacao(job_id: str):
+    job = JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job não encontrado (pode ter expirado).")
+    resposta = {
+        "status": job["status"],
+        "etapa": job["etapa"],
+        "atual": job["atual"],
+        "total": job["total"],
+    }
+    if job["status"] == "concluido":
+        resposta["resultado"] = job["resultado"]
+    if job["status"] == "erro":
+        resposta["erro"] = job["erro"]
+    return resposta
 
 @app.get("/api/modelo-xlsx")
 def download_modelo_xlsx():

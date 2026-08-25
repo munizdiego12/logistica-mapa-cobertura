@@ -38,6 +38,32 @@ const createStopIcon = (num, color) => {
   });
 };
 
+const createCityPinIcon = () => {
+  return L.divIcon({
+    className: 'custom-city-pin',
+    html: `
+      <div style="
+        background-color: #059669;
+        color: #ffffff;
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 10px;
+        border: 2px solid #ffffff;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+      ">
+        📍
+      </div>
+    `,
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
+    popupAnchor: [0, -11]
+  });
+};
+
 const hubIcon = L.divIcon({
   className: 'custom-hub-marker',
   html: `
@@ -71,16 +97,16 @@ function AjustarZoom({ center, pontos }) {
       try {
         map.fitBounds(pontos, { padding: [45, 45], maxZoom: 14 });
       } catch (e) {
-        if (center) map.setView(center, 13);
+        if (center) map.setView(center, 12);
       }
     } else if (center) {
-      map.setView(center, 13);
+      map.setView(center, 12);
     }
   }, [center, pontos, map]);
   return null;
 }
 
-export default function MapaLeaflet({ origem, rotas, mostrarRaio30km = true }) {
+export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
   if (!origem || typeof origem.lat !== 'number' || typeof origem.lon !== 'number') {
     return (
       <div className="w-full h-[540px] rounded-xl flex items-center justify-center bg-slate-950/40 border border-slate-800 text-slate-400 text-xs">
@@ -91,34 +117,39 @@ export default function MapaLeaflet({ origem, rotas, mostrarRaio30km = true }) {
 
   const center = [origem.lat, origem.lon];
   const rotasArray = Array.isArray(rotas) ? rotas : [];
+  const cidadesCobertas = (dadosCeps && dadosCeps.pontos_cobertos) ? dadosCeps.pontos_cobertos : [];
 
   const todosPontos = [center];
   rotasArray.forEach(r => {
-    const listaParadas = r.paradas || r.pedidos || [];
-    listaParadas.forEach(p => {
+    (r.paradas || r.pedidos || []).forEach(p => {
       if (typeof p.lat === 'number' && typeof p.lon === 'number') {
         todosPontos.push([p.lat, p.lon]);
       }
     });
   });
 
-  // Zonas de cobertura ordenadas da MAIOR para a MENOR (para permitir cliques em camadas inferiores)
+  cidadesCobertas.forEach(c => {
+    if (typeof c.lat === 'number' && typeof c.lon === 'number' && c.distancia_km > 0) {
+      todosPontos.push([c.lat, c.lon]);
+    }
+  });
+
   const zonasCobertura = [
-    ...(mostrarRaio30km ? [{
+    {
       raio: 30000,
       cor: '#94a3b8',
       titulo: 'Limite de Cobertura de Frete / CEPs (0 a 30 km)',
       sla: 'Raio de Atendimento do Cliente',
       veiculoSugerido: 'Todos os Modais Atendidos',
       descricao: 'Perímetro máximo de cálculo de Haversine para cotação e faixas de CEP atendidas.'
-    }] : []),
+    },
     {
       raio: 12000,
       cor: '#f59e0b',
       titulo: 'Zona Estendida (Metropolitana)',
       sla: 'Mesmo dia (Same-Day / D+0)',
       veiculoSugerido: 'VUC / Fiorino / Carro',
-      descricao: 'Região periférica e anel metropolitano. Maior impacto em km rodados e combustível.'
+      descricao: 'Região intermediária com maior impacto em km rodados e combustível.'
     },
     {
       raio: 7000,
@@ -126,7 +157,7 @@ export default function MapaLeaflet({ origem, rotas, mostrarRaio30km = true }) {
       titulo: 'Zona Secundária (Padrão)',
       sla: 'Até 2 horas',
       veiculoSugerido: 'Carro de Passeio / Fiorino',
-      descricao: 'Área intermediária com fluxo moderado de tráfego. Equilíbrio entre custo e velocidade.'
+      descricao: 'Área intermediária com fluxo moderado de tráfego.'
     },
     {
       raio: 3000,
@@ -134,13 +165,13 @@ export default function MapaLeaflet({ origem, rotas, mostrarRaio30km = true }) {
       titulo: 'Zona Primária (Expressa)',
       sla: 'Até 45 minutos',
       veiculoSugerido: 'Moto / Carro Leve',
-      descricao: 'Raio central de alta densidade urbana, máxima agilidade e menor custo.'
+      descricao: 'Raio central de alta densidade urbana e máxima agilidade.'
     }
   ];
 
   return (
     <div className="w-full h-[540px] rounded-xl overflow-hidden border border-slate-800 shadow-inner relative z-0">
-      <MapContainer center={center} zoom={12} style={{ height: '100%', width: '100%' }}>
+      <MapContainer center={center} zoom={11} style={{ height: '100%', width: '100%' }}>
         <TileLayer
           attribution='&copy; <a href="https://carto.com/">CARTO</a>'
           url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
@@ -148,7 +179,7 @@ export default function MapaLeaflet({ origem, rotas, mostrarRaio30km = true }) {
 
         <AjustarZoom center={center} pontos={todosPontos} />
 
-        {/* 1. Zonas Concêntricas (30km -> 12km -> 7km -> 3km) */}
+        {/* 1. Zonas Concêntricas até 30 km */}
         {zonasCobertura.map((zona, idx) => (
           <Circle
             key={idx}
@@ -181,20 +212,13 @@ export default function MapaLeaflet({ origem, rotas, mostrarRaio30km = true }) {
                       {zona.sla}
                     </span>
                   </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-slate-500">Modal:</span>
-                    <span className="font-semibold text-slate-700">{zona.veiculoSugerido}</span>
-                  </div>
-                  <p className="text-[10px] text-slate-500 pt-1 border-t border-slate-100">
-                    {zona.descricao}
-                  </p>
                 </div>
               </div>
             </Popup>
           </Circle>
         ))}
 
-        {/* 2. Marcador Hub Central */}
+        {/* 2. Marcador do Hub Central */}
         <Marker position={center} icon={hubIcon}>
           <Popup>
             <div className="text-slate-900 font-sans p-1 min-w-[200px]">
@@ -207,7 +231,42 @@ export default function MapaLeaflet({ origem, rotas, mostrarRaio30km = true }) {
           </Popup>
         </Marker>
 
-        {/* 3. Traçados e Paradas */}
+        {/* 3. Marcadores de Cidades/Municípios no Raio de 30 km */}
+        {cidadesCobertas.map((c, cIdx) => {
+          if (c.distancia_km === 0 || typeof c.lat !== 'number' || typeof c.lon !== 'number') return null;
+          return (
+            <Marker
+              key={`city-${cIdx}`}
+              position={[c.lat, c.lon]}
+              icon={createCityPinIcon()}
+            >
+              <Popup>
+                <div className="text-slate-900 font-sans p-1 min-w-[210px]">
+                  <div className="flex items-center justify-between pb-1 border-b border-slate-200">
+                    <span className="text-xs font-bold text-emerald-700">{c.cidade} - {c.uf}</span>
+                    <span className="text-[10px] font-mono text-slate-400">IBGE: {c.ibge}</span>
+                  </div>
+                  <div className="mt-1.5 space-y-1 text-[11px]">
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Distância Haversine:</span>
+                      <span className="font-bold text-slate-800">{c.distancia_km} km</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Faixa CEP:</span>
+                      <span className="font-mono font-semibold text-slate-700">{c.cep_inicial} a {c.cep_final}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Prazo de Entrega:</span>
+                      <span className="font-bold text-emerald-600">{c.dias_sla} dia(s)</span>
+                    </div>
+                  </div>
+                </div>
+              </Popup>
+            </Marker>
+          );
+        })}
+
+        {/* 4. Traçados e Paradas das Rotas */}
         {rotasArray.map((rota) => {
           const listaParadas = rota.paradas || rota.pedidos || [];
           const polylinePositions = (Array.isArray(rota.geometria) && rota.geometria.length > 0)
@@ -226,45 +285,9 @@ export default function MapaLeaflet({ origem, rotas, mostrarRaio30km = true }) {
                     lineCap: 'round',
                     lineJoin: 'round'
                   }}
-                >
-                  <Popup>
-                    <div className="text-slate-900 font-sans p-1.5 min-w-[220px]">
-                      <div className="flex items-center justify-between pb-1.5 border-b border-slate-200">
-                        <div className="flex items-center gap-1.5">
-                          <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: rota.cor }}></span>
-                          <span className="font-bold text-xs uppercase tracking-wider text-slate-900">
-                            {rota.motorista || `Rota #${rota.id}`}
-                          </span>
-                        </div>
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-100 text-blue-800">
-                          {rota.modal}
-                        </span>
-                      </div>
-
-                      <div className="mt-2.5 space-y-1.5 text-xs">
-                        <div className="flex justify-between items-center">
-                          <span className="text-slate-500 text-[11px]">Custo Total:</span>
-                          <span className="font-bold text-emerald-600 font-mono">
-                            R$ {Number(rota.custo_total || 0).toFixed(2)}
-                          </span>
-                        </div>
-                        <div className="flex justify-between items-center">
-                          <span className="text-slate-500 text-[11px]">Média por Pedido:</span>
-                          <span className="font-semibold text-slate-800 font-mono">
-                            R$ {Number(rota.custo_por_pedido || 0).toFixed(2)}
-                          </span>
-                        </div>
-                        <div className="flex justify-between items-center pt-1 border-t border-slate-100 text-[11px] text-slate-500">
-                          <span>{rota.km_total} km</span>
-                          <span>{rota.tempo_formatado}</span>
-                        </div>
-                      </div>
-                    </div>
-                  </Popup>
-                </Polyline>
+                />
               )}
 
-              {/* 4. Marcadores Numerados com Modal Recomendado */}
               {listaParadas.map((p, pIdx) => {
                 if (typeof p.lat !== 'number' || typeof p.lon !== 'number') return null;
                 const volume = p.Volume || p.volume || 1;
@@ -287,17 +310,14 @@ export default function MapaLeaflet({ origem, rotas, mostrarRaio30km = true }) {
                           </span>
                           <span className="text-[10px] font-mono text-slate-400">ID #{p.id}</span>
                         </div>
-
                         <div className="mt-1.5 mb-1 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-bold text-slate-800">
                           <span>Modal:</span>
                           <span className="text-blue-600">{modalAlocado}</span>
                         </div>
-
                         <p className="font-semibold text-xs text-slate-900">{logradouro}, {numero}</p>
                         <p className="text-[11px] text-slate-500">{bairro} {p.CEP ? `• CEP ${p.CEP}` : ''}</p>
-                        
                         <div className="mt-2 pt-1 border-t border-slate-200 flex justify-between text-[11px] text-slate-600 font-medium">
-                          <span>Volume da Parada:</span>
+                          <span>Volume:</span>
                           <span className="text-slate-800 font-bold">{volume} {volume > 1 ? 'pedidos' : 'pedido'}</span>
                         </div>
                       </div>

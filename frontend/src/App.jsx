@@ -671,7 +671,7 @@ export default function App() {
             </div>
             
             {resultado ? (
-              <MapaLeaflet origem={resultado.origem} rotas={resultado.rotas} mostrarRaio30km={true} />
+              <MapaLeaflet origem={resultado ? resultado.origem : (dadosCoberturaCeps ? dadosCoberturaCeps.hub : null)} rotas={resultado ? resultado.rotas : []} dadosCeps={dadosCoberturaCeps}/>
             ) : (
               <div className="h-[460px] flex flex-col items-center justify-center border border-slate-800/80 rounded-xl bg-slate-950/40 text-slate-500 gap-3">
                 <div className="w-12 h-12 rounded-full bg-slate-900 flex items-center justify-center border border-slate-800">

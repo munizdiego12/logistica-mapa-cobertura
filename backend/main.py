@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+
 app = FastAPI(title="Zubale Routing Core - Polar Clustering & Vehicle Allocation")
 
 app.add_middleware(

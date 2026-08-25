@@ -1,98 +1,161 @@
-import time
-import requests
+import asyncio
 import logging
-import threading
-from typing import Tuple
-from config import BBOX_SP
-from logistica.cache import GeocodingCache
+import re
+import sqlite3
+import aiohttp
+from typing import Dict, List, Optional, Tuple
 
-logger = logging.getLogger("Geocoding")
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("geocoding")
 
-# Lock global para coordenar requisições ao Nominatim em threads simultâneas
-_nominatim_lock = threading.Lock()
-_ultimo_acesso_nominatim = 0.0
+DB_PATH = "geocoding_cache.db"
+SP_CENTER_COORDS = (-23.550520, -46.633308)
 
-class GeocoderSP:
-    def __init__(self, cache_db: str = "geocache.db"):
-        self.cache = GeocodingCache(cache_db)
-        self.headers = {"User-Agent": "LogisticaHub_Enterprise_SP/1.0"}
+# Configurações de taxa de requisição
+SEMAPHORE_LIMIT = 5  # Limite de chamadas concorrentes externas
+NOMINATIM_USER_AGENT = "zubale_routing_core_v2"
+
+
+def init_db():
+    """Inicializa a tabela de cache persistente no SQLite."""
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS geocode_cache (
+                key TEXT PRIMARY KEY,
+                lat REAL,
+                lon REAL,
+                source TEXT
+            )
+        """)
+        conn.commit()
+
+
+def get_from_cache(key: str) -> Optional[Tuple[float, float, str]]:
+    """Recupera coordenadas do cache SQLite."""
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT lat, lon, source FROM geocode_cache WHERE key = ?", (key.strip().lower(),))
+        row = cursor.fetchone()
+        if row:
+            return row[0], row[1], row[2]
+    return None
+
+
+def save_to_cache(key: str, lat: float, lon: float, source: str):
+    """Salva o resultado obtido no cache SQLite."""
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT OR REPLACE INTO geocode_cache (key, lat, lon, source) VALUES (?, ?, ?, ?)",
+            (key.strip().lower(), lat, lon, source)
+        )
+        conn.commit()
+
+
+def clean_cep(cep_str: str) -> str:
+    """Higieniza o formato do CEP."""
+    return re.sub(r"\D", "", str(cep_str)).zfill(8)
+
+
+async def fetch_with_retry(session: aiohttp.ClientSession, url: str, headers: dict = None, retries: int = 3, backoff_factor: float = 0.5) -> Optional[dict]:
+    """Realiza requisições HTTP assíncronas com tratamento de erros e backoff exponencial."""
+    for attempt in range(retries):
+        try:
+            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                if response.status == 200:
+                    return await response.json()
+                elif response.status in (429, 500, 502, 503, 504):
+                    await asyncio.sleep(backoff_factor * (2 ** attempt))
+                else:
+                    break
+        except (aiohttp.ClientError, asyncio.TimeoutError):
+            await asyncio.sleep(backoff_factor * (2 ** attempt))
+    return None
+
+
+async def geocode_cep_brasilapi(session: aiohttp.ClientSession, cep: str) -> Optional[Tuple[float, float]]:
+    """Obtém coordenadas via BrasilAPI a partir do CEP."""
+    clean = clean_cep(cep)
+    if len(clean) != 8:
+        return None
+    
+    cached = get_from_cache(f"cep:{clean}")
+    if cached:
+        return cached[0], cached[1]
+
+    url = f"https://brasilapi.com.br/api/cep/v2/{clean}"
+    data = await fetch_with_retry(session, url)
+    
+    if data and "location" in data and "coordinates" in data["location"]:
+        coords = data["location"]["coordinates"]
+        if coords.get("latitude") and coords.get("longitude"):
+            lat = float(coords["latitude"])
+            lon = float(coords["longitude"])
+            save_to_cache(f"cep:{clean}", lat, lon, "brasilapi")
+            return lat, lon
+    return None
+
+
+async def geocode_address_nominatim(session: aiohttp.ClientSession, address: str, semaphore: asyncio.Semaphore) -> Optional[Tuple[float, float]]:
+    """Obtém coordenadas via Nominatim (OpenStreetMap) com controle de concorrência."""
+    cached = get_from_cache(f"addr:{address}")
+    if cached:
+        return cached[0], cached[1]
+
+    async with semaphore:
+        # Respeita os limites da API de OpenStreetMap
+        await asyncio.sleep(1.0) 
+        url = "https://nominatim.openstreetmap.org/search"
+        params = f"?q={aiohttp.helpers.quote_plus(address)}&format=json&limit=1"
+        headers = {"User-Agent": NOMINATIM_USER_AGENT}
         
-        self.bairros_fallback = {
-            "itaim": (-23.5844, -46.6800), "olimpia": (-23.5954, -46.6865),
-            "paraiso": (-23.5714, -46.6450), "pinheiros": (-23.5615, -46.6920),
-            "perdizes": (-23.5365, -46.6730), "consolacao": (-23.5530, -46.6590),
-            "mariana": (-23.5890, -46.6340), "madalena": (-23.5540, -46.6900),
-            "brooklin": (-23.6180, -46.6900), "moema": (-23.6020, -46.6620)
-        }
+        data = await fetch_with_retry(session, url + params, headers=headers)
+        if data and len(data) > 0:
+            lat = float(data[0]["lat"])
+            lon = float(data[0]["lon"])
+            save_to_cache(f"addr:{address}", lat, lon, "nominatim")
+            return lat, lon
+    return None
 
-    def _esta_em_sp(self, lat: float, lon: float) -> bool:
-        return (BBOX_SP["lat_min"] < lat < BBOX_SP["lat_max"] and 
-                BBOX_SP["lon_min"] < lon < BBOX_SP["lon_max"])
 
-    def _requisitar_nominatim_seguro(self, query_str: str):
-        global _ultimo_acesso_nominatim
-        with _nominatim_lock:
-            tempo_decorrido = time.time() - _ultimo_acesso_nominatim
-            if tempo_decorrido < 1.05:
-                time.sleep(1.05 - tempo_decorrido)
-            
-            _ultimo_acesso_nominatim = time.time()
-            
-            return requests.get(
-                "https://nominatim.openstreetmap.org/search",
-                params={"q": query_str, "format": "json", "limit": 1, "countrycodes": "br"},
-                headers=self.headers,
-                timeout=5
-            ).json()
+async def resolve_single_location(session: aiohttp.ClientSession, item: Dict, semaphore: asyncio.Semaphore) -> Dict:
+    """
+    Resolve as coordenadas de um único pedido utilizando fallbacks estruturados:
+    1. Cache SQLite
+    2. BrasilAPI (via CEP)
+    3. Nominatim (via Endereço)
+    4. Fallback Centro de SP
+    """
+    init_db()
+    cep = item.get("cep", "")
+    address = item.get("endereco", "")
+    
+    # 1. Tentativa via CEP
+    if cep:
+        coords = await geocode_cep_brasilapi(session, cep)
+        if coords:
+            item["lat"], item["lon"], item["geocode_source"] = coords[0], coords[1], "brasilapi"
+            return item
 
-    def geocodificar(self, logradouro: str, numero: str, bairro: str, cep_limpo: str) -> Tuple[float, float]:
-        chave_busca = f"{logradouro}, {numero}, {bairro}, {cep_limpo}"
-        
-        # 1. Cache Local
-        cached = self.cache.get(chave_busca)
-        if cached:
-            return cached
+    # 2. Tentativa via Endereço Completo
+    full_address = f"{address}, São Paulo, SP, Brasil" if address else ""
+    if full_address:
+        coords = await geocode_address_nominatim(session, full_address, semaphore)
+        if coords:
+            item["lat"], item["lon"], item["geocode_source"] = coords[0], coords[1], "nominatim"
+            return item
 
-        # 2. Consulta Nominatim Estruturada
-        queries = [
-            f"{logradouro}, {numero}, {bairro}, {cep_limpo}, São Paulo - SP, Brasil",
-            f"{logradouro}, {bairro}, São Paulo - SP, Brasil"
-        ]
-        
-        for q in queries:
-            try:
-                res = self._requisitar_nominatim_seguro(q)
-                if res and isinstance(res, list) and len(res) > 0:
-                    lat, lon = float(res[0]["lat"]), float(res[0]["lon"])
-                    if self._esta_em_sp(lat, lon):
-                        self.cache.set(chave_busca, lat, lon, "nominatim")
-                        return lat, lon
-            except Exception as e:
-                logger.warning(f"Falha na requisição Nominatim ({q}): {e}")
+    # 3. Fallback Padrão (Centro de SP)
+    item["lat"], item["lon"], item["geocode_source"] = SP_CENTER_COORDS[0], SP_CENTER_COORDS[1], "fallback_sp_center"
+    return item
 
-        # 3. Consulta BrasilAPI v2 por CEP
-        if len(cep_limpo) == 8:
-            try:
-                time.sleep(0.3)
-                res_cep = requests.get(f"https://brasilapi.com.br/api/cep/v2/{cep_limpo}", timeout=5).json()
-                coords = res_cep.get("location", {}).get("coordinates", {})
-                if coords:
-                    lat, lon = float(coords["latitude"]), float(coords["longitude"])
-                    if self._esta_em_sp(lat, lon):
-                        self.cache.set(chave_busca, lat, lon, "brasilapi")
-                        return lat, lon
-            except Exception as e:
-                logger.warning(f"Falha na BrasilAPI para CEP {cep_limpo}: {e}")
 
-        # 4. Fallback por Dicionário de Bairros de SP
-        bairro_lower = str(bairro).lower()
-        for k, v in self.bairros_fallback.items():
-            if k in bairro_lower:
-                logger.info(f"Geocoding aproximado via bairro: '{bairro}'")
-                self.cache.set(chave_busca, v[0], v[1], "bairro_fallback")
-                return v
-
-        # Fallback Central SP
-        centro = (-23.5505, -46.6333)
-        self.cache.set(chave_busca, centro[0], centro[1], "default_sp")
-        return centro
+async def process_batch_geocoding(items: List[Dict]) -> List[Dict]:
+    """Processa uma lista de pedidos em lote concorrente de forma assíncrona."""
+    init_db()
+    semaphore = asyncio.Semaphore(SEMAPHORE_LIMIT)
+    
+    async with aiohttp.ClientSession() as session:
+        tasks = [resolve_single_location(session, item, semaphore) for item in items]
+        return await asyncio.gather(*tasks)

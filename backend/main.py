@@ -123,7 +123,7 @@ async def geocode_async(client: httpx.AsyncClient, rua: str = "", numero: str = 
 
     # 1) Endereço completo (rua + número) via Nominatim
     if rua and numero:
-        query = ", ".join([p for p in [f"{rua}, {numero}", bairro, cidade, uf, "Brasil"] if p])
+        query = ", ".join([p for p in [f"{rua}, {numero}", bairro, cidade, uf, clean_cep, "Brasil"] if p])
         try:
             await _respeitar_rate_limit_nominatim()
             res = await client.get(

@@ -114,7 +114,7 @@ async def cache_stats():
 
 async def consultar_ceps_por_raio(lat_origem: float, lon_origem: float, raio_km: float):
     """
-    Busca CEPs reais no PostgreSQL calculando a fórmula de Haversine diretamente no banco.
+    Busca CEPs no raio a partir do Hub e agrupa em faixas de precificação (ranges).
     """
     pool = await get_pool()
     if not pool:
@@ -143,23 +143,45 @@ async def consultar_ceps_por_raio(lat_origem: float, lon_origem: float, raio_km:
     async with pool.acquire() as conn:
         rows = await conn.fetch(query, lat_origem, lon_origem, raio_km)
 
-    resultados = []
-    for row in rows:
-        cep_str = str(row['cep']).zfill(8)
-        prefixo_5 = cep_str[:5]
-        dist = float(row['distancia_km'])
+    faixas_processadas = []
+    faixas_vistas = set()
 
-        resultados.append({
+    for row in rows:
+        cep_limpo = str(row['cep']).replace('-', '').zfill(8)
+        prefixo_5 = cep_limpo[:5]
+        dist = float(row['distancia_km'])
+        
+        # Define o anel de precificação (até 5km, até 10km, até 20km, até 30km)
+        if dist <= 5.0:
+            anel_texto = "Raio até 5 km"
+            sla = 1
+        elif dist <= 10.0:
+            anel_texto = "Raio 5 a 10 km"
+            sla = 1
+        elif dist <= 20.0:
+            anel_texto = "Raio 10 a 20 km"
+            sla = 2
+        else:
+            anel_texto = "Raio 20 a 30 km"
+            sla = 2
+
+        chave_faixa = f"{prefixo_5}_{anel_texto}"
+        if chave_faixa in faixas_vistas:
+            continue
+        faixas_vistas.add(chave_faixa)
+
+        faixas_processadas.append({
             "ibge": 3550308,
             "uf": row['uf'],
             "cidade": row['cidade'],
-            "bairro": row['bairro'] or "Região Atendida",
+            "bairro": row['bairro'] or "Área Atendida",
+            "faixa_precificacao": anel_texto,
             "cep_inicial": f"{prefixo_5}000",
             "cep_final": f"{prefixo_5}999",
             "distancia_km": round(dist, 2),
-            "dias_sla": 1 if dist <= 12 else 2,
+            "dias_sla": sla,
             "lat": float(row['lat']),
             "lon": float(row['lon'])
         })
 
-    return resultados
+    return faixas_processadas

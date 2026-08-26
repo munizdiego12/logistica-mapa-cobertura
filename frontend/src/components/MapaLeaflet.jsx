@@ -338,7 +338,7 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
           );
         })}
 
-        {/* 4. Traçados Viários das Rotas OSRM */}
+        {/* 4. Traçados Viários das Rotas OSRM (clicável: mostra resumo da rota) */}
         {rotasArray.map((rota) => {
           const listaParadas = rota.paradas || rota.pedidos || [];
           const polylinePositions = (Array.isArray(rota.geometria) && rota.geometria.length > 0)
@@ -356,7 +356,59 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
                 lineCap: 'round',
                 lineJoin: 'round'
               }}
-            />
+              eventHandlers={{
+                mouseover: (e) => e.target.setStyle({ weight: 8, opacity: 1 }),
+                mouseout: (e) => e.target.setStyle({ weight: 5, opacity: 0.9 }),
+                click: (e) => e.target.bringToFront(),
+              }}
+            >
+              <Popup>
+                <div className="text-slate-900 font-sans p-1.5 min-w-[230px]">
+                  <div className="flex items-center gap-2 pb-1.5 border-b border-slate-200">
+                    <span className="w-3 h-3 rounded-sm shrink-0" style={{ backgroundColor: rota.cor }}></span>
+                    <span className="text-xs font-extrabold uppercase tracking-wider text-slate-800">
+                      {rota.motorista}
+                    </span>
+                  </div>
+                  <div className="mt-2 space-y-1.5 text-[11px]">
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-500">Veículo:</span>
+                      <span className="font-semibold text-slate-800">{rota.modal}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-500">Total de Pedidos:</span>
+                      <span className="font-bold text-slate-800">{rota.qtd_pedidos}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-500">Distância da Rota:</span>
+                      <span className="font-semibold text-slate-800">{rota.km_total} km</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-500">Tempo Estimado:</span>
+                      <span className="font-semibold text-slate-800">{rota.tempo_formatado}</span>
+                    </div>
+                    <div className="flex justify-between items-center pt-1 border-t border-slate-100">
+                      <span className="text-slate-500">Custo Total da Rota:</span>
+                      <span className="font-bold text-emerald-600">R$ {Number(rota.custo_total).toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-500">Custo Médio / Pedido:</span>
+                      <span className="font-semibold text-slate-700">R$ {Number(rota.custo_por_pedido).toFixed(2)}</span>
+                    </div>
+                  </div>
+                  {rota.link_maps && (
+                    <a
+                      href={rota.link_maps}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-center gap-1 text-[11px] font-semibold text-blue-600 hover:text-blue-800"
+                    >
+                      Abrir no Google Maps →
+                    </a>
+                  )}
+                </div>
+              </Popup>
+            </Polyline>
           );
         })}
 

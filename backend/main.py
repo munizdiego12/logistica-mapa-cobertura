@@ -463,7 +463,18 @@ async def get_osrm_route_async(client: httpx.AsyncClient, pontos):
     tempo_min = round((dist_km / 22.0) * 60)
     return dist_km, tempo_min, geometria
 
-def agrupar_pedidos_por_poligono_setorial(origem_lat, origem_lon, pedidos, max_por_rota=6):
+def montar_rotas_por_capacidade_real(origem_lat, origem_lon, pedidos, frota, modais_usar):
+    """
+    Distribui os pedidos respeitando a CAPACIDADE REAL de cada motorista/veículo
+    da frota (nunca uma média entre todos). Os pedidos são ordenados por ângulo em
+    torno do Hub (mantendo proximidade geográfica) e depois "fatiados" em rodadas:
+    a cada rodada, cada motorista recebe uma fatia do tamanho exato da capacidade
+    do seu próprio modal. Se sobrar demanda, o motorista ganha mais uma
+    onda/viagem na rodada seguinte — sempre respeitando o teto do seu veículo.
+
+    Retorna uma lista de tuplas (motorista: MotoristaItem, pedidos: list) na
+    ordem em que as viagens devem ser despachadas.
+    """
     if not pedidos:
         return []
 
@@ -471,25 +482,33 @@ def agrupar_pedidos_por_poligono_setorial(origem_lat, origem_lon, pedidos, max_p
         d_lat = p['lat'] - origem_lat
         d_lon = p['lon'] - origem_lon
         p['angulo'] = math.atan2(d_lat, d_lon)
-
     pedidos_ordenados = sorted(pedidos, key=lambda x: x['angulo'])
-    clusters = []
-    cluster_atual = []
 
-    for p in pedidos_ordenados:
-        if len(cluster_atual) >= max_por_rota:
-            clusters.append(cluster_atual)
-            cluster_atual = []
-        elif cluster_atual and abs(p['angulo'] - cluster_atual[0]['angulo']) > 1.2:
-            clusters.append(cluster_atual)
-            cluster_atual = []
+    capacidades = [
+        max(1, modais_usar.get(f.modal, {'capacidade': 6}).get('capacidade', 6))
+        for f in frota
+    ]
 
-        cluster_atual.append(p)
+    viagens = []  # lista de (motorista, pedidos_da_viagem)
+    idx = 0
+    total = len(pedidos_ordenados)
+    seguranca = 0
 
-    if cluster_atual:
-        clusters.append(cluster_atual)
+    while idx < total:
+        avancou = False
+        for motorista, capacidade in zip(frota, capacidades):
+            if idx >= total:
+                break
+            fatia = pedidos_ordenados[idx: idx + capacidade]
+            if fatia:
+                viagens.append((motorista, fatia))
+                idx += len(fatia)
+                avancou = True
+        seguranca += 1
+        if not avancou or seguranca > 1000:
+            break  # segurança contra loop infinito (não deveria acontecer)
 
-    return clusters
+    return viagens
 
 class MotoristaItem(BaseModel):
     id: int
@@ -649,27 +668,28 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest"):
                 "CEP": cep, "Volume": vol, "lat": p_lat, "lon": p_lon
             })
 
-        # --- Etapa 3: agrupar em rotas/ondas ---
+        # --- Etapa 3: montar as viagens respeitando a CAPACIDADE REAL de cada veículo ---
         frota_usar = req.frota if req.frota and len(req.frota) > 0 else [
             MotoristaItem(id=1, motorista="Motorista 01", modal="Carro de Passeio")
         ]
-        max_setor = max(1, sum(modais_usar.get(f.modal, {'capacidade': 6})['capacidade'] for f in frota_usar) // len(frota_usar))
-        clusters_setoriais = agrupar_pedidos_por_poligono_setorial(orig_lat, orig_lon, pedidos_geo, max_por_rota=max_setor)
+        viagens_planejadas = montar_rotas_por_capacidade_real(orig_lat, orig_lon, pedidos_geo, frota_usar, modais_usar)
 
         # --- Etapa 4: calcular cada rota (traçado OSRM em paralelo) ---
-        job["etapa"] = f"Calculando rotas (0/{len(clusters_setoriais)})..."
+        job["etapa"] = f"Calculando rotas (0/{len(viagens_planejadas)})..."
         job["atual"] = 0
-        job["total"] = len(clusters_setoriais)
+        job["total"] = len(viagens_planejadas)
 
         motorista_viagens = {f.id: 0 for f in frota_usar}
+        total_viagens_por_motorista = {f.id: 0 for f in frota_usar}
+        for mot_info, _ in viagens_planejadas:
+            total_viagens_por_motorista[mot_info.id] += 1
+
         rotas_resultado = []
         km_total_geral = 0.0
         custo_total_geral = 0.0
 
         async with httpx.AsyncClient() as client:
-            for c_idx, cluster in enumerate(clusters_setoriais):
-                mot_idx = c_idx % len(frota_usar)
-                mot_info = frota_usar[mot_idx]
+            for c_idx, (mot_info, cluster) in enumerate(viagens_planejadas):
                 motorista_viagens[mot_info.id] += 1
                 num_viagem = motorista_viagens[mot_info.id]
 
@@ -694,7 +714,7 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest"):
 
                 waypoint_coords = "/".join([f"{p['lat']},{p['lon']}" for p in pts_rota])
                 link_maps = f"https://www.google.com/maps/dir/{orig_lat},{orig_lon}/{waypoint_coords}/{orig_lat},{orig_lon}"
-                titulo_viagem = f"{mot_info.motorista} • Viagem {num_viagem}" if len(clusters_setoriais) > len(frota_usar) else mot_info.motorista
+                titulo_viagem = f"{mot_info.motorista} • Viagem {num_viagem}" if total_viagens_por_motorista[mot_info.id] > 1 else mot_info.motorista
 
                 rotas_resultado.append({
                     "id": c_idx + 1, "motorista": titulo_viagem, "motorista_base": mot_info.motorista,
@@ -706,7 +726,7 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest"):
                 })
 
                 job["atual"] = c_idx + 1
-                job["etapa"] = f"Calculando rotas ({c_idx + 1}/{len(clusters_setoriais)})..."
+                job["etapa"] = f"Calculando rotas ({c_idx + 1}/{len(viagens_planejadas)})..."
 
         total_p = len(pedidos_geo)
         kpis = {

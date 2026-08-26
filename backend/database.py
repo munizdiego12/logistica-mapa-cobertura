@@ -11,6 +11,7 @@ continua funcionando normalmente, só que sem persistência entre reinícios
 """
 
 import os
+import math
 import asyncpg
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
@@ -109,3 +110,56 @@ async def cache_stats():
     async with pool.acquire() as conn:
         total = await conn.fetchval("SELECT COUNT(*) FROM geocode_cache")
     return {"persistente": True, "total_enderecos": total}
+
+
+async def consultar_ceps_por_raio(lat_origem: float, lon_origem: float, raio_km: float):
+    """
+    Busca CEPs reais no PostgreSQL calculando a fórmula de Haversine diretamente no banco.
+    """
+    pool = await get_pool()
+    if not pool:
+        return []
+
+    query = """
+        SELECT cep, uf, cidade, bairro, lat, lon,
+               (6371 * acos(
+                   LEAST(1.0, GREATEST(-1.0,
+                       cos(radians($1)) * cos(radians(lat)) *
+                       cos(radians(lon) - radians($2)) + 
+                       sin(radians($1)) * sin(radians(lat))
+                   ))
+               )) AS distancia_km
+        FROM ceps_reais
+        WHERE (6371 * acos(
+                   LEAST(1.0, GREATEST(-1.0,
+                       cos(radians($1)) * cos(radians(lat)) *
+                       cos(radians(lon) - radians($2)) + 
+                       sin(radians($1)) * sin(radians(lat))
+                   ))
+               )) <= $3
+        ORDER BY distancia_km ASC;
+    """
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(query, lat_origem, lon_origem, raio_km)
+
+    resultados = []
+    for row in rows:
+        cep_str = str(row['cep']).zfill(8)
+        prefixo_5 = cep_str[:5]
+        dist = float(row['distancia_km'])
+
+        resultados.append({
+            "ibge": 3550308,
+            "uf": row['uf'],
+            "cidade": row['cidade'],
+            "bairro": row['bairro'] or "Região Atendida",
+            "cep_inicial": f"{prefixo_5}000",
+            "cep_final": f"{prefixo_5}999",
+            "distancia_km": round(dist, 2),
+            "dias_sla": 1 if dist <= 12 else 2,
+            "lat": float(row['lat']),
+            "lon": float(row['lon'])
+        })
+
+    return resultados

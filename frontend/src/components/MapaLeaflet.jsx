@@ -235,8 +235,8 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
     <div className="w-full h-[540px] rounded-xl overflow-hidden border border-slate-800 shadow-inner relative z-0">
       <MapContainer center={center} zoom={12} style={{ height: '100%', width: '100%' }}>
         <TileLayer
-          attribution='&copy; <a href="https://carto.com/">CARTO</a>'
-          url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+          attribution='Tiles &copy; Esri &mdash; Source: Esri, DeLorme, NAVTEQ'
+          url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}"
         />
 
         <AjustarZoom center={center} pontos={todosPontosZoom} />

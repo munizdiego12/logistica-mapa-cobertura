@@ -154,14 +154,10 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
       coordsContador[chaveCoord] = (coordsContador[chaveCoord] || 0) + 1;
       const repeticoes = coordsContador[chaveCoord];
 
-      // Se mais de um pedido tiver a mesma coordenada, afasta em ESPIRAL usando o ângulo
-      // áureo (~137.5°). Isso nunca repete a mesma posição, não importa quantos pedidos
-      // caiam no mesmo ponto (o método antigo, de 8 posições fixas em círculo, colidia
-      // consigo mesmo a partir do 9º pedido repetido).
       if (repeticoes > 1) {
-        const ANGULO_AUREO = 2.399963; // radianos
+        const ANGULO_AUREO = 2.399963;
         const angulo = repeticoes * ANGULO_AUREO;
-        const raio = 0.00012 * Math.sqrt(repeticoes); // cresce a cada repetição (~15m, ~20m, ~25m...)
+        const raio = 0.00012 * Math.sqrt(repeticoes);
         lat = lat + (raio * Math.cos(angulo));
         lon = lon + (raio * Math.sin(angulo));
       }
@@ -191,39 +187,47 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
     });
   }
 
-  // Zonas concêntricas de raio completas
+  // Zonas concêntricas de raio completas (Ordenadas do maior para o menor para manter a sobreposição correta)
   const zonasCobertura = [
     {
       raio: 30000,
       cor: '#94a3b8',
-      titulo: 'Limite de Cobertura de Frete / CEPs (0 a 30 km)',
-      sla: 'Raio Operacional Máximo',
-      veiculoSugerido: 'Todos os Modais Atendidos',
-      descricao: 'Perímetro máximo de cálculo de Haversine para cotação e faixas de CEP atendidas.'
+      titulo: 'Limite Máximo de Cobertura (30 km)',
+      sla: 'D+2 a D+3 (Até 72h)',
+      veiculoSugerido: 'Caminhão Leve / VUC / Utilitário',
+      descricao: 'Perímetro máximo de cálculo Haversine e cotação de faixas de CEP atendidas.'
+    },
+    {
+      raio: 20000,
+      cor: '#a855f7',
+      titulo: 'Zona Intermediária / Cinturão (20 km)',
+      sla: 'D+2 (2 dias úteis)',
+      veiculoSugerido: 'VUC / Fiorino / Van',
+      descricao: 'Região metropolitana expandida e cidades do entorno.'
     },
     {
       raio: 12000,
       cor: '#f59e0b',
-      titulo: 'Zona Estendida (Metropolitana)',
-      sla: 'Mesmo dia (Same-Day / D+0)',
+      titulo: 'Zona Estendida / Limite Capital (12 km)',
+      sla: 'D+1 (1 dia útil / Same-Day)',
       veiculoSugerido: 'VUC / Fiorino / Carro',
-      descricao: 'Região intermediária com maior impacto em km rodados e combustível.'
+      descricao: 'Região intermediária urbana com alto fluxo viário.'
     },
     {
       raio: 7000,
       cor: '#3b82f6',
-      titulo: 'Zona Secundária (Padrão)',
-      sla: 'Até 2 horas',
-      veiculoSugerido: 'Carro de Passeio / Fiorino',
-      descricao: 'Área intermediária com fluxo moderado de tráfego.'
+      titulo: 'Zona Secundária / Centro Expandido (7 km)',
+      sla: 'Até 2 horas / Same-Day',
+      veiculoSugerido: 'Carro de Passeio / Fiorino / Moto',
+      descricao: 'Área urbana consolidada com rotas de média quilometragem.'
     },
     {
       raio: 3000,
       cor: '#10b981',
-      titulo: 'Zona Primária (Expressa)',
-      sla: 'Até 45 minutos',
-      veiculoSugerido: 'Moto / Carro Leve',
-      descricao: 'Raio central de alta densidade urbana e máxima agilidade.'
+      titulo: 'Zona Primária / Expressa (3 km)',
+      sla: 'Até 45 minutos (Express)',
+      veiculoSugerido: 'Moto / Bike / Veículo Leve',
+      descricao: 'Raio central de altíssima densidade urbana e máxima agilidade.'
     }
   ];
 
@@ -246,7 +250,7 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
             pathOptions={{
               color: zona.cor,
               fillColor: zona.cor,
-              fillOpacity: zona.raio === 30000 ? 0.02 : 0.05,
+              fillOpacity: zona.raio === 30000 ? 0.02 : 0.04,
               weight: zona.raio === 30000 ? 1.5 : 2,
               dashArray: zona.raio === 30000 ? '8, 8' : '5, 5'
             }}
@@ -338,7 +342,7 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
           );
         })}
 
-        {/* 4. Traçados Viários das Rotas OSRM (clicável: mostra resumo da rota) */}
+        {/* 4. Traçados Viários das Rotas OSRM */}
         {rotasArray.map((rota) => {
           const listaParadas = rota.paradas || rota.pedidos || [];
           const polylinePositions = (Array.isArray(rota.geometria) && rota.geometria.length > 0)

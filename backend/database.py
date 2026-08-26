@@ -113,15 +113,12 @@ async def cache_stats():
 
 
 async def consultar_ceps_por_raio(lat_origem: float, lon_origem: float, raio_km: float):
-    """
-    Busca CEPs no raio a partir do Hub e agrupa em faixas de precificação (ranges).
-    """
     pool = await get_pool()
     if not pool:
         return []
 
     query = """
-        SELECT cep, uf, cidade, bairro, lat, lon,
+        SELECT cep_inicial, cep_final, uf, cidade, bairro, lat, lon,
                (6371 * acos(
                    LEAST(1.0, GREATEST(-1.0,
                        cos(radians($1)) * cos(radians(lat)) *
@@ -143,45 +140,24 @@ async def consultar_ceps_por_raio(lat_origem: float, lon_origem: float, raio_km:
     async with pool.acquire() as conn:
         rows = await conn.fetch(query, lat_origem, lon_origem, raio_km)
 
-    faixas_processadas = []
-    faixas_vistas = set()
-
+    resultados = []
     for row in rows:
-        cep_limpo = str(row['cep']).replace('-', '').zfill(8)
-        prefixo_5 = cep_limpo[:5]
         dist = float(row['distancia_km'])
-        
-        # Define o anel de precificação (até 5km, até 10km, até 20km, até 30km)
-        if dist <= 5.0:
-            anel_texto = "Raio até 5 km"
-            sla = 1
-        elif dist <= 10.0:
-            anel_texto = "Raio 5 a 10 km"
-            sla = 1
-        elif dist <= 20.0:
-            anel_texto = "Raio 10 a 20 km"
-            sla = 2
-        else:
-            anel_texto = "Raio 20 a 30 km"
-            sla = 2
+        cep_ini_fmt = f"{str(row['cep_inicial']).zfill(8)[:5]}-{str(row['cep_inicial']).zfill(8)[5:]}"
+        cep_fim_fmt = f"{str(row['cep_final']).zfill(8)[:5]}-{str(row['cep_final']).zfill(8)[5:]}"
 
-        chave_faixa = f"{prefixo_5}_{anel_texto}"
-        if chave_faixa in faixas_vistas:
-            continue
-        faixas_vistas.add(chave_faixa)
-
-        faixas_processadas.append({
+        resultados.append({
             "ibge": 3550308,
             "uf": row['uf'],
             "cidade": row['cidade'],
-            "bairro": row['bairro'] or "Área Atendida",
-            "faixa_precificacao": anel_texto,
-            "cep_inicial": f"{prefixo_5}000",
-            "cep_final": f"{prefixo_5}999",
+            "bairro": row['bairro'],
+            "cep_inicial": str(row['cep_inicial']).zfill(8),
+            "cep_final": str(row['cep_final']).zfill(8),
+            "faixa_completa": f"{cep_ini_fmt} a {cep_fim_fmt}",
             "distancia_km": round(dist, 2),
-            "dias_sla": sla,
+            "dias_sla": 1 if dist <= 12 else 2,
             "lat": float(row['lat']),
             "lon": float(row['lon'])
         })
 
-    return faixas_processadas
+    return resultados

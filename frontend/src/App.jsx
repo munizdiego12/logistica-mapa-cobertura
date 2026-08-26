@@ -5,7 +5,8 @@ import {
   MapPin, Sliders, ArrowUpRight, Play, Loader2,
   ShieldCheck, Activity, Plus, Trash2, Users, AlertCircle,
   CheckSquare, Square, Download, FileSpreadsheet, FileDown,
-  Settings, ChevronDown, ChevronUp, Layers, Compass, Table as TableIcon
+  Settings, ChevronDown, ChevronUp, Layers, Compass, Table as TableIcon, 
+  AlertTriangle
 } from 'lucide-react';
 import MapaLeaflet from './components/MapaLeaflet';
 
@@ -828,7 +829,19 @@ export default function App() {
                           </span>
                         </td>
                         <td className="p-3.5 text-slate-300 font-sans">{r.qtd_pedidos} paradas</td>
-                        <td className="p-3.5 text-slate-300">{r.km_total} km</td>
+                        <td className="p-3.5 text-slate-300">
+                          <div className="flex items-center gap-2">
+                            {r.km_total} km
+                            {r.alerta_amplitude && (
+                              <div 
+                                title={`Rota muito extensa (Amplitude: ${r.amplitude_km}km). Considere adicionar mais veículos.`} 
+                                className="flex items-center justify-center p-1 bg-amber-500/10 rounded border border-amber-500/20 text-amber-400 cursor-help"
+                              >
+                                <AlertTriangle className="w-3.5 h-3.5" />
+                              </div>
+                            )}
+                          </div>
+                        </td>
                         <td className="p-3.5 text-slate-400">{r.tempo_formatado}</td>
                         <td className="p-3.5 font-semibold text-emerald-400">R$ {r.custo_total.toFixed(2)}</td>
                         <td className="p-3.5 text-slate-300">R$ {r.custo_por_pedido.toFixed(2)}</td>

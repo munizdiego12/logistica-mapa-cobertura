@@ -228,11 +228,25 @@ class RaioCepRequest(BaseModel):
     origem_uf: Optional[str] = ""
     raio_km: Optional[float] = 30.0
 
+async def _buscar_ceps_reais_banco(lat: float, lon: float, raio_km: float):
+    """
+    STUB DE IMPLEMENTAÇÃO (Projeto IBGE):
+    Tenta buscar na tabela CNEFE. Se falhar, faz fallback para simulação.
+    """
+    try:
+        if hasattr(database, "consultar_ceps_por_raio"):
+            return await database.consultar_ceps_por_raio(lat, lon, raio_km)
+        return []
+    except Exception as e:
+        return []
+
 @app.post("/api/cobertura-ceps")
-def gerar_cobertura_ceps_instantanea(req: RaioCepRequest):
-    lat, lon, cidade, uf, clean_cep, bairro = geocode_rapido(
-        req.origem_rua, req.origem_num, req.origem_bairro or "", req.origem_cep or "", req.origem_cidade or "", req.origem_uf or ""
-    )
+async def gerar_cobertura_ceps_instantanea(req: RaioCepRequest):
+    # Usando o async original para não travar
+    async with httpx.AsyncClient() as client:
+        lat, lon, cidade, uf, clean_cep, bairro = await geocode_async(
+            client, req.origem_rua, req.origem_num, req.origem_bairro or "", req.origem_cep or "", req.origem_cidade or "", req.origem_uf or ""
+        )
 
     clean_cep = str(clean_cep).replace("-", "").strip().zfill(8)
     ibge_base = ESTADOS_IBGE_BRASIL.get(uf, {}).get("ibge", 3550308 if uf == "SP" else 2304400)
@@ -241,72 +255,55 @@ def gerar_cobertura_ceps_instantanea(req: RaioCepRequest):
     prefixo_num = int(prefixo_5)
 
     raio_max = req.raio_km or 30.0
+    
+    # 1. TENTA BUSCAR DADOS REAIS DO BANCO
+    ceps_reais = await _buscar_ceps_reais_banco(lat, lon, raio_max)
     pontos_cobertos = []
 
-    # 1. Ponto Central (Hub - Faixa Sede)
-    pontos_cobertos.append({
-        "ibge": ibge_base,
-        "uf": uf or "SP",
-        "cidade": cidade or "Sede do Hub",
-        "bairro": "Centro / Sede Operacional",
-        "cep_inicial": f"{prefixo_5}000",
-        "cep_final": f"{prefixo_5}999",
-        "distancia_km": 0.0,
-        "dias_sla": 1,
-        "lat": lat,
-        "lon": lon
-    })
+    if ceps_reais and len(ceps_reais) > 0:
+        pontos_cobertos = ceps_reais
+    else:
+        # 2. FALLBACK: Malha matemática (mantendo seu código 100% original aqui)
+        pontos_cobertos.append({
+            "ibge": ibge_base, "uf": uf or "SP", "cidade": cidade or "Sede do Hub",
+            "bairro": "Centro / Sede Operacional", "cep_inicial": f"{prefixo_5}000",
+            "cep_final": f"{prefixo_5}999", "distancia_km": 0.0, "dias_sla": 1,
+            "lat": lat, "lon": lon
+        })
 
-    # 2. Quadrantes e Anéis de Distância
-    direcoes = [
-        ("Norte", 0), ("Nordeste", 45), ("Leste", 90), ("Sudeste", 135),
-        ("Sul", 180), ("Sudoeste", 225), ("Oeste", 270), ("Noroeste", 315)
-    ]
-    distancias = [3.5, 7.0, 12.0, 18.0, 24.0, 30.0]
+        direcoes = [
+            ("Norte", 0), ("Nordeste", 45), ("Leste", 90), ("Sudeste", 135),
+            ("Sul", 180), ("Sudoeste", 225), ("Oeste", 270), ("Noroeste", 315)
+        ]
+        distancias = [3.5, 7.0, 12.0, 18.0, 24.0, 30.0]
 
-    for d_km in distancias:
-        if d_km > raio_max:
-            continue
-        delta_lat = d_km / 111.0
-        
-        for dir_idx, (nome_dir, ang_graus) in enumerate(direcoes):
-            rad = math.radians(ang_graus)
-            p_lat = lat + (delta_lat * math.cos(rad))
-            p_lon = lon + (delta_lat * math.sin(rad) / max(0.1, math.cos(math.radians(lat))))
+        for d_km in distancias:
+            if d_km > raio_max:
+                continue
+            delta_lat = d_km / 111.0
             
-            dist_real = haversine_distance((lat, lon), (p_lat, p_lon))
-            
-            # Variação do prefixo de 5 dígitos mantendo os zeros à esquerda
-            offset_prefixo = int((dir_idx + 1) * 10 + (d_km * 2))
-            novo_prefixo = str(max(100, prefixo_num + offset_prefixo)).zfill(5)
-            
-            cep_ini_calc = f"{novo_prefixo}000"
-            cep_fim_calc = f"{novo_prefixo}999"
-
-            pontos_cobertos.append({
-                "ibge": ibge_base,
-                "uf": uf or "SP",
-                "cidade": cidade or "Região Metropolitana",
-                "bairro": f"Setor {nome_dir} ({d_km} km)",
-                "cep_inicial": cep_ini_calc,
-                "cep_final": cep_fim_calc,
-                "distancia_km": round(dist_real, 2),
-                "dias_sla": 1 if dist_real <= 12 else 2,
-                "lat": p_lat,
-                "lon": p_lon
-            })
+            for dir_idx, (nome_dir, ang_graus) in enumerate(direcoes):
+                rad = math.radians(ang_graus)
+                p_lat = lat + (delta_lat * math.cos(rad))
+                p_lon = lon + (delta_lat * math.sin(rad) / max(0.1, math.cos(math.radians(lat))))
+                
+                dist_real = haversine_distance((lat, lon), (p_lat, p_lon))
+                offset_prefixo = int((dir_idx + 1) * 10 + (d_km * 2))
+                novo_prefixo = str(max(100, prefixo_num + offset_prefixo)).zfill(5)
+                
+                pontos_cobertos.append({
+                    "ibge": ibge_base, "uf": uf or "SP", "cidade": cidade or "Região Metropolitana",
+                    "bairro": f"Setor {nome_dir} ({d_km} km)", "cep_inicial": f"{novo_prefixo}000",
+                    "cep_final": f"{novo_prefixo}999", "distancia_km": round(dist_real, 2),
+                    "dias_sla": 1 if dist_real <= 12 else 2, "lat": p_lat, "lon": p_lon
+                })
 
     pontos_cobertos.sort(key=lambda x: x["distancia_km"])
 
     return {
         "hub": {
-            "lat": lat,
-            "lon": lon,
-            "cidade": cidade,
-            "uf": uf,
-            "cep": clean_cep,
-            "ibge": ibge_base,
-            "endereco": f"{req.origem_rua}, {req.origem_num}"
+            "lat": lat, "lon": lon, "cidade": cidade, "uf": uf, "cep": clean_cep,
+            "ibge": ibge_base, "endereco": f"{req.origem_rua}, {req.origem_num}"
         },
         "raio_limite_km": raio_max,
         "total_pontos": len(pontos_cobertos),
@@ -463,52 +460,109 @@ async def get_osrm_route_async(client: httpx.AsyncClient, pontos):
     tempo_min = round((dist_km / 22.0) * 60)
     return dist_km, tempo_min, geometria
 
-def montar_rotas_por_capacidade_real(origem_lat, origem_lon, pedidos, frota, modais_usar):
+def montar_rotas_por_capacidade_real(origem_lat, origem_lon, pedidos, frota, modais_usar, iteracoes=5):
     """
-    Distribui os pedidos respeitando a CAPACIDADE REAL de cada motorista/veículo
-    da frota (nunca uma média entre todos). Os pedidos são ordenados por ângulo em
-    torno do Hub (mantendo proximidade geográfica) e depois "fatiados" em rodadas:
-    a cada rodada, cada motorista recebe uma fatia do tamanho exato da capacidade
-    do seu próprio modal. Se sobrar demanda, o motorista ganha mais uma
-    onda/viagem na rodada seguinte — sempre respeitando o teto do seu veículo.
+    Agrupamento geográfico por CLUSTERIZAÇÃO REAL (k-means capacitado).
 
-    Retorna uma lista de tuplas (motorista: MotoristaItem, pedidos: list) na
-    ordem em que as viagens devem ser despachadas.
+    A versão anterior ordenava os pedidos só por ÂNGULO em torno do Hub e cortava
+    essa lista 1D em fatias do tamanho da capacidade de cada veículo. Isso falha
+    quando a demanda está concentrada de forma desigual entre direções: um veículo
+    pode acabar levando uma fatia que varre metade da cidade (ex: Norte + Leste +
+    Sul), porque em ÂNGULO esses pontos são "a fatia seguinte", mesmo estando
+    fisicamente longe uns dos outros.
+
+    Esta versão usa a posição real (lat/lon) de cada pedido, agrupando por
+    proximidade física de verdade, e reajusta os grupos por algumas iterações
+    (como um k-means), sempre respeitando a capacidade exata de cada veículo —
+    nenhum grupo pode ultrapassar a capacidade do veículo que vai atendê-lo.
     """
     if not pedidos:
         return []
 
-    for p in pedidos:
-        d_lat = p['lat'] - origem_lat
-        d_lon = p['lon'] - origem_lon
-        p['angulo'] = math.atan2(d_lat, d_lon)
-    pedidos_ordenados = sorted(pedidos, key=lambda x: x['angulo'])
+    total_pedidos = len(pedidos)
 
-    capacidades = [
-        max(1, modais_usar.get(f.modal, {'capacidade': 6}).get('capacidade', 6))
-        for f in frota
-    ]
+    # 1. Define as "vagas de viagem" a preencher (motorista + capacidade), repetindo
+    #    a frota em rodadas até haver vagas suficientes para todos os pedidos.
+    vagas = []
+    idx_motorista = 0
+    capacidade_acumulada = 0
+    while capacidade_acumulada < total_pedidos:
+        motorista = frota[idx_motorista % len(frota)]
+        cap = max(1, modais_usar.get(motorista.modal, {'capacidade': 6}).get('capacidade', 6))
+        vagas.append([motorista, cap])
+        capacidade_acumulada += cap
+        idx_motorista += 1
 
-    viagens = []  # lista de (motorista, pedidos_da_viagem)
-    idx = 0
-    total = len(pedidos_ordenados)
-    seguranca = 0
+    n_vagas = len(vagas)
 
-    while idx < total:
-        avancou = False
-        for motorista, capacidade in zip(frota, capacidades):
-            if idx >= total:
-                break
-            fatia = pedidos_ordenados[idx: idx + capacidade]
-            if fatia:
-                viagens.append((motorista, fatia))
-                idx += len(fatia)
-                avancou = True
-        seguranca += 1
-        if not avancou or seguranca > 1000:
-            break  # segurança contra loop infinito (não deveria acontecer)
+    # 2. Sementes iniciais via "farthest-point sampling": escolhe pedidos REAIS
+    #    como pontos de partida (o mais distante do centro, depois o mais distante
+    #    de todas as sementes já escolhidas, e assim por diante). Isso alinha as
+    #    sementes com as regiões onde a demanda realmente está concentrada, em vez
+    #    de assumir uma distribuição uniforme em círculo — que é o que causava
+    #    zigue-zague quando a demanda real é desigual entre direções.
+    indices_disponiveis = list(range(total_pedidos))
+    primeiro = max(indices_disponiveis, key=lambda i: dist_coords((pedidos[i]['lat'], pedidos[i]['lon']), (origem_lat, origem_lon)))
+    sementes_idx = [primeiro]
+    while len(sementes_idx) < n_vagas and len(sementes_idx) < total_pedidos:
+        candidato = max(
+            indices_disponiveis,
+            key=lambda i: min(dist_coords((pedidos[i]['lat'], pedidos[i]['lon']), (pedidos[s]['lat'], pedidos[s]['lon'])) for s in sementes_idx)
+        )
+        sementes_idx.append(candidato)
+    sementes = [(pedidos[i]['lat'], pedidos[i]['lon']) for i in sementes_idx]
+    # Se houver mais vagas do que pedidos distintos para servir de semente, completa em círculo
+    while len(sementes) < n_vagas:
+        ang = (2 * math.pi / n_vagas) * len(sementes)
+        sementes.append((origem_lat + 0.05 * math.cos(ang), origem_lon + 0.05 * math.sin(ang)))
 
-    return viagens
+    atribuicao = [0] * total_pedidos
+
+    # 3. Iterações de atribuição capacitada: a cada rodada, cada pedido "vota" na
+    #    vaga mais próxima; pedidos com preferência mais forte (1ª opção bem melhor
+    #    que a 2ª) são atendidos primeiro, evitando que um pedido "decisivo" perca
+    #    sua melhor vaga para outro pedido que quase não faria diferença.
+    for _ in range(iteracoes):
+        info_pedidos = []
+        for i, p in enumerate(pedidos):
+            dists = [dist_coords((p['lat'], p['lon']), s) for s in sementes]
+            ordem_preferencia = sorted(range(n_vagas), key=lambda k: dists[k])
+            urgencia = (dists[ordem_preferencia[1]] - dists[ordem_preferencia[0]]) if n_vagas > 1 else 0
+            info_pedidos.append((i, ordem_preferencia, urgencia))
+
+        info_pedidos.sort(key=lambda x: x[2], reverse=True)
+
+        capacidade_restante = [vagas[k][1] for k in range(n_vagas)]
+        nova_atribuicao = [0] * total_pedidos
+        for i, ordem_preferencia, _ in info_pedidos:
+            for k in ordem_preferencia:
+                if capacidade_restante[k] > 0:
+                    nova_atribuicao[i] = k
+                    capacidade_restante[k] -= 1
+                    break
+            else:
+                nova_atribuicao[i] = ordem_preferencia[0]  # segurança (não deveria ocorrer)
+
+        atribuicao = nova_atribuicao
+
+        # Recalcula o centro geográfico real de cada grupo com base nos membros atuais
+        somas = [[0.0, 0.0, 0] for _ in range(n_vagas)]
+        for i, p in enumerate(pedidos):
+            k = atribuicao[i]
+            somas[k][0] += p['lat']
+            somas[k][1] += p['lon']
+            somas[k][2] += 1
+        sementes = [
+            (somas[k][0] / somas[k][2], somas[k][1] / somas[k][2]) if somas[k][2] > 0 else sementes[k]
+            for k in range(n_vagas)
+        ]
+
+    # 4. Monta o resultado final: (motorista, pedidos) por vaga preenchida
+    grupos = [[] for _ in range(n_vagas)]
+    for i, p in enumerate(pedidos):
+        grupos[atribuicao[i]].append(p)
+
+    return [(vagas[k][0], grupos[k]) for k in range(n_vagas) if grupos[k]]
 
 class MotoristaItem(BaseModel):
     id: int
@@ -704,6 +758,18 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest"):
 
                 pontos_coords = [(orig_lat, orig_lon)] + [(p['lat'], p['lon']) for p in pts_rota] + [(orig_lat, orig_lon)]
                 dist_km, tempo_min, geometria = await get_osrm_route_async(client, pontos_coords)
+
+                amplitude_km = 0.0
+                if len(pts_rota) > 1:
+                    max_dist = 0
+                    for p1 in pts_rota:
+                        for p2 in pts_rota:
+                            d = haversine_distance((p1['lat'], p1['lon']), (p2['lat'], p2['lon']))
+                            if d > max_dist: max_dist = d
+                    amplitude_km = max_dist
+                
+                # Defina o limite que considera "espalhado demais" (ex: 15 km)
+                alerta_amplitude = amplitude_km > 15.0
 
                 litros = dist_km / consumo_kml
                 custo_comb = litros * req.preco_gasolina

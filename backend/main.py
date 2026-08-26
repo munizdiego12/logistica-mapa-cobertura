@@ -121,9 +121,26 @@ async def geocode_async(client: httpx.AsyncClient, rua: str = "", numero: str = 
     resultado = None
     headers = {'User-Agent': 'ZubaleRoutingCore/6.1 (contato@zubale.com)'}
 
-    # 1) Endereço completo (rua + número) via Nominatim
+    # 1) Descobre Cidade e UF oficiais via ViaCEP caso não estejam preenchidos
+    cidade_resolvida = cidade
+    uf_resolvida = uf
+
+    if clean_cep and (not cidade_resolvida or not uf_resolvida):
+        try:
+            res_viacep = await client.get(f"https://viacep.com.br/ws/{clean_cep}/json/", timeout=3)
+            if res_viacep.status_code == 200:
+                dados_cep = res_viacep.json()
+                if "erro" not in dados_cep:
+                    cidade_resolvida = dados_cep.get("localidade") or cidade_resolvida
+                    uf_resolvida = dados_cep.get("uf") or uf_resolvida
+                    bairro = bairro or dados_cep.get("bairro")
+        except Exception:
+            pass
+
+    # 2) Endereço completo com Cidade/UF garantidos via Nominatim
     if rua and numero:
-        query = ", ".join([p for p in [f"{rua}, {numero}", bairro, cidade, uf, clean_cep, "Brasil"] if p])
+        partes = [f"{rua}, {numero}", bairro, cidade_resolvida, uf_resolvida, "Brasil"]
+        query = ", ".join([p for p in partes if p])
         try:
             await _respeitar_rate_limit_nominatim()
             res = await client.get(
@@ -134,11 +151,11 @@ async def geocode_async(client: httpx.AsyncClient, rua: str = "", numero: str = 
             data = res.json()
             if data:
                 resultado = (float(data[0]['lat']), float(data[0]['lon']),
-                             cidade or "Centro", uf or "BR", clean_cep, bairro)
+                             cidade_resolvida or "Centro", uf_resolvida or "BR", clean_cep, bairro)
         except Exception:
             pass
 
-    # 2) CEP via BrasilAPI (pode rodar em paralelo, sem rate-limit rígido)
+    # 3) CEP via BrasilAPI (fallback se o Nominatim não achar o número exato)
     if resultado is None and len(clean_cep) == 8:
         async with _brasilapi_semaforo:
             try:
@@ -148,14 +165,14 @@ async def geocode_async(client: httpx.AsyncClient, rua: str = "", numero: str = 
                     loc = data.get("location", {}).get("coordinates", {})
                     lat, lon = loc.get("latitude"), loc.get("longitude")
                     if lat and lon:
-                        resultado = (float(lat), float(lon), data.get("city", cidade),
-                                     data.get("state", uf), clean_cep, data.get("neighborhood", bairro))
+                        resultado = (float(lat), float(lon), data.get("city", cidade_resolvida),
+                                     data.get("state", uf_resolvida), clean_cep, data.get("neighborhood", bairro))
             except Exception:
                 pass
 
-    # 3) Fallback final: bairro/cidade via Nominatim
+    # 4) Fallback: bairro/cidade via Nominatim
     if resultado is None:
-        query = ", ".join([p for p in [bairro, cidade, uf, "Brasil"] if p]) or "São Paulo, Brasil"
+        query = ", ".join([p for p in [bairro, cidade_resolvida, uf_resolvida, "Brasil"] if p]) or "São Paulo, Brasil"
         try:
             await _respeitar_rate_limit_nominatim()
             res = await client.get(
@@ -166,12 +183,13 @@ async def geocode_async(client: httpx.AsyncClient, rua: str = "", numero: str = 
             data = res.json()
             if data:
                 resultado = (float(data[0]['lat']), float(data[0]['lon']),
-                             cidade or "Centro", uf or "BR", clean_cep, bairro)
+                             cidade_resolvida or "Centro", uf_resolvida or "BR", clean_cep, bairro)
         except Exception:
             pass
 
+    # 5) Fallback final de segurança
     if resultado is None:
-        resultado = (-23.5614, -46.6559, cidade or "Origem", uf or "SP", clean_cep, bairro)
+        resultado = (-23.5614, -46.6559, cidade_resolvida or "Origem", uf_resolvida or "SP", clean_cep, bairro)
 
     _GEOCODE_CACHE_MEMORIA[chave] = resultado
     await database.cache_set(chave, resultado)

@@ -3,5 +3,3 @@ __pycache__/
 .pytest_cache/
 *.db
 .venv/
-importar_ceps.py
-base_ceps_sp.csv

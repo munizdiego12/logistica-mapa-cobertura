@@ -12,6 +12,8 @@ from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.security import OAuth2PasswordRequestForm
+from fastapi import Depends
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 import database
@@ -945,17 +947,15 @@ def registrar_operador(dados: RegistroOperadorSchema, db: Session = Depends(get_
     return {"mensagem": "Operador cadastrado com sucesso", "id": novo_operador.id, "nome": novo_operador.nome}
 
 @app.post("/api/auth/login")
-def login(dados: LoginSchema, db: Session = Depends(get_db)):
-    operador = db.query(Operador).filter(Operador.email == dados.email).first()
-    if not operador or not verificar_senha(dados.senha, operador.senha_hash):
-        raise HTTPException(status_code=401, detail="E-mail ou senha incorretos.")
+def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    # Em vez de dados.email, o form_data entrega em form_data.username
+    operador = db.query(Operador).filter(Operador.email == form_data.username).first()
     
-    access_token = criar_token_acesso(data={"sub": operador.email, "nome": operador.nome, "id": operador.id})
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "operador": {"id": operador.id, "nome": operador.nome, "email": operador.email}
-    }
+    if not operador or not verificar_senha(form_data.password, operador.senha_hash):
+        raise HTTPException(status_code=400, detail="E-mail ou senha incorretos")
+        
+    token = criar_token_acesso(data={"sub": operador.email})
+    return {"access_token": token, "token_type": "bearer"}
 
 @app.get("/api/auth/me")
 def obter_perfil(operador_atual: Operador = Depends(obter_operador_atual)):

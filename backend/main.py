@@ -9,13 +9,14 @@ import pandas as pd
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from typing import List, Optional, Dict, Any
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-import database
-from auth import gerar_hash_senha, verificar_senha, criar_token_acesso, obter_operador_atual
 from pydantic import BaseModel, EmailStr
+from sqlalchemy.orm import Session
+import database
+from database import get_db, Operador
+from auth import gerar_hash_senha, verificar_senha, criar_token_acesso, obter_operador_atual
 
 app = FastAPI(title="Zubale Routing Core - Dynamic National Engine")
 

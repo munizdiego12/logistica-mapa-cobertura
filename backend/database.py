@@ -16,8 +16,8 @@ try:
     import asyncpg
 except ImportError:
     asyncpg = None
-from sqlalchemy import Column, Integer, String, Boolean, DateTime
-from sqlalchemy.orm import declarative_base
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, create_engine
+from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
@@ -30,6 +30,25 @@ def _normalizar_dsn(url: str) -> str:
     if url.startswith("postgres://"):
         return url.replace("postgres://", "postgresql://", 1)
     return url
+
+
+# --- Configuração SQLAlchemy (Síncrono para ORM / Auth) ---
+url_sqlalchemy = _normalizar_dsn(DATABASE_URL) if DATABASE_URL else "sqlite:///./sql_app.db"
+engine = create_engine(
+    url_sqlalchemy,
+    connect_args={"check_same_thread": False} if url_sqlalchemy.startswith("sqlite") else {}
+)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+
+def get_db():
+    """Dependency para injeção da sessão de banco de dados nos endpoints."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 async def get_pool():
@@ -49,7 +68,8 @@ async def get_pool():
 
 
 async def init_db():
-    """Cria a tabela de cache de geocodificação, se ainda não existir. Chamar no startup."""
+    """Cria a tabela de cache de geocodificação e as tabelas ORM se não existirem."""
+    Base.metadata.create_all(bind=engine)
     pool = await get_pool()
     if not pool:
         print("[database] DATABASE_URL não configurada — cache de geocodificação NÃO é persistente.")
@@ -168,7 +188,6 @@ async def consultar_ceps_por_raio(lat_origem: float, lon_origem: float, raio_km:
 
     return resultados
 
-Base = declarative_base()
 
 class Operador(Base):
     __tablename__ = "operadores"

@@ -1,5 +1,18 @@
+import os
 import logging
 from dataclasses import dataclass
+from dotenv import load_dotenv
+
+# Carrega variáveis do arquivo .env
+load_dotenv()
+
+# ==============================
+# VARIÁVEIS DE AMBIENTE E SEGURANÇA
+# ==============================
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sql_app.db")
+SECRET_KEY = os.getenv("JWT_SECRET_KEY") or os.getenv("SECRET_KEY", "chave_secreta_padrao_dev_123")
+ALGORITHM = os.getenv("ALGORITHM", "HS256")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
 
 # ==============================
 # CONFIGURAÇÃO DE LOGGING

@@ -10,8 +10,7 @@ import {
 } from 'lucide-react';
 import MapaLeaflet from './components/MapaLeaflet';
 import Login from './components/Login';
-
-const API_BASE = 'https://routeflow-backend-v5ji.onrender.com/api';
+import { API_BASE } from './config';
 
 // Instância dedicada que anexa automaticamente o token do operador logado
 // (Etapa 1 — Autenticação) em toda chamada ao backend, para que qualquer

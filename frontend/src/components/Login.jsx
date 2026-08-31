@@ -1,5 +1,6 @@
 // frontend/src/components/Login.jsx
 import React, { useState } from 'react';
+import { ShieldCheck, AlertCircle, Loader2 } from 'lucide-react';
 import api from '../services/api';
 
 export default function Login({ onLoginSuccess }) {
@@ -9,11 +10,13 @@ export default function Login({ onLoginSuccess }) {
   const [senha, setSenha] = useState('');
   const [codigoConvite, setCodigoConvite] = useState('');
   const [erro, setErro] = useState('');
+  const [sucesso, setSucesso] = useState('');
   const [carregando, setCarregando] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setErro('');
+    setSucesso('');
     setCarregando(true);
 
     try {
@@ -21,7 +24,7 @@ export default function Login({ onLoginSuccess }) {
         // Registro usa JSON normal
         await api.post('/api/auth/register', { nome, email, senha, codigo_convite: codigoConvite });
         setIsRegistering(false);
-        setErro('Operador criado com sucesso! Faça login.');
+        setSucesso('Operador criado com sucesso! Faça login.');
       } else {
         // Login usa o contrato OAuth2PasswordRequestForm do backend:
         // exige form-urlencoded com os campos "username" e "password"
@@ -45,83 +48,103 @@ export default function Login({ onLoginSuccess }) {
     }
   };
 
+  const inputClass =
+    "w-full text-sm bg-slate-900/90 border border-slate-800 focus:border-blue-500/80 rounded-lg px-3 py-2.5 text-slate-100 placeholder:text-slate-500 focus:outline-none transition-colors";
+  const labelClass = "block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1.5";
+
   return (
-    <div className="fixed inset-0 bg-slate-900 bg-opacity-75 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md">
-        <h2 className="text-xl font-bold mb-4 text-slate-800 text-center">
-          {isRegistering ? 'Cadastrar Operador' : 'Login de Operador'}
-        </h2>
-        
+    <div className="min-h-screen bg-[#030712] flex items-center justify-center p-4">
+      <div className="w-full max-w-md bg-slate-900/60 backdrop-blur-sm border border-slate-800/80 rounded-2xl shadow-2xl shadow-black/40 p-8">
+
+        <div className="flex flex-col items-center mb-6">
+          <div className="w-12 h-12 rounded-xl overflow-hidden flex items-center justify-center bg-blue-500/10 border border-blue-500/20 shadow-md shadow-blue-950/40 p-2 mb-3">
+            <img src="logo-zubale.svg" alt="Zubale Logo" className="w-full h-full object-contain" />
+          </div>
+          <h2 className="text-lg font-bold text-slate-100 text-center">
+            {isRegistering ? 'Cadastrar Operador' : 'Login de Operador'}
+          </h2>
+          <p className="text-[11px] text-slate-500 mt-1">Inteligência Logística • Operations & Routing</p>
+        </div>
+
         {erro && (
-          <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded">
-            {erro}
+          <div className="mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-xs flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>{erro}</span>
+          </div>
+        )}
+
+        {sucesso && (
+          <div className="mb-4 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs flex items-start gap-2">
+            <ShieldCheck className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>{sucesso}</span>
           </div>
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {isRegistering && (
             <div>
-              <label className="block text-sm font-medium text-slate-700">Nome Completo</label>
+              <label className={labelClass}>Nome Completo</label>
               <input
                 type="text"
                 required
                 value={nome}
                 onChange={(e) => setNome(e.target.value)}
-                className="mt-1 block w-full rounded-md border-slate-300 shadow-sm border p-2 text-sm"
+                className={inputClass}
               />
             </div>
           )}
 
           {isRegistering && (
             <div>
-              <label className="block text-sm font-medium text-slate-700">Código de Convite</label>
+              <label className={labelClass}>Código de Convite</label>
               <input
                 type="text"
                 required
                 value={codigoConvite}
                 onChange={(e) => setCodigoConvite(e.target.value)}
                 placeholder="Fornecido pelo administrador"
-                className="mt-1 block w-full rounded-md border-slate-300 shadow-sm border p-2 text-sm"
+                className={inputClass}
               />
             </div>
           )}
 
           <div>
-            <label className="block text-sm font-medium text-slate-700">E-mail</label>
+            <label className={labelClass}>E-mail</label>
             <input
               type="email"
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="mt-1 block w-full rounded-md border-slate-300 shadow-sm border p-2 text-sm"
+              className={inputClass}
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700">Senha</label>
+            <label className={labelClass}>Senha</label>
             <input
               type="password"
               required
               value={senha}
               onChange={(e) => setSenha(e.target.value)}
-              className="mt-1 block w-full rounded-md border-slate-300 shadow-sm border p-2 text-sm"
+              className={inputClass}
             />
           </div>
 
           <button
             type="submit"
             disabled={carregando}
-            className="w-full bg-orange-600 text-white py-2 px-4 rounded-md hover:bg-orange-700 font-medium text-sm transition disabled:opacity-60"
+            className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white py-2.5 px-4 rounded-lg hover:bg-blue-500 font-semibold text-sm transition-colors shadow-sm shadow-blue-950/40 disabled:opacity-60"
           >
+            {carregando && <Loader2 className="w-4 h-4 animate-spin" />}
             {carregando ? 'Aguarde...' : (isRegistering ? 'Cadastrar' : 'Entrar')}
           </button>
         </form>
 
-        <div className="mt-4 text-center">
+        <div className="mt-5 text-center">
           <button
             type="button"
-            onClick={() => { setIsRegistering(!isRegistering); setErro(''); }}
-            className="text-xs text-orange-600 hover:underline"
+            onClick={() => { setIsRegistering(!isRegistering); setErro(''); setSucesso(''); }}
+            className="text-xs text-blue-400 hover:text-blue-300 font-medium transition-colors"
           >
             {isRegistering ? 'Já tem uma conta? Faça login' : 'Novo operador? Criar conta'}
           </button>

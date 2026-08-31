@@ -375,13 +375,9 @@ export default function App() {
   };
 
   // Etapa 1 — Autenticação: sem operador logado, não renderiza o app,
-  // mostra a tela de login/cadastro por cima de um fundo escuro.
+  // mostra a tela de login/cadastro (já com fundo de tela cheia).
   if (!operador) {
-    return (
-      <div className="min-h-screen bg-[#030712]">
-        <Login onLoginSuccess={setOperador} />
-      </div>
-    );
+    return <Login onLoginSuccess={setOperador} />;
   }
 
   return (

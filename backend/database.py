@@ -12,7 +12,13 @@ continua funcionando normalmente, só que sem persistência entre reinícios
 
 import os
 import math
-import asyncpg
+try:
+    import asyncpg
+except ImportError:
+    asyncpg = None
+from sqlalchemy import Column, Integer, String, Boolean, DateTime
+from sqlalchemy.orm import declarative_base
+from datetime import datetime
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
@@ -161,3 +167,15 @@ async def consultar_ceps_por_raio(lat_origem: float, lon_origem: float, raio_km:
         })
 
     return resultados
+
+Base = declarative_base()
+
+class Operador(Base):
+    __tablename__ = "operadores"
+
+    id = Column(Integer, primary_key=True, index=True)
+    nome = Column(String, nullable=False)
+    email = Column(String, unique=True, index=True, nullable=False)
+    senha_hash = Column(String, nullable=False)
+    ativo = Column(Boolean, default=True)
+    criado_em = Column(DateTime, default=datetime.utcnow)

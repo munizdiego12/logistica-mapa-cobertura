@@ -13,8 +13,9 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-
 import database
+from auth import gerar_hash_senha, verificar_senha, criar_token_acesso, obter_operador_atual
+from pydantic import BaseModel, EmailStr
 
 app = FastAPI(title="Zubale Routing Core - Dynamic National Engine")
 
@@ -916,3 +917,45 @@ def download_modelo_xlsx():
         headers=headers_resp, 
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+    
+class RegistroOperadorSchema(BaseModel):
+    nome: str
+    email: EmailStr
+    senha: str
+
+class LoginSchema(BaseModel):
+    email: EmailStr
+    senha: str
+
+@app.post("/api/auth/register")
+def registrar_operador(dados: RegistroOperadorSchema, db: Session = Depends(get_db)):
+    existente = db.query(Operador).filter(Operador.email == dados.email).first()
+    if existente:
+        raise HTTPException(status_code=400, detail="E-mail já cadastrado.")
+    
+    novo_operador = Operador(
+        nome=dados.nome,
+        email=dados.email,
+        senha_hash=gerar_hash_senha(dados.senha)
+    )
+    db.add(novo_operador)
+    db.commit()
+    db.refresh(novo_operador)
+    return {"mensagem": "Operador cadastrado com sucesso", "id": novo_operador.id, "nome": novo_operador.nome}
+
+@app.post("/api/auth/login")
+def login(dados: LoginSchema, db: Session = Depends(get_db)):
+    operador = db.query(Operador).filter(Operador.email == dados.email).first()
+    if not operador or not verificar_senha(dados.senha, operador.senha_hash):
+        raise HTTPException(status_code=401, detail="E-mail ou senha incorretos.")
+    
+    access_token = criar_token_acesso(data={"sub": operador.email, "nome": operador.nome, "id": operador.id})
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "operador": {"id": operador.id, "nome": operador.nome, "email": operador.email}
+    }
+
+@app.get("/api/auth/me")
+def obter_perfil(operador_atual: Operador = Depends(obter_operador_atual)):
+    return {"id": operador_atual.id, "nome": operador_atual.nome, "email": operador_atual.email}

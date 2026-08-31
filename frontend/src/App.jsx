@@ -9,10 +9,40 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import MapaLeaflet from './components/MapaLeaflet';
+import Login from './components/Login';
 
 const API_BASE = 'https://routeflow-backend-v5ji.onrender.com/api';
 
+// Instância dedicada que anexa automaticamente o token do operador logado
+// (Etapa 1 — Autenticação) em toda chamada ao backend, para que qualquer
+// rota protegida no futuro já funcione sem mudanças adicionais aqui.
+const apiAuth = axios.create({ baseURL: API_BASE });
+apiAuth.interceptors.request.use((config) => {
+  const token = localStorage.getItem('token');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
 export default function App() {
+  // Operador logado (Etapa 1 — Autenticação). Recupera do localStorage
+  // para manter a sessão entre recarregamentos de página.
+  const [operador, setOperador] = useState(() => {
+    try {
+      const salvo = localStorage.getItem('operador');
+      return salvo ? JSON.parse(salvo) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('operador');
+    setOperador(null);
+  };
+
   const [loading, setLoading] = useState(false);
   const [loadingCeps, setLoadingCeps] = useState(false);
   const [dadosCoberturaCeps, setDadosCoberturaCeps] = useState(null);
@@ -96,7 +126,7 @@ export default function App() {
     formData.append('file', file);
     try {
       setLoading(true);
-      const res = await axios.post(`${API_BASE}/upload`, formData);
+      const res = await apiAuth.post(`/upload`, formData);
 
       const novoLote = {
         id: Date.now(),
@@ -134,7 +164,7 @@ export default function App() {
 
     setLoadingCeps(true);
     try {
-      const res = await axios.post(`${API_BASE}/cobertura-ceps`, {
+      const res = await apiAuth.post(`/cobertura-ceps`, {
         origem_rua: origem.rua || "Centro Operacional",
         origem_num: origem.numero || "S/N",
         origem_cep: origem.cep || "",
@@ -164,7 +194,7 @@ export default function App() {
 
     try {
       // 1. Inicia o job em segundo plano — a resposta chega na hora, com um job_id.
-      const inicio = await axios.post(`${API_BASE}/otimizar`, {
+      const inicio = await apiAuth.post(`/otimizar`, {
         origem_rua: origem.rua,
         origem_num: origem.numero,
         origem_bairro: origem.bairro,
@@ -182,7 +212,7 @@ export default function App() {
       await new Promise((resolve, reject) => {
         const intervalo = setInterval(async () => {
           try {
-            const status = await axios.get(`${API_BASE}/otimizar/status/${jobId}`);
+            const status = await apiAuth.get(`/otimizar/status/${jobId}`);
             const dados = status.data;
 
             setProgresso({ etapa: dados.etapa, atual: dados.atual, total: dados.total });
@@ -288,7 +318,7 @@ export default function App() {
     }
 
     try {
-      const response = await axios.post(`${API_BASE}/exportar-tabela-frete-xlsx`, {
+      const response = await apiAuth.post(`/exportar-tabela-frete-xlsx`, {
         hub: dadosCoberturaCeps.hub,
         pontos_cobertos: dadosCoberturaCeps.pontos_cobertos
       }, { responseType: 'blob' });
@@ -345,6 +375,16 @@ export default function App() {
     downloadAnchor.remove();
   };
 
+  // Etapa 1 — Autenticação: sem operador logado, não renderiza o app,
+  // mostra a tela de login/cadastro por cima de um fundo escuro.
+  if (!operador) {
+    return (
+      <div className="min-h-screen bg-[#030712]">
+        <Login onLoginSuccess={setOperador} />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#030712] text-slate-100 flex flex-col antialiased selection:bg-blue-600 selection:text-white">
 
@@ -380,6 +420,15 @@ export default function App() {
           <div className="flex items-center gap-1.5 text-slate-400 font-mono text-[11px]">
             <ShieldCheck className="w-4 h-4 text-blue-400" />
             <span>FastAPI Core</span>
+          </div>
+          <div className="flex items-center gap-2 pl-3 border-l border-slate-800">
+            <span className="text-slate-300 font-sans">{operador.nome}</span>
+            <button
+              onClick={handleLogout}
+              className="text-[10px] font-semibold text-red-400 hover:text-red-300 bg-red-500/10 border border-red-500/20 px-2 py-1 rounded transition-colors"
+            >
+              Sair
+            </button>
           </div>
         </div>
       </header>

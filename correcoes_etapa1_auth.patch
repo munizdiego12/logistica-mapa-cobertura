@@ -1,0 +1,316 @@
+diff --git a/.gitignore b/.gitignore
+index f39970b..5923969 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -41,4 +41,9 @@ sql_app.db
+ *.ntvs*
+ *.njsproj
+ *.sln
+-*.sw?
+\ No newline at end of file
++*.sw?
++# ==============================
++# Artefatos de teste
++# ==============================
++backend/tests/*.db
++*.db
+diff --git a/backend/config.py b/backend/config.py
+index fd80f02..ac3884c 100644
+--- a/backend/config.py
++++ b/backend/config.py
+@@ -14,6 +14,11 @@ SECRET_KEY = os.getenv("JWT_SECRET_KEY") or os.getenv("SECRET_KEY", "chave_secre
+ ALGORITHM = os.getenv("ALGORITHM", "HS256")
+ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
+ 
++# Código de convite exigido para criar uma conta de operador (Etapa 1 —
++# Autenticação). Sem essa variável configurada no ambiente, o cadastro
++# fica bloqueado por padrão (mais seguro do que deixar aberto por engano).
++OPERATOR_INVITE_CODE = os.getenv("OPERATOR_INVITE_CODE")
++
+ # ==============================
+ # CONFIGURAÇÃO DE LOGGING
+ # ==============================
+diff --git a/backend/main.py b/backend/main.py
+index 7dbda62..1eeb4b4 100644
+--- a/backend/main.py
++++ b/backend/main.py
+@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
+ 
+ import database
+ from database import get_db, Operador, init_db
++from config import OPERATOR_INVITE_CODE
+ from auth import (
+     gerar_hash_senha,
+     verificar_senha_hash,
+@@ -932,6 +933,7 @@ class RegistroOperadorSchema(BaseModel):
+     nome: str
+     email: EmailStr
+     senha: str
++    codigo_convite: str
+ 
+ class LoginSchema(BaseModel):
+     email: EmailStr
+@@ -939,6 +941,11 @@ class LoginSchema(BaseModel):
+ 
+ @app.post("/api/auth/register")
+ def registrar_operador(dados: RegistroOperadorSchema, db: Session = Depends(get_db)):
++    # Sem OPERATOR_INVITE_CODE configurado no ambiente, o cadastro fica
++    # bloqueado por padrão — mais seguro do que deixar aberto por engano.
++    if not OPERATOR_INVITE_CODE or dados.codigo_convite != OPERATOR_INVITE_CODE:
++        raise HTTPException(status_code=403, detail="Código de convite inválido.")
++
+     existente = db.query(Operador).filter(Operador.email == dados.email).first()
+     if existente:
+         raise HTTPException(status_code=400, detail="E-mail já cadastrado.")
+@@ -957,12 +964,16 @@ def registrar_operador(dados: RegistroOperadorSchema, db: Session = Depends(get_
+ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+     # Em vez de dados.email, o form_data entrega em form_data.username
+     operador = db.query(Operador).filter(Operador.email == form_data.username).first()
+-    
+-    if not operador or not verificar_senha(form_data.password, operador.senha_hash):
++
++    if not operador or not verificar_senha_hash(form_data.password, operador.senha_hash):
+         raise HTTPException(status_code=400, detail="E-mail ou senha incorretos")
+-        
++
+     token = criar_token_acesso(data={"sub": operador.email})
+-    return {"access_token": token, "token_type": "bearer"}
++    return {
++        "access_token": token,
++        "token_type": "bearer",
++        "operador": {"id": operador.id, "nome": operador.nome, "email": operador.email},
++    }
+ 
+ @app.get("/api/auth/me")
+ def obter_perfil(operador_atual: Operador = Depends(obter_operador_atual)):
+diff --git a/backend/requirements.txt b/backend/requirements.txt
+index a21117c..a3244b2 100644
+Binary files a/backend/requirements.txt and b/backend/requirements.txt differ
+diff --git a/backend/tests/geocache.db b/backend/tests/geocache.db
+deleted file mode 100644
+index 5c21865..0000000
+Binary files a/backend/tests/geocache.db and /dev/null differ
+diff --git a/frontend/src/App.jsx b/frontend/src/App.jsx
+index ef3e584..81a7dff 100644
+--- a/frontend/src/App.jsx
++++ b/frontend/src/App.jsx
+@@ -9,10 +9,40 @@ import {
+   AlertTriangle
+ } from 'lucide-react';
+ import MapaLeaflet from './components/MapaLeaflet';
++import Login from './components/Login';
+ 
+ const API_BASE = 'https://routeflow-backend-v5ji.onrender.com/api';
+ 
++// Instância dedicada que anexa automaticamente o token do operador logado
++// (Etapa 1 — Autenticação) em toda chamada ao backend, para que qualquer
++// rota protegida no futuro já funcione sem mudanças adicionais aqui.
++const apiAuth = axios.create({ baseURL: API_BASE });
++apiAuth.interceptors.request.use((config) => {
++  const token = localStorage.getItem('token');
++  if (token) {
++    config.headers.Authorization = `Bearer ${token}`;
++  }
++  return config;
++});
++
+ export default function App() {
++  // Operador logado (Etapa 1 — Autenticação). Recupera do localStorage
++  // para manter a sessão entre recarregamentos de página.
++  const [operador, setOperador] = useState(() => {
++    try {
++      const salvo = localStorage.getItem('operador');
++      return salvo ? JSON.parse(salvo) : null;
++    } catch {
++      return null;
++    }
++  });
++
++  const handleLogout = () => {
++    localStorage.removeItem('token');
++    localStorage.removeItem('operador');
++    setOperador(null);
++  };
++
+   const [loading, setLoading] = useState(false);
+   const [loadingCeps, setLoadingCeps] = useState(false);
+   const [dadosCoberturaCeps, setDadosCoberturaCeps] = useState(null);
+@@ -96,7 +126,7 @@ export default function App() {
+     formData.append('file', file);
+     try {
+       setLoading(true);
+-      const res = await axios.post(`${API_BASE}/upload`, formData);
++      const res = await apiAuth.post(`/upload`, formData);
+ 
+       const novoLote = {
+         id: Date.now(),
+@@ -134,7 +164,7 @@ export default function App() {
+ 
+     setLoadingCeps(true);
+     try {
+-      const res = await axios.post(`${API_BASE}/cobertura-ceps`, {
++      const res = await apiAuth.post(`/cobertura-ceps`, {
+         origem_rua: origem.rua || "Centro Operacional",
+         origem_num: origem.numero || "S/N",
+         origem_cep: origem.cep || "",
+@@ -164,7 +194,7 @@ export default function App() {
+ 
+     try {
+       // 1. Inicia o job em segundo plano — a resposta chega na hora, com um job_id.
+-      const inicio = await axios.post(`${API_BASE}/otimizar`, {
++      const inicio = await apiAuth.post(`/otimizar`, {
+         origem_rua: origem.rua,
+         origem_num: origem.numero,
+         origem_bairro: origem.bairro,
+@@ -182,7 +212,7 @@ export default function App() {
+       await new Promise((resolve, reject) => {
+         const intervalo = setInterval(async () => {
+           try {
+-            const status = await axios.get(`${API_BASE}/otimizar/status/${jobId}`);
++            const status = await apiAuth.get(`/otimizar/status/${jobId}`);
+             const dados = status.data;
+ 
+             setProgresso({ etapa: dados.etapa, atual: dados.atual, total: dados.total });
+@@ -288,7 +318,7 @@ export default function App() {
+     }
+ 
+     try {
+-      const response = await axios.post(`${API_BASE}/exportar-tabela-frete-xlsx`, {
++      const response = await apiAuth.post(`/exportar-tabela-frete-xlsx`, {
+         hub: dadosCoberturaCeps.hub,
+         pontos_cobertos: dadosCoberturaCeps.pontos_cobertos
+       }, { responseType: 'blob' });
+@@ -345,6 +375,16 @@ export default function App() {
+     downloadAnchor.remove();
+   };
+ 
++  // Etapa 1 — Autenticação: sem operador logado, não renderiza o app,
++  // mostra a tela de login/cadastro por cima de um fundo escuro.
++  if (!operador) {
++    return (
++      <div className="min-h-screen bg-[#030712]">
++        <Login onLoginSuccess={setOperador} />
++      </div>
++    );
++  }
++
+   return (
+     <div className="min-h-screen bg-[#030712] text-slate-100 flex flex-col antialiased selection:bg-blue-600 selection:text-white">
+ 
+@@ -381,6 +421,15 @@ export default function App() {
+             <ShieldCheck className="w-4 h-4 text-blue-400" />
+             <span>FastAPI Core</span>
+           </div>
++          <div className="flex items-center gap-2 pl-3 border-l border-slate-800">
++            <span className="text-slate-300 font-sans">{operador.nome}</span>
++            <button
++              onClick={handleLogout}
++              className="text-[10px] font-semibold text-red-400 hover:text-red-300 bg-red-500/10 border border-red-500/20 px-2 py-1 rounded transition-colors"
++            >
++              Sair
++            </button>
++          </div>
+         </div>
+       </header>
+ 
+diff --git a/frontend/src/components/Login.jsx b/frontend/src/components/Login.jsx
+index 80197eb..60b342c 100644
+--- a/frontend/src/components/Login.jsx
++++ b/frontend/src/components/Login.jsx
+@@ -1,38 +1,47 @@
+ // frontend/src/components/Login.jsx
+ import React, { useState } from 'react';
++import api from '../services/api';
+ 
+ export default function Login({ onLoginSuccess }) {
+   const [isRegistering, setIsRegistering] = useState(false);
+   const [nome, setNome] = useState('');
+   const [email, setEmail] = useState('');
+   const [senha, setSenha] = useState('');
++  const [codigoConvite, setCodigoConvite] = useState('');
+   const [erro, setErro] = useState('');
++  const [carregando, setCarregando] = useState(false);
+ 
+   const handleSubmit = async (e) => {
+     e.preventDefault();
+     setErro('');
+-    const endpoint = isRegistering ? '/api/auth/register' : '/api/auth/login';
+-    
+-    try {
+-      const resp = await fetch(endpoint, {
+-        method: 'POST',
+-        headers: { 'Content-Type': 'application/json' },
+-        body: JSON.stringify(isRegistering ? { nome, email, senha } : { email, senha })
+-      });
+-      const data = await resp.json();
+-
+-      if (!resp.ok) throw new Error(data.detail || 'Erro na operação');
++    setCarregando(true);
+ 
++    try {
+       if (isRegistering) {
++        // Registro usa JSON normal
++        await api.post('/api/auth/register', { nome, email, senha, codigo_convite: codigoConvite });
+         setIsRegistering(false);
+         setErro('Operador criado com sucesso! Faça login.');
+       } else {
+-        localStorage.setItem('token', data.access_token);
+-        localStorage.setItem('operador', JSON.stringify(data.operador));
+-        onLoginSuccess(data.operador);
++        // Login usa o contrato OAuth2PasswordRequestForm do backend:
++        // exige form-urlencoded com os campos "username" e "password"
++        // (não JSON, e não "email"/"senha").
++        const form = new URLSearchParams();
++        form.append('username', email);
++        form.append('password', senha);
++
++        const resp = await api.post('/api/auth/login', form, {
++          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
++        });
++
++        localStorage.setItem('token', resp.data.access_token);
++        localStorage.setItem('operador', JSON.stringify(resp.data.operador));
++        onLoginSuccess(resp.data.operador);
+       }
+     } catch (err) {
+-      setErro(err.message);
++      setErro(err?.response?.data?.detail || err.message || 'Erro na operação');
++    } finally {
++      setCarregando(false);
+     }
+   };
+ 
+@@ -63,6 +72,20 @@ export default function Login({ onLoginSuccess }) {
+             </div>
+           )}
+ 
++          {isRegistering && (
++            <div>
++              <label className="block text-sm font-medium text-slate-700">Código de Convite</label>
++              <input
++                type="text"
++                required
++                value={codigoConvite}
++                onChange={(e) => setCodigoConvite(e.target.value)}
++                placeholder="Fornecido pelo administrador"
++                className="mt-1 block w-full rounded-md border-slate-300 shadow-sm border p-2 text-sm"
++              />
++            </div>
++          )}
++
+           <div>
+             <label className="block text-sm font-medium text-slate-700">E-mail</label>
+             <input
+@@ -87,9 +110,10 @@ export default function Login({ onLoginSuccess }) {
+ 
+           <button
+             type="submit"
+-            className="w-full bg-orange-600 text-white py-2 px-4 rounded-md hover:bg-orange-700 font-medium text-sm transition"
++            disabled={carregando}
++            className="w-full bg-orange-600 text-white py-2 px-4 rounded-md hover:bg-orange-700 font-medium text-sm transition disabled:opacity-60"
+           >
+-            {isRegistering ? 'Cadastrar' : 'Entrar'}
++            {carregando ? 'Aguarde...' : (isRegistering ? 'Cadastrar' : 'Entrar')}
+           </button>
+         </form>
+ 

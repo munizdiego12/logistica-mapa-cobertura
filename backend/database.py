@@ -15,6 +15,8 @@ import math
 from datetime import datetime
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.sql import func
 
 try:
     import asyncpg
@@ -35,8 +37,6 @@ def _normalizar_dsn(url: str) -> str:
     if url and url.startswith("postgres://"):
         return url.replace("postgres://", "postgresql://", 1)
     return url
-
-
 # Normaliza a URL principal do banco de dados
 URL_NORMALIZADA = _normalizar_dsn(DATABASE_URL)
 

@@ -14,6 +14,11 @@ SECRET_KEY = os.getenv("JWT_SECRET_KEY") or os.getenv("SECRET_KEY", "chave_secre
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
 
+# Código de convite exigido para criar uma conta de operador (Etapa 1 —
+# Autenticação). Sem essa variável configurada no ambiente, o cadastro
+# fica bloqueado por padrão (mais seguro do que deixar aberto por engano).
+OPERATOR_INVITE_CODE = os.getenv("OPERATOR_INVITE_CODE")
+
 # ==============================
 # CONFIGURAÇÃO DE LOGGING
 # ==============================

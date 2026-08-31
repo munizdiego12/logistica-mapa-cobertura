@@ -1,38 +1,47 @@
 // frontend/src/components/Login.jsx
 import React, { useState } from 'react';
+import api from '../services/api';
 
 export default function Login({ onLoginSuccess }) {
   const [isRegistering, setIsRegistering] = useState(false);
   const [nome, setNome] = useState('');
   const [email, setEmail] = useState('');
   const [senha, setSenha] = useState('');
+  const [codigoConvite, setCodigoConvite] = useState('');
   const [erro, setErro] = useState('');
+  const [carregando, setCarregando] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setErro('');
-    const endpoint = isRegistering ? '/api/auth/register' : '/api/auth/login';
-    
+    setCarregando(true);
+
     try {
-      const resp = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(isRegistering ? { nome, email, senha } : { email, senha })
-      });
-      const data = await resp.json();
-
-      if (!resp.ok) throw new Error(data.detail || 'Erro na operação');
-
       if (isRegistering) {
+        // Registro usa JSON normal
+        await api.post('/api/auth/register', { nome, email, senha, codigo_convite: codigoConvite });
         setIsRegistering(false);
         setErro('Operador criado com sucesso! Faça login.');
       } else {
-        localStorage.setItem('token', data.access_token);
-        localStorage.setItem('operador', JSON.stringify(data.operador));
-        onLoginSuccess(data.operador);
+        // Login usa o contrato OAuth2PasswordRequestForm do backend:
+        // exige form-urlencoded com os campos "username" e "password"
+        // (não JSON, e não "email"/"senha").
+        const form = new URLSearchParams();
+        form.append('username', email);
+        form.append('password', senha);
+
+        const resp = await api.post('/api/auth/login', form, {
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        });
+
+        localStorage.setItem('token', resp.data.access_token);
+        localStorage.setItem('operador', JSON.stringify(resp.data.operador));
+        onLoginSuccess(resp.data.operador);
       }
     } catch (err) {
-      setErro(err.message);
+      setErro(err?.response?.data?.detail || err.message || 'Erro na operação');
+    } finally {
+      setCarregando(false);
     }
   };
 
@@ -63,6 +72,20 @@ export default function Login({ onLoginSuccess }) {
             </div>
           )}
 
+          {isRegistering && (
+            <div>
+              <label className="block text-sm font-medium text-slate-700">Código de Convite</label>
+              <input
+                type="text"
+                required
+                value={codigoConvite}
+                onChange={(e) => setCodigoConvite(e.target.value)}
+                placeholder="Fornecido pelo administrador"
+                className="mt-1 block w-full rounded-md border-slate-300 shadow-sm border p-2 text-sm"
+              />
+            </div>
+          )}
+
           <div>
             <label className="block text-sm font-medium text-slate-700">E-mail</label>
             <input
@@ -87,9 +110,10 @@ export default function Login({ onLoginSuccess }) {
 
           <button
             type="submit"
-            className="w-full bg-orange-600 text-white py-2 px-4 rounded-md hover:bg-orange-700 font-medium text-sm transition"
+            disabled={carregando}
+            className="w-full bg-orange-600 text-white py-2 px-4 rounded-md hover:bg-orange-700 font-medium text-sm transition disabled:opacity-60"
           >
-            {isRegistering ? 'Cadastrar' : 'Entrar'}
+            {carregando ? 'Aguarde...' : (isRegistering ? 'Cadastrar' : 'Entrar')}
           </button>
         </form>
 

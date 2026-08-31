@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 import database
 from database import get_db, Operador, init_db
+from config import OPERATOR_INVITE_CODE
 from auth import (
     gerar_hash_senha,
     verificar_senha_hash,
@@ -932,6 +933,7 @@ class RegistroOperadorSchema(BaseModel):
     nome: str
     email: EmailStr
     senha: str
+    codigo_convite: str
 
 class LoginSchema(BaseModel):
     email: EmailStr
@@ -939,6 +941,11 @@ class LoginSchema(BaseModel):
 
 @app.post("/api/auth/register")
 def registrar_operador(dados: RegistroOperadorSchema, db: Session = Depends(get_db)):
+    # Sem OPERATOR_INVITE_CODE configurado no ambiente, o cadastro fica
+    # bloqueado por padrão — mais seguro do que deixar aberto por engano.
+    if not OPERATOR_INVITE_CODE or dados.codigo_convite != OPERATOR_INVITE_CODE:
+        raise HTTPException(status_code=403, detail="Código de convite inválido.")
+
     existente = db.query(Operador).filter(Operador.email == dados.email).first()
     if existente:
         raise HTTPException(status_code=400, detail="E-mail já cadastrado.")
@@ -957,12 +964,16 @@ def registrar_operador(dados: RegistroOperadorSchema, db: Session = Depends(get_
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     # Em vez de dados.email, o form_data entrega em form_data.username
     operador = db.query(Operador).filter(Operador.email == form_data.username).first()
-    
-    if not operador or not verificar_senha(form_data.password, operador.senha_hash):
+
+    if not operador or not verificar_senha_hash(form_data.password, operador.senha_hash):
         raise HTTPException(status_code=400, detail="E-mail ou senha incorretos")
-        
+
     token = criar_token_acesso(data={"sub": operador.email})
-    return {"access_token": token, "token_type": "bearer"}
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "operador": {"id": operador.id, "nome": operador.nome, "email": operador.email},
+    }
 
 @app.get("/api/auth/me")
 def obter_perfil(operador_atual: Operador = Depends(obter_operador_atual)):

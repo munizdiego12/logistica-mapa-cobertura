@@ -42,3 +42,8 @@ sql_app.db
 *.njsproj
 *.sln
 *.sw?
+# ==============================
+# Artefatos de teste
+# ==============================
+backend/tests/*.db
+*.db

@@ -12,38 +12,46 @@ continua funcionando normalmente, só que sem persistência entre reinícios
 
 import os
 import math
+from datetime import datetime
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, create_engine
+from sqlalchemy.orm import declarative_base, sessionmaker
+
 try:
     import asyncpg
 except ImportError:
     asyncpg = None
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, create_engine
-from sqlalchemy.orm import declarative_base, sessionmaker
-from datetime import datetime
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "")
+# Importa as configurações globais
+from config import DATABASE_URL as CONFIG_DATABASE_URL
+
+# Obtém a URL vinda de config.py ou direto do os.environ
+DATABASE_URL = CONFIG_DATABASE_URL or os.environ.get("DATABASE_URL", "")
 
 _pool = None
 
 
 def _normalizar_dsn(url: str) -> str:
-    # O Render fornece a URL como "postgres://...", mas o asyncpg exige "postgresql://"
-    if url.startswith("postgres://"):
+    """O Render fornece a URL como 'postgres://...', mas o asyncpg e o SQLAlchemy exigem 'postgresql://'."""
+    if url and url.startswith("postgres://"):
         return url.replace("postgres://", "postgresql://", 1)
     return url
 
 
+# Normaliza a URL principal do banco de dados
+URL_NORMALIZADA = _normalizar_dsn(DATABASE_URL)
+
 # --- Configuração SQLAlchemy (Síncrono para ORM / Auth) ---
-url_sqlalchemy = _normalizar_dsn(DATABASE_URL) if DATABASE_URL else "sqlite:///./sql_app.db"
-engine = create_engine(
-    url_sqlalchemy,
-    connect_args={"check_same_thread": False} if url_sqlalchemy.startswith("sqlite") else {}
-)
+url_sqlalchemy = URL_NORMALIZADA if URL_NORMALIZADA else "sqlite:///./sql_app.db"
+
+connect_args = {"check_same_thread": False} if url_sqlalchemy.startswith("sqlite") else {}
+
+engine = create_engine(url_sqlalchemy, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
 def get_db():
-    """Dependency para injeção da sessão de banco de dados nos endpoints."""
+    """Dependency para injeção da sessão de banco de dados nos endpoints do FastAPI."""
     db = SessionLocal()
     try:
         yield db
@@ -53,16 +61,16 @@ def get_db():
 
 async def get_pool():
     global _pool
-    if _pool is None and DATABASE_URL:
+    if _pool is None and URL_NORMALIZADA and asyncpg:
         try:
             _pool = await asyncpg.create_pool(
-                dsn=_normalizar_dsn(DATABASE_URL),
+                dsn=URL_NORMALIZADA,
                 min_size=1,
                 max_size=5,
                 command_timeout=10,
             )
         except Exception as e:
-            print(f"[database] Falha ao conectar no Postgres, seguindo sem persistência: {e}")
+            print(f"[database] Falha ao conectar no Postgres via asyncpg, seguindo sem persistência: {e}")
             _pool = None
     return _pool
 
@@ -189,6 +197,7 @@ async def consultar_ceps_por_raio(lat_origem: float, lon_origem: float, raio_km:
     return resultados
 
 
+# --- Modelos ORM do SQLAlchemy ---
 class Operador(Base):
     __tablename__ = "operadores"
 

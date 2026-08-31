@@ -1,9 +1,44 @@
-.venv/
+# ==============================
+# Node / Frontend
+# ==============================
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/*.local
+frontend/logs/
+frontend/*.log
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/pnpm-debug.log*
+frontend/lerna-debug.log*
+
+# ==============================
+# Python / Backend
+# ==============================
 __pycache__/
-*.pyc
-.pytest_cache/
-*.db
-*.sqlite
-node_modules/
-dist/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv/
+backend/.env
 .env
+sql_app.db
+*.sqlite3
+
+# ==============================
+# IDEs, Editors & System
+# ==============================
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

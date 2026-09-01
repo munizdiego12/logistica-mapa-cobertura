@@ -83,57 +83,104 @@ async def init_db():
         print("[database] DATABASE_URL não configurada — cache de geocodificação NÃO é persistente.")
         return
     async with pool.acquire() as conn:
+        # lat/lon aceitam NULL: um CEP/endereço com status ERRO_CEP_INVALIDO é
+        # salvo sem coordenada, para não inventar uma posição geográfica falsa.
         await conn.execute(
             """
             CREATE TABLE IF NOT EXISTS geocode_cache (
                 chave       TEXT PRIMARY KEY,
-                lat         DOUBLE PRECISION NOT NULL,
-                lon         DOUBLE PRECISION NOT NULL,
+                lat         DOUBLE PRECISION,
+                lon         DOUBLE PRECISION,
                 cidade      TEXT,
                 uf          TEXT,
                 cep         TEXT,
                 bairro      TEXT,
+                status      TEXT DEFAULT 'VALIDO',
                 criado_em   TIMESTAMP DEFAULT NOW()
             )
             """
         )
+        # Migração segura para bancos já existentes em produção (Render): adiciona
+        # a coluna 'status' se ainda não existir e remove o NOT NULL de lat/lon,
+        # sem apagar nenhum dado já cacheado.
+        await conn.execute(
+            "ALTER TABLE geocode_cache ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'VALIDO'"
+        )
+        await conn.execute("ALTER TABLE geocode_cache ALTER COLUMN lat DROP NOT NULL")
+        await conn.execute("ALTER TABLE geocode_cache ALTER COLUMN lon DROP NOT NULL")
     print("[database] Cache de geocodificação persistente (Postgres) pronto.")
 
 
 async def cache_get(chave: str):
+    """
+    Devolve uma tupla de 7 posições: (lat, lon, cidade, uf, cep, bairro, status).
+    'status' é um de: VALIDO, ALERTA_APROXIMADO, ERRO_CEP_INVALIDO.
+    Registros salvos antes desta coluna existir voltam com status 'VALIDO'
+    (era o único comportamento possível antes da Etapa 2).
+    """
     pool = await get_pool()
     if not pool:
         return None
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT lat, lon, cidade, uf, cep, bairro FROM geocode_cache WHERE chave = $1",
+            "SELECT lat, lon, cidade, uf, cep, bairro, status FROM geocode_cache WHERE chave = $1",
             chave,
         )
         if row:
-            return (row["lat"], row["lon"], row["cidade"], row["uf"], row["cep"], row["bairro"])
+            return (
+                row["lat"], row["lon"], row["cidade"], row["uf"], row["cep"], row["bairro"],
+                row["status"] or "VALIDO",
+            )
     return None
 
 
 async def cache_set(chave: str, resultado: tuple):
+    """
+    Aceita uma tupla de 7 posições: (lat, lon, cidade, uf, cep, bairro, status).
+    Por compatibilidade, também aceita a tupla antiga de 6 posições (sem status),
+    assumindo 'VALIDO' nesse caso.
+    """
     pool = await get_pool()
     if not pool:
         return
-    lat, lon, cidade, uf, cep, bairro = resultado
+    if len(resultado) == 7:
+        lat, lon, cidade, uf, cep, bairro, status = resultado
+    else:
+        lat, lon, cidade, uf, cep, bairro = resultado
+        status = "VALIDO"
     async with pool.acquire() as conn:
         await conn.execute(
             """
-            INSERT INTO geocode_cache (chave, lat, lon, cidade, uf, cep, bairro)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO geocode_cache (chave, lat, lon, cidade, uf, cep, bairro, status)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             ON CONFLICT (chave) DO UPDATE SET
                 lat = EXCLUDED.lat,
                 lon = EXCLUDED.lon,
                 cidade = EXCLUDED.cidade,
                 uf = EXCLUDED.uf,
                 cep = EXCLUDED.cep,
-                bairro = EXCLUDED.bairro
+                bairro = EXCLUDED.bairro,
+                status = EXCLUDED.status
             """,
-            chave, lat, lon, cidade, uf, cep, bairro,
+            chave, lat, lon, cidade, uf, cep, bairro, status,
         )
+
+
+async def invalidar_cache(chave: str):
+    """
+    Remove uma entrada do cache de geocodificação para forçar uma nova consulta
+    às APIs externas na próxima vez que essa chave for pedida.
+
+    Ainda não há, nesta etapa, nenhuma rota que edite um pedido já persistido
+    (os pedidos hoje vêm de upload de CSV/XLSX e são processados em memória),
+    então esta função fica pronta para quando essa funcionalidade existir, sem
+    estar conectada a nenhum endpoint por enquanto.
+    """
+    pool = await get_pool()
+    if not pool:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM geocode_cache WHERE chave = $1", chave)
 
 
 async def cache_stats():

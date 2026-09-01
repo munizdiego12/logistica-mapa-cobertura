@@ -1,161 +1,225 @@
+"""
+Módulo de Geocodificação do Zubale Routing Core.
+
+Realiza a resolução de coordenadas via CEP e endereço utilizando arquitetura em cascata:
+1. Cache Persistente no Postgres (via database.py)
+2. BrasilAPI v2 (dados diretos de logradouro/coordenadas)
+3. ViaCEP + Nominatim/OpenStreetMap (fallback com busca de endereço)
+4. Sinalização de erro (ERRO_CEP_INVALIDO) sem criação de coordenadas fictícias
+"""
+
 import asyncio
 import logging
 import re
-import sqlite3
-import aiohttp
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
+import httpx
+
+# Importa as funções de persistência assíncronas do database.py
+from database import cache_get, cache_set, invalidar_cache
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("geocoding")
 
-DB_PATH = "geocoding_cache.db"
-SP_CENTER_COORDS = (-23.550520, -46.633308)
-
-# Configurações de taxa de requisição
-SEMAPHORE_LIMIT = 5  # Limite de chamadas concorrentes externas
+# Limites de concorrência e requisições
+SEMAPHORE_LIMIT = 5
+SEMAPHORE = asyncio.Semaphore(SEMAPHORE_LIMIT)
 NOMINATIM_USER_AGENT = "zubale_routing_core_v2"
 
 
-def init_db():
-    """Inicializa a tabela de cache persistente no SQLite."""
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS geocode_cache (
-                key TEXT PRIMARY KEY,
-                lat REAL,
-                lon REAL,
-                source TEXT
-            )
-        """)
-        conn.commit()
-
-
-def get_from_cache(key: str) -> Optional[Tuple[float, float, str]]:
-    """Recupera coordenadas do cache SQLite."""
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT lat, lon, source FROM geocode_cache WHERE key = ?", (key.strip().lower(),))
-        row = cursor.fetchone()
-        if row:
-            return row[0], row[1], row[2]
-    return None
-
-
-def save_to_cache(key: str, lat: float, lon: float, source: str):
-    """Salva o resultado obtido no cache SQLite."""
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT OR REPLACE INTO geocode_cache (key, lat, lon, source) VALUES (?, ?, ?, ?)",
-            (key.strip().lower(), lat, lon, source)
-        )
-        conn.commit()
-
-
 def clean_cep(cep_str: str) -> str:
-    """Higieniza o formato do CEP."""
-    return re.sub(r"\D", "", str(cep_str)).zfill(8)
+    """Higieniza e formata o CEP para conter exatamente 8 dígitos numéricos."""
+    return re.sub(r"\D", "", str(cep_str or "")).zfill(8)
 
 
-async def fetch_with_retry(session: aiohttp.ClientSession, url: str, headers: dict = None, retries: int = 3, backoff_factor: float = 0.5) -> Optional[dict]:
-    """Realiza requisições HTTP assíncronas com tratamento de erros e backoff exponencial."""
-    for attempt in range(retries):
-        try:
-            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as response:
-                if response.status == 200:
-                    return await response.json()
-                elif response.status in (429, 500, 502, 503, 504):
-                    await asyncio.sleep(backoff_factor * (2 ** attempt))
-                else:
-                    break
-        except (aiohttp.ClientError, asyncio.TimeoutError):
-            await asyncio.sleep(backoff_factor * (2 ** attempt))
-    return None
-
-
-async def geocode_cep_brasilapi(session: aiohttp.ClientSession, cep: str) -> Optional[Tuple[float, float]]:
-    """Obtém coordenadas via BrasilAPI a partir do CEP."""
+async def buscar_cep_brasilapi(client: httpx.AsyncClient, cep: str) -> Optional[Dict]:
+    """Consulta o CEP na BrasilAPI v2 e extrai coordenadas e endereço."""
     clean = clean_cep(cep)
     if len(clean) != 8:
         return None
-    
-    cached = get_from_cache(f"cep:{clean}")
-    if cached:
-        return cached[0], cached[1]
 
     url = f"https://brasilapi.com.br/api/cep/v2/{clean}"
-    data = await fetch_with_retry(session, url)
-    
-    if data and "location" in data and "coordinates" in data["location"]:
-        coords = data["location"]["coordinates"]
-        if coords.get("latitude") and coords.get("longitude"):
-            lat = float(coords["latitude"])
-            lon = float(coords["longitude"])
-            save_to_cache(f"cep:{clean}", lat, lon, "brasilapi")
-            return lat, lon
+    try:
+        response = await client.get(url, timeout=5.0)
+        if response.status_code == 200:
+            data = response.json()
+            location = data.get("location", {}) or {}
+            coords = location.get("coordinates", {}) or {}
+            lat = coords.get("latitude")
+            lon = coords.get("longitude")
+
+            has_coords = lat is not None and lon is not None
+            return {
+                "lat": float(lat) if has_coords else None,
+                "lon": float(lon) if has_coords else None,
+                "cidade": data.get("city"),
+                "uf": data.get("state"),
+                "cep": clean,
+                "bairro": data.get("neighborhood"),
+                "status": "VALIDO" if has_coords else "ALERTA_APROXIMADO"
+            }
+    except Exception as e:
+        logger.warning(f"[geocoding] Falha ao consultar BrasilAPI para o CEP {clean}: {e}")
     return None
 
 
-async def geocode_address_nominatim(session: aiohttp.ClientSession, address: str, semaphore: asyncio.Semaphore) -> Optional[Tuple[float, float]]:
-    """Obtém coordenadas via Nominatim (OpenStreetMap) com controle de concorrência."""
-    cached = get_from_cache(f"addr:{address}")
+async def buscar_cep_viacep_nominatim(client: httpx.AsyncClient, cep: str) -> Optional[Dict]:
+    """Fallback via ViaCEP para obter o logradouro e Nominatim para geocodificar o texto."""
+    clean = clean_cep(cep)
+    if len(clean) != 8:
+        return None
+
+    url_viacep = f"https://viacep.com.br/ws/{clean}/json/"
+    try:
+        res_v = await client.get(url_viacep, timeout=5.0)
+        if res_v.status_code == 200 and not res_v.json().get("erro"):
+            data = res_v.json()
+            logradouro = data.get("logradouro", "")
+            bairro = data.get("bairro", "")
+            cidade = data.get("localidade", "")
+            uf = data.get("uf", "")
+
+            address_parts = [p for p in [logradouro, bairro, cidade, uf, "Brasil"] if p]
+            address_str = ", ".join(address_parts)
+
+            url_nom = "https://nominatim.openstreetmap.org/search"
+            headers = {"User-Agent": NOMINATIM_USER_AGENT}
+            params = {"q": address_str, "format": "json", "limit": 1}
+
+            await asyncio.sleep(0.5)  # Respeita o rate limit do OSM/Nominatim
+            res_nom = await client.get(url_nom, params=params, headers=headers, timeout=5.0)
+
+            if res_nom.status_code == 200 and res_nom.json():
+                nom_data = res_nom.json()[0]
+                return {
+                    "lat": float(nom_data["lat"]),
+                    "lon": float(nom_data["lon"]),
+                    "cidade": cidade,
+                    "uf": uf,
+                    "cep": clean,
+                    "bairro": bairro,
+                    "status": "VALIDO"
+                }
+
+            return {
+                "lat": None,
+                "lon": None,
+                "cidade": cidade,
+                "uf": uf,
+                "cep": clean,
+                "bairro": bairro,
+                "status": "ALERTA_APROXIMADO"
+            }
+    except Exception as e:
+        logger.warning(f"[geocoding] Falha no fallback ViaCEP/Nominatim para o CEP {clean}: {e}")
+    return None
+
+
+async def geocode_cep_cascata(cep: str, client: Optional[httpx.AsyncClient] = None) -> Dict:
+    """
+    Executa a resolução de coordenadas em cascata salvando no Postgres via database.py.
+    """
+    clean = clean_cep(cep)
+    chave = f"cep:{clean}"
+
+    if not clean or len(clean) != 8:
+        return {
+            "lat": None,
+            "lon": None,
+            "cidade": None,
+            "uf": None,
+            "cep": clean,
+            "bairro": None,
+            "status": "ERRO_CEP_INVALIDO"
+        }
+
+    # 1. Tenta recuperar do Cache do Postgres
+    cached = await cache_get(chave)
     if cached:
-        return cached[0], cached[1]
+        lat, lon, cidade, uf, cep_c, bairro, status = cached
+        return {
+            "lat": lat,
+            "lon": lon,
+            "cidade": cidade,
+            "uf": uf,
+            "cep": cep_c or clean,
+            "bairro": bairro,
+            "status": status
+        }
 
-    async with semaphore:
-        # Respeita os limites da API de OpenStreetMap
-        await asyncio.sleep(1.0) 
-        url = "https://nominatim.openstreetmap.org/search"
-        params = f"?q={aiohttp.helpers.quote_plus(address)}&format=json&limit=1"
-        headers = {"User-Agent": NOMINATIM_USER_AGENT}
-        
-        data = await fetch_with_retry(session, url + params, headers=headers)
-        if data and len(data) > 0:
-            lat = float(data[0]["lat"])
-            lon = float(data[0]["lon"])
-            save_to_cache(f"addr:{address}", lat, lon, "nominatim")
-            return lat, lon
-    return None
+    # Executa consulta externa controlada pelo Semáforo
+    async with SEMAPHORE:
+        close_client = False
+        if client is None:
+            client = httpx.AsyncClient()
+            close_client = True
+
+        try:
+            # 2. BrasilAPI v2
+            res = await buscar_cep_brasilapi(client, clean)
+
+            # 3. ViaCEP + Nominatim (se a BrasilAPI não trouxe coordenadas válidas)
+            if not res or res.get("lat") is None:
+                res_fallback = await buscar_cep_viacep_nominatim(client, clean)
+                if res_fallback:
+                    if res_fallback.get("lat") is not None or res is None:
+                        res = res_fallback
+
+            # 4. Caso o CEP seja totalmente inexistente nas bases oficiais
+            if not res:
+                res = {
+                    "lat": None,
+                    "lon": None,
+                    "cidade": None,
+                    "uf": None,
+                    "cep": clean,
+                    "bairro": None,
+                    "status": "ERRO_CEP_INVALIDO"
+                }
+
+            # Salva no cache do Postgres (inclusive CEPs inválidos para evitar re-consultas)
+            tupla_cache = (
+                res.get("lat"),
+                res.get("lon"),
+                res.get("cidade"),
+                res.get("uf"),
+                res.get("cep") or clean,
+                res.get("bairro"),
+                res.get("status")
+            )
+            await cache_set(chave, tupla_cache)
+            return res
+
+        finally:
+            if close_client:
+                await client.aclose()
 
 
-async def resolve_single_location(session: aiohttp.ClientSession, item: Dict, semaphore: asyncio.Semaphore) -> Dict:
+async def resolve_single_location(item: Dict, client: Optional[httpx.AsyncClient] = None) -> Dict:
     """
-    Resolve as coordenadas de um único pedido utilizando fallbacks estruturados:
-    1. Cache SQLite
-    2. BrasilAPI (via CEP)
-    3. Nominatim (via Endereço)
-    4. Fallback Centro de SP
+    Resolve as coordenadas de um pedido individual sem inventar dados sintéticos.
     """
-    init_db()
     cep = item.get("cep", "")
-    address = item.get("endereco", "")
-    
-    # 1. Tentativa via CEP
-    if cep:
-        coords = await geocode_cep_brasilapi(session, cep)
-        if coords:
-            item["lat"], item["lon"], item["geocode_source"] = coords[0], coords[1], "brasilapi"
-            return item
+    geo_res = await geocode_cep_cascata(cep, client=client)
 
-    # 2. Tentativa via Endereço Completo
-    full_address = f"{address}, São Paulo, SP, Brasil" if address else ""
-    if full_address:
-        coords = await geocode_address_nominatim(session, full_address, semaphore)
-        if coords:
-            item["lat"], item["lon"], item["geocode_source"] = coords[0], coords[1], "nominatim"
-            return item
+    item["lat"] = geo_res.get("lat")
+    item["lon"] = geo_res.get("lon")
+    item["cidade"] = geo_res.get("cidade")
+    item["uf"] = geo_res.get("uf")
+    item["bairro"] = geo_res.get("bairro")
+    item["geocode_status"] = geo_res.get("status")
 
-    # 3. Fallback Padrão (Centro de SP)
-    item["lat"], item["lon"], item["geocode_source"] = SP_CENTER_COORDS[0], SP_CENTER_COORDS[1], "fallback_sp_center"
+    if geo_res.get("status") == "VALIDO":
+        item["geocode_source"] = "cascata_exato"
+    elif geo_res.get("status") == "ALERTA_APROXIMADO":
+        item["geocode_source"] = "cascata_aproximado"
+    else:
+        item["geocode_source"] = "erro_invalid_cep"
+
     return item
 
 
 async def process_batch_geocoding(items: List[Dict]) -> List[Dict]:
-    """Processa uma lista de pedidos em lote concorrente de forma assíncrona."""
-    init_db()
-    semaphore = asyncio.Semaphore(SEMAPHORE_LIMIT)
-    
-    async with aiohttp.ClientSession() as session:
-        tasks = [resolve_single_location(session, item, semaphore) for item in items]
+    """Processa lote de pedidos em paralelo garantindo reutilização da sessão HTTP."""
+    async with httpx.AsyncClient() as client:
+        tasks = [resolve_single_location(item, client=client) for item in items]
         return await asyncio.gather(*tasks)

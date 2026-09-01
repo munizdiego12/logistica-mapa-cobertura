@@ -172,7 +172,8 @@ export default function App() {
       });
       setDadosCoberturaCeps(res.data);
     } catch (err) {
-      alert('Erro ao calcular cobertura dinâmica de CEPs. Verifique a conexão com a API.');
+      const detalhe = err?.response?.data?.detail;
+      alert(detalhe || 'Erro ao calcular cobertura dinâmica de CEPs. Verifique a conexão com a API.');
     } finally {
       setLoadingCeps(false);
     }
@@ -231,7 +232,7 @@ export default function App() {
         }, 1200);
       });
     } catch (err) {
-      alert('Erro ao processar roteirização. Verifique os endereços informados e o status da API.');
+      alert(err?.message || 'Erro ao processar roteirização. Verifique os endereços informados e o status da API.');
     } finally {
       setLoading(false);
       setProgresso(null);
@@ -475,12 +476,22 @@ export default function App() {
               />
             </div>
 
+            {/* Aviso explícito quando não há faixas de CEP reais cadastradas nesse raio
+                (Etapa 2: o gerador sintético de 48 pontos foi removido — não inventamos
+                mais CEPs fictícios para preencher esse painel). */}
+            {dadosCoberturaCeps && dadosCoberturaCeps.aviso && (
+              <div className="p-2.5 rounded-lg bg-amber-950/30 border border-amber-500/30 text-[11px] flex items-start gap-2">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+                <span className="text-amber-300">{dadosCoberturaCeps.aviso}</span>
+              </div>
+            )}
+
             {/* Painel Informativo da Consulta de Raio 30km com 2 Botões Lado a Lado */}
-            {dadosCoberturaCeps && (
+            {dadosCoberturaCeps && dadosCoberturaCeps.total_pontos > 0 && (
               <div className="p-2.5 rounded-lg bg-emerald-950/30 border border-emerald-500/30 text-[11px] space-y-2">
                 <div className="flex justify-between items-center text-emerald-400 font-bold">
                   <span>Cobertura Haversine:</span>
-                  <span>{dadosCoberturaCeps.total_pontos} CEPs no Raio de 30 km</span>
+                  <span>{dadosCoberturaCeps.total_pontos} CEPs no Raio de {dadosCoberturaCeps.raio_limite_km} km</span>
                 </div>
                 <div className="grid grid-cols-2 gap-2 pt-1">
                   <button
@@ -799,6 +810,26 @@ export default function App() {
             </div>
           </div>
 
+          {/* Aviso de pedidos que não puderam ser geocodificados (Etapa 2): ficam de
+              fora do cálculo de rotas em vez de serem posicionados num lugar errado. */}
+          {resultado && resultado.pedidos_sem_geocodificacao && resultado.pedidos_sem_geocodificacao.length > 0 && (
+            <div className="bg-red-950/30 border border-red-500/30 rounded-xl p-4 space-y-2">
+              <div className="flex items-center gap-2 text-red-400 font-bold text-xs uppercase tracking-wider">
+                <AlertTriangle className="w-4 h-4" />
+                {resultado.pedidos_sem_geocodificacao.length} pedido(s) fora da roteirização — CEP/endereço não localizado
+              </div>
+              <div className="space-y-1 max-h-40 overflow-y-auto">
+                {resultado.pedidos_sem_geocodificacao.map((p) => (
+                  <div key={p.id} className="text-[11px] text-red-300 bg-red-950/40 rounded px-2.5 py-1.5 flex flex-col">
+                    <span className="font-semibold">#{p.id} — {p.Endereco || 'Endereço não informado'}, {p.Numero}</span>
+                    <span className="text-red-400/80">{p.CEP ? `CEP ${p.CEP} • ` : ''}{p.motivo}</span>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[10px] text-red-400/70">Corrija o endereço/CEP desses pedidos e rode a roteirização novamente para incluí-los.</p>
+            </div>
+          )}
+
           {/* Visualizador do Mapa */}
           <div className="bg-slate-900/50 border border-slate-800/80 p-4 rounded-xl">
             <div className="flex items-center justify-between mb-3 px-1">
@@ -872,7 +903,19 @@ export default function App() {
                             {r.modal}
                           </span>
                         </td>
-                        <td className="p-3.5 text-slate-300 font-sans">{r.qtd_pedidos} paradas</td>
+                        <td className="p-3.5 text-slate-300 font-sans">
+                          <div className="flex items-center gap-2">
+                            {r.qtd_pedidos} paradas
+                            {(r.paradas || []).some(p => p.geocode_status === 'ALERTA_APROXIMADO') && (
+                              <div
+                                title="Uma ou mais paradas desta rota têm localização aproximada (só bairro/cidade, não o endereço exato)."
+                                className="flex items-center justify-center p-1 bg-amber-500/10 rounded border border-amber-500/20 text-amber-400 cursor-help"
+                              >
+                                <AlertTriangle className="w-3.5 h-3.5" />
+                              </div>
+                            )}
+                          </div>
+                        </td>
                         <td className="p-3.5 text-slate-300">
                           <div className="flex items-center gap-2">
                             {r.km_total} km

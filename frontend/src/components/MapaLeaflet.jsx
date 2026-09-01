@@ -16,12 +16,16 @@ const isCoordValid = (lat, lon) => {
   return typeof lat === 'number' && !isNaN(lat) && typeof lon === 'number' && !isNaN(lon) && (lat !== 0 || lon !== 0);
 };
 
-// Ícone customizado para paradas de pedidos numeradas
-const createStopIcon = (num, color) => {
+// Ícone customizado para paradas de pedidos numeradas.
+// Quando 'aproximado' é true (geocode_status === 'ALERTA_APROXIMADO', Etapa 2),
+// desenha um anel/badge amarelo indicando que a posição é só do bairro/cidade,
+// não do endereço exato — sem impedir a rota, só avisando visualmente.
+const createStopIcon = (num, color, aproximado) => {
   return L.divIcon({
     className: 'custom-stop-marker',
     html: `
       <div style="
+        position: relative;
         background-color: ${color || '#3b82f6'};
         color: #ffffff;
         width: 26px;
@@ -32,12 +36,30 @@ const createStopIcon = (num, color) => {
         justify-content: center;
         font-weight: 800;
         font-size: 11px;
-        border: 2px solid #ffffff;
+        border: 2px solid ${aproximado ? '#f59e0b' : '#ffffff'};
         box-shadow: 0 4px 10px rgba(0,0,0,0.5);
         font-family: sans-serif;
         cursor: pointer;
       ">
         ${num}
+        ${aproximado ? `
+          <div style="
+            position: absolute;
+            top: -6px;
+            right: -6px;
+            width: 13px;
+            height: 13px;
+            border-radius: 50%;
+            background-color: #f59e0b;
+            border: 1.5px solid #ffffff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 9px;
+            color: #1c1917;
+            font-weight: 900;
+          ">!</div>
+        ` : ''}
       </div>
     `,
     iconSize: [26, 26],
@@ -427,7 +449,7 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
             <Marker
               key={`stop-${p.id || pIdx}`}
               position={[p.latAjustada, p.lonAjustada]}
-              icon={createStopIcon(p.ordemNumero, p.rotaCor)}
+              icon={createStopIcon(p.ordemNumero, p.rotaCor, p.geocode_status === 'ALERTA_APROXIMADO')}
               zIndexOffset={300 + pIdx}
             >
               <Popup>
@@ -442,6 +464,11 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
                     <span>Modal:</span>
                     <span className="text-blue-600">{p.rotaModal}</span>
                   </div>
+                  {p.geocode_status === 'ALERTA_APROXIMADO' && (
+                    <div className="mt-1 mb-1 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-50 border border-amber-300 text-[10px] font-bold text-amber-700">
+                      ⚠ Localização aproximada (bairro/cidade, não o endereço exato)
+                    </div>
+                  )}
                   <p className="font-semibold text-xs text-slate-900">{logradouro}, {numero}</p>
                   <p className="text-[11px] text-slate-500">{bairro} {p.CEP ? `• CEP ${p.CEP}` : ''}</p>
                   <div className="mt-2 pt-1 border-t border-slate-200 flex justify-between text-[11px] text-slate-600 font-medium">

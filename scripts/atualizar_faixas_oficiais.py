@@ -1,8 +1,20 @@
+import os
+import sys
 import psycopg2
 from psycopg2.extras import execute_values
 
-# Sua External Database URL do Render
-DATABASE_URL = "postgresql://routeflow_db_tvnb_user:TwIdM5qME7Fsf9r4nXtEmpBTYvD6jTVh@dpg-da7fc0oae00c73bm74e0-a.ohio-postgres.render.com/routeflow_db_tvnb"
+# A URL de conexão NUNCA deve ficar escrita no código-fonte.
+# Configure a variável de ambiente DATABASE_URL antes de rodar este script, ex:
+#   export DATABASE_URL="postgresql://usuario:senha@host/nome_do_banco"   (Linux/macOS)
+#   $env:DATABASE_URL="postgresql://usuario:senha@host/nome_do_banco"     (PowerShell)
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    sys.exit(
+        "ERRO: a variável de ambiente DATABASE_URL não está definida. "
+        "Configure-a com a Internal/External Database URL do Render antes de rodar este script."
+    )
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 # Tabela oficial de Faixas e Distritos do Brasil (Macro e Micro ranges)
 FAIXAS_OFICIAIS_BRASIL = [

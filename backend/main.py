@@ -116,8 +116,16 @@ async def geocode_async(client: httpx.AsyncClient, rua: str = "", numero: str = 
     2) Cache Postgres (instantâneo, sobrevive a reinícios do servidor)
     3) Endereço completo via Nominatim (preciso, mas limitado a 1 req/s)
     4) CEP via BrasilAPI (aproximado, mas pode rodar em paralelo)
-    5) Bairro/cidade via Nominatim (último recurso)
-    Nunca retorna coordenada fixa "chumbada".
+    5) Bairro/cidade via Nominatim (último recurso, aproximado por região)
+
+    Retorna sempre uma tupla de 7 posições:
+        (lat, lon, cidade, uf, cep, bairro, status)
+    onde 'status' é um de:
+        VALIDO             -> coordenada de rua/CEP exata
+        ALERTA_APROXIMADO  -> só foi possível localizar bairro/cidade (sem precisão de rua)
+        ERRO_CEP_INVALIDO  -> não foi possível localizar o endereço em nenhuma fonte;
+                              nesse caso lat/lon vêm como None (NUNCA mais retorna uma
+                              coordenada fixa "chumbada" para mascarar o erro).
     """
     clean_cep = ''.join(filter(str.isdigit, str(cep or "")))
     chave = _chave_cache(rua, numero, bairro, cep, cidade, uf)
@@ -149,7 +157,7 @@ async def geocode_async(client: httpx.AsyncClient, rua: str = "", numero: str = 
         except Exception:
             pass
 
-    # 2) Endereço completo com Cidade/UF garantidos via Nominatim
+    # 2) Endereço completo com Cidade/UF garantidos via Nominatim -> match de rua exata
     if rua and numero:
         partes = [f"{rua}, {numero}", bairro, cidade_resolvida, uf_resolvida, "Brasil"]
         query = ", ".join([p for p in partes if p])
@@ -163,11 +171,14 @@ async def geocode_async(client: httpx.AsyncClient, rua: str = "", numero: str = 
             data = res.json()
             if data:
                 resultado = (float(data[0]['lat']), float(data[0]['lon']),
-                             cidade_resolvida or "Centro", uf_resolvida or "BR", clean_cep, bairro)
+                             cidade_resolvida or "Centro", uf_resolvida or "BR", clean_cep, bairro,
+                             "VALIDO")
         except Exception:
             pass
 
-    # 3) CEP via BrasilAPI (fallback se o Nominatim não achar o número exato)
+    # 3) CEP via BrasilAPI v2 (fallback se o Nominatim não achar o número exato)
+    #    Quando a BrasilAPI devolve coordenadas, elas já são no nível do CEP/logradouro
+    #    (precisão suficiente para tratar como VALIDO).
     if resultado is None and len(clean_cep) == 8:
         async with _brasilapi_semaforo:
             try:
@@ -178,30 +189,36 @@ async def geocode_async(client: httpx.AsyncClient, rua: str = "", numero: str = 
                     lat, lon = loc.get("latitude"), loc.get("longitude")
                     if lat and lon:
                         resultado = (float(lat), float(lon), data.get("city", cidade_resolvida),
-                                     data.get("state", uf_resolvida), clean_cep, data.get("neighborhood", bairro))
+                                     data.get("state", uf_resolvida), clean_cep, data.get("neighborhood", bairro),
+                                     "VALIDO")
             except Exception:
                 pass
 
-    # 4) Fallback: bairro/cidade via Nominatim
+    # 4) Fallback: bairro/cidade via Nominatim (não localizou a rua/CEP exato,
+    #    então isso é uma aproximação por região, não a posição real do endereço)
     if resultado is None:
-        query = ", ".join([p for p in [bairro, cidade_resolvida, uf_resolvida, "Brasil"] if p]) or "São Paulo, Brasil"
-        try:
-            await _respeitar_rate_limit_nominatim()
-            res = await client.get(
-                "https://nominatim.openstreetmap.org/search",
-                params={"format": "json", "q": query, "limit": 1},
-                headers=headers, timeout=4,
-            )
-            data = res.json()
-            if data:
-                resultado = (float(data[0]['lat']), float(data[0]['lon']),
-                             cidade_resolvida or "Centro", uf_resolvida or "BR", clean_cep, bairro)
-        except Exception:
-            pass
+        query = ", ".join([p for p in [bairro, cidade_resolvida, uf_resolvida, "Brasil"] if p])
+        if query:
+            try:
+                await _respeitar_rate_limit_nominatim()
+                res = await client.get(
+                    "https://nominatim.openstreetmap.org/search",
+                    params={"format": "json", "q": query, "limit": 1},
+                    headers=headers, timeout=4,
+                )
+                data = res.json()
+                if data:
+                    resultado = (float(data[0]['lat']), float(data[0]['lon']),
+                                 cidade_resolvida or "Centro", uf_resolvida or "BR", clean_cep, bairro,
+                                 "ALERTA_APROXIMADO")
+            except Exception:
+                pass
 
-    # 5) Fallback final de segurança
+    # 5) Nenhuma fonte conseguiu localizar o endereço/CEP: sinaliza erro explícito
+    #    em vez de inventar uma coordenada (era aqui que caía no centro de SP).
     if resultado is None:
-        resultado = (-23.5614, -46.6559, cidade_resolvida or "Origem", uf_resolvida or "SP", clean_cep, bairro)
+        resultado = (None, None, cidade_resolvida, uf_resolvida, clean_cep, bairro,
+                     "ERRO_CEP_INVALIDO")
 
     _GEOCODE_CACHE_MEMORIA[chave] = resultado
     await database.cache_set(chave, resultado)
@@ -213,7 +230,7 @@ async def geocodificar_lote(pedidos_raw: List[Dict[str, Any]]) -> Dict[str, tupl
     Geocodifica uma lista de pedidos de forma otimizada:
     - Deduplica endereços idênticos (ex: 2 pedidos no mesmo prédio geocodificam 1x só).
     - Roda em paralelo o que der (BrasilAPI, cache), respeitando o rate-limit do Nominatim.
-    Retorna um dicionário {chave_do_endereco: (lat, lon, cidade, uf, cep, bairro)}.
+    Retorna um dicionário {chave_do_endereco: (lat, lon, cidade, uf, cep, bairro, status)}.
     """
     enderecos_unicos = {}
     for p in pedidos_raw:
@@ -272,72 +289,53 @@ async def _buscar_ceps_reais_banco(lat: float, lon: float, raio_km: float):
 
 @app.post("/api/cobertura-ceps")
 async def gerar_cobertura_ceps_instantanea(req: RaioCepRequest):
-    # Usando o async original para não travar
     async with httpx.AsyncClient() as client:
-        lat, lon, cidade, uf, clean_cep, bairro = await geocode_async(
+        lat, lon, cidade, uf, clean_cep, bairro, status_hub = await geocode_async(
             client, req.origem_rua, req.origem_num, req.origem_bairro or "", req.origem_cep or "", req.origem_cidade or "", req.origem_uf or ""
         )
 
-    clean_cep = str(clean_cep).replace("-", "").strip().zfill(8)
+    # Sem coordenada real da loja/hub não há como calcular raio nenhum — em vez de
+    # cair num fallback silencioso, avisamos o operador explicitamente (Etapa 2).
+    if status_hub == "ERRO_CEP_INVALIDO" or lat is None or lon is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Não foi possível localizar o endereço/CEP informado para a loja "
+                "(BrasilAPI, ViaCEP e Nominatim não retornaram nenhum resultado). "
+                "Verifique o CEP e o endereço digitados."
+            ),
+        )
+
+    clean_cep = str(clean_cep or "").replace("-", "").strip().zfill(8)
     ibge_base = ESTADOS_IBGE_BRASIL.get(uf, {}).get("ibge", 3550308 if uf == "SP" else 2304400)
 
-    prefixo_5 = clean_cep[:5] if len(clean_cep) == 8 else "01310"
-    prefixo_num = int(prefixo_5)
-
     raio_max = req.raio_km or 30.0
-    
-    # 1. TENTA BUSCAR DADOS REAIS DO BANCO
-    ceps_reais = await _buscar_ceps_reais_banco(lat, lon, raio_max)
-    pontos_cobertos = []
 
-    if ceps_reais and len(ceps_reais) > 0:
-        pontos_cobertos = ceps_reais
-    else:
-        # 2. FALLBACK: Malha matemática (mantendo seu código 100% original aqui)
-        pontos_cobertos.append({
-            "ibge": ibge_base, "uf": uf or "SP", "cidade": cidade or "Sede do Hub",
-            "bairro": "Centro / Sede Operacional", "cep_inicial": f"{prefixo_5}000",
-            "cep_final": f"{prefixo_5}999", "distancia_km": 0.0, "dias_sla": 1,
-            "lat": lat, "lon": lon
-        })
-
-        direcoes = [
-            ("Norte", 0), ("Nordeste", 45), ("Leste", 90), ("Sudeste", 135),
-            ("Sul", 180), ("Sudoeste", 225), ("Oeste", 270), ("Noroeste", 315)
-        ]
-        distancias = [3.5, 7.0, 12.0, 18.0, 24.0, 30.0]
-
-        for d_km in distancias:
-            if d_km > raio_max:
-                continue
-            delta_lat = d_km / 111.0
-            
-            for dir_idx, (nome_dir, ang_graus) in enumerate(direcoes):
-                rad = math.radians(ang_graus)
-                p_lat = lat + (delta_lat * math.cos(rad))
-                p_lon = lon + (delta_lat * math.sin(rad) / max(0.1, math.cos(math.radians(lat))))
-                
-                dist_real = haversine_distance((lat, lon), (p_lat, p_lon))
-                offset_prefixo = int((dir_idx + 1) * 10 + (d_km * 2))
-                novo_prefixo = str(max(100, prefixo_num + offset_prefixo)).zfill(5)
-                
-                pontos_cobertos.append({
-                    "ibge": ibge_base, "uf": uf or "SP", "cidade": cidade or "Região Metropolitana",
-                    "bairro": f"Setor {nome_dir} ({d_km} km)", "cep_inicial": f"{novo_prefixo}000",
-                    "cep_final": f"{novo_prefixo}999", "distancia_km": round(dist_real, 2),
-                    "dias_sla": 1 if dist_real <= 12 else 2, "lat": p_lat, "lon": p_lon
-                })
-
+    # Busca a cobertura real de CEPs cadastrados (tabela ceps_reais) dentro do raio.
+    # O gerador sintético de 48 pontos radiais foi removido: se não houver dados
+    # reais cadastrados para essa região, devolvemos a lista vazia com um aviso
+    # explícito em vez de inventar CEPs fictícios.
+    pontos_cobertos = await _buscar_ceps_reais_banco(lat, lon, raio_max)
     pontos_cobertos.sort(key=lambda x: x["distancia_km"])
+
+    aviso = None
+    if not pontos_cobertos:
+        aviso = (
+            "Nenhuma faixa de CEP cadastrada foi encontrada dentro desse raio. "
+            "Cadastre as faixas de CEP reais dessa região (tabela ceps_reais) "
+            "para que a cobertura apareça aqui."
+        )
 
     return {
         "hub": {
             "lat": lat, "lon": lon, "cidade": cidade, "uf": uf, "cep": clean_cep,
-            "ibge": ibge_base, "endereco": f"{req.origem_rua}, {req.origem_num}"
+            "ibge": ibge_base, "endereco": f"{req.origem_rua}, {req.origem_num}",
+            "status": status_hub,
         },
         "raio_limite_km": raio_max,
         "total_pontos": len(pontos_cobertos),
-        "pontos_cobertos": pontos_cobertos
+        "pontos_cobertos": pontos_cobertos,
+        "aviso": aviso,
     }
 
 class ExportarXlsxRequest(BaseModel):
@@ -718,9 +716,20 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest"):
         # --- Etapa 1: geocodificar o Hub ---
         job["etapa"] = "Localizando a Loja Central..."
         async with httpx.AsyncClient() as client:
-            orig_lat, orig_lon, cidade_hub, uf_hub, cep_hub, _ = await geocode_async(
+            orig_lat, orig_lon, cidade_hub, uf_hub, cep_hub, _, status_hub = await geocode_async(
                 client, req.origem_rua, req.origem_num, req.origem_bairro or "", req.origem_cep or ""
             )
+
+        # Sem a coordenada real da loja não há como montar nenhuma rota — em vez de
+        # rotear silenciosamente a partir de um ponto fictício (centro de SP), a
+        # roteirização inteira falha aqui com uma mensagem clara para o operador.
+        if status_hub == "ERRO_CEP_INVALIDO" or orig_lat is None or orig_lon is None:
+            job["status"] = "erro"
+            job["erro"] = (
+                "Não foi possível localizar o endereço/CEP da loja central. "
+                "Verifique o CEP e o endereço informados e tente novamente."
+            )
+            return
 
         origem_dict = {"rua": req.origem_rua, "numero": req.origem_num, "lat": orig_lat, "lon": orig_lon}
 
@@ -735,6 +744,7 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest"):
         job["etapa"] = f"Endereços geocodificados ({total_pedidos}/{total_pedidos})."
 
         pedidos_geo = []
+        pedidos_sem_geocodificacao = []
         for idx, p in enumerate(req.pedidos):
             rua = p.get("Endereco") or p.get("rua") or ""
             num = str(p.get("Numero") or p.get("numero") or "")
@@ -745,11 +755,29 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest"):
             vol = p.get("Volume") or p.get("volume") or 1
 
             chave = _chave_cache(rua, numero=num, bairro=bairro, cep=cep, cidade=cidade_p, uf=uf_p)
-            p_lat, p_lon, _, _, _, _ = mapa_geocode.get(chave, (orig_lat, orig_lon, "", "", "", ""))
+            p_lat, p_lon, _, _, _, _, p_status = mapa_geocode.get(
+                chave, (None, None, "", "", "", "", "ERRO_CEP_INVALIDO")
+            )
+            pedido_id = p.get("id", idx + 1)
+
+            if p_status == "ERRO_CEP_INVALIDO" or p_lat is None or p_lon is None:
+                # Não inventa mais uma posição (ex: no Hub) para este pedido — ele
+                # sai do cálculo de rotas e volta destacado para o operador corrigir
+                # o endereço/CEP manualmente.
+                pedidos_sem_geocodificacao.append({
+                    "id": pedido_id, "Endereco": rua, "Numero": num, "Bairro": bairro,
+                    "CEP": cep, "Volume": vol,
+                    "motivo": "CEP/endereço não localizado em nenhuma fonte (BrasilAPI, ViaCEP, Nominatim)."
+                })
+                continue
 
             pedidos_geo.append({
-                "id": p.get("id", idx + 1), "Endereco": rua, "Numero": num, "Bairro": bairro,
-                "CEP": cep, "Volume": vol, "lat": p_lat, "lon": p_lon
+                "id": pedido_id, "Endereco": rua, "Numero": num, "Bairro": bairro,
+                "CEP": cep, "Volume": vol, "lat": p_lat, "lon": p_lon,
+                # ALERTA_APROXIMADO = só achou bairro/cidade (sem precisão de rua).
+                # O pedido continua sendo roteirizado normalmente, só fica marcado
+                # para o frontend destacar em amarelo no mapa/lista.
+                "geocode_status": p_status,
             })
 
         # --- Etapa 3: montar as viagens respeitando a CAPACIDADE REAL de cada veículo ---
@@ -829,12 +857,20 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest"):
             "total_pedidos": total_p, "total_veiculos": len(frota_usar),
             "total_rotas_viagens": len(rotas_resultado), "km_total": round(km_total_geral, 2),
             "custo_total": round(custo_total_geral, 2),
-            "custo_medio_pedido": round(custo_total_geral / max(total_p, 1), 2)
+            "custo_medio_pedido": round(custo_total_geral / max(total_p, 1), 2),
+            "total_pedidos_sem_geocodificacao": len(pedidos_sem_geocodificacao),
         }
 
         job["status"] = "concluido"
         job["etapa"] = "Concluído."
-        job["resultado"] = {"origem": origem_dict, "rotas": rotas_resultado, "kpis": kpis}
+        job["resultado"] = {
+            "origem": origem_dict,
+            "rotas": rotas_resultado,
+            "kpis": kpis,
+            # Pedidos com CEP/endereço não localizado: ficam de fora das rotas
+            # calculadas acima e voltam aqui para o operador ver e corrigir.
+            "pedidos_sem_geocodificacao": pedidos_sem_geocodificacao,
+        }
 
     except Exception as e:
         job["status"] = "erro"

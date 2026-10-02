@@ -37,11 +37,20 @@ def _normalizar_dsn(url: str) -> str:
     if url and url.startswith("postgres://"):
         return url.replace("postgres://", "postgresql://", 1)
     return url
+
+
+def _url_sqlalchemy(url: str) -> str:
+    """Explicita o driver psycopg2 (o SQLAlchemy 2.1+ usaria psycopg v3 por padrão). O asyncpg segue com a URL sem sufixo."""
+    if url and url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+psycopg2://", 1)
+    return url
+
+
 # Normaliza a URL principal do banco de dados
 URL_NORMALIZADA = _normalizar_dsn(DATABASE_URL)
 
 # --- Configuração SQLAlchemy (Síncrono para ORM / Auth) ---
-url_sqlalchemy = URL_NORMALIZADA if URL_NORMALIZADA else "sqlite:///./sql_app.db"
+url_sqlalchemy = _url_sqlalchemy(URL_NORMALIZADA) if URL_NORMALIZADA else "sqlite:///./sql_app.db"
 
 connect_args = {"check_same_thread": False} if url_sqlalchemy.startswith("sqlite") else {}
 

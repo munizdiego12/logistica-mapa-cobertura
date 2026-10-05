@@ -25,6 +25,7 @@ except ImportError:
 
 # Importa as configurações globais
 from config import DATABASE_URL as CONFIG_DATABASE_URL
+from faixas_cep import SCHEMA_CEPS_REAIS, INDICE_UNICO_CEPS_REAIS
 
 # Obtém a URL vinda de config.py ou direto do os.environ
 DATABASE_URL = CONFIG_DATABASE_URL or os.environ.get("DATABASE_URL", "")
@@ -117,6 +118,15 @@ async def init_db():
         )
         await conn.execute("ALTER TABLE geocode_cache ALTER COLUMN lat DROP NOT NULL")
         await conn.execute("ALTER TABLE geocode_cache ALTER COLUMN lon DROP NOT NULL")
+
+        # Faixas de CEP usadas na cobertura por raio. Os dados entram por
+        # scripts/carregar_faixas.py (upsert); aqui só garantimos que a tabela existe.
+        for comando in SCHEMA_CEPS_REAIS:
+            await conn.execute(comando)
+        try:
+            await conn.execute(INDICE_UNICO_CEPS_REAIS)
+        except Exception as e:
+            print(f"[database] Índice único de ceps_reais não criado (faixas duplicadas?): {e}")
     print("[database] Cache de geocodificação persistente (Postgres) pronto.")
 
 

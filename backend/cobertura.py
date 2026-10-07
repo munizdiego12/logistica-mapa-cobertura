@@ -1,6 +1,6 @@
 """
-Regras da cobertura por raio (Etapa 2b, passo 3): classificação Total/Parcial, formatação do bairro e
-junção das duas fontes (prefixos do CNEFE e faixas manuais).
+Regras da cobertura por raio: classificação Total/Parcial e formatação dos pontos a partir dos
+prefixos de CEP do CNEFE (tabela cep_prefixos).
 
 Módulo puro (sem banco nem rede): o SQL fica em database.py e as decisões ficam aqui, para serem testadas.
 Não importa nada de `backend.*` porque o app roda com o diretório backend/ na raiz do path.
@@ -13,15 +13,12 @@ ATRIBUICAO_CNEFE = f"Fonte: {FONTE_CNEFE}"
 
 LEGENDA_COBERTURA = (
     "Cobertura — Total: pelo menos 90% dos endereços do prefixo de CEP ficam dentro do raio; "
-    "Parcial: parte relevante do prefixo pode ficar fora do raio (inclui faixas cadastradas "
-    "manualmente, sem medida de dispersão)."
+    "Parcial: parte relevante do prefixo pode ficar fora do raio. "
+    "Distância (Raio X km): em linha reta entre o hub e o centro do prefixo de CEP, não por estrada."
 )
 
 TOTAL = "Total"
 PARCIAL = "Parcial"
-
-PRECISAO_PREFIXO = "prefixo"
-PRECISAO_FAIXA = "faixa"
 
 # Acima desse prazo em km o SLA passa de 1 para 2 dias (mesmo corte no backend e no CSV do frontend).
 LIMITE_PRAZO_1_DIA_KM = 12.0
@@ -93,34 +90,19 @@ def montar_ponto_prefixo(linha: dict, raio_km: float) -> dict:
         "lat": float(linha["lat"]),
         "lon": float(linha["lon"]),
         "cobertura": classificar_cobertura(distancia, dispersao, raio_km),
-        "precisao": PRECISAO_PREFIXO,
     }
 
 
-def marcar_ponto_faixa(ponto: dict) -> dict:
-    """Linha de ceps_reais (faixa manual): sem dispersão não dá para garantir Total, então é sempre Parcial."""
-    return {**ponto, "cobertura": PARCIAL, "precisao": PRECISAO_FAIXA, "bairro_aproximado": False}
-
-
-def combinar_cobertura(prefixos: list, faixas: list, ufs_com_prefixos, raio_km: float) -> list:
-    """
-    Junta as duas fontes ordenando por distância. As faixas manuais só entram para UFs que ainda
-    não têm nenhum prefixo carregado (evita contar a mesma região duas vezes e mantém, por exemplo,
-    o Entorno do DF em GO enquanto GO não for carregado).
-    """
-    ufs = set(ufs_com_prefixos)
+def montar_cobertura(prefixos: list, raio_km: float) -> list:
+    """Pontos de cobertura (um por prefixo de CEP dentro do raio), ordenados por distância."""
     pontos = [montar_ponto_prefixo(p, raio_km) for p in prefixos]
-    pontos += [marcar_ponto_faixa(f) for f in faixas if f.get("uf") not in ufs]
     pontos.sort(key=lambda p: p["distancia_km"])
     return pontos
 
 
 def resumir_cobertura(pontos: list) -> dict:
-    """Contagens para o painel e a exportação, e se algum ponto veio do CNEFE (exige a atribuição)."""
-    total = sum(1 for p in pontos if p.get("cobertura") == TOTAL)
-    parcial = sum(1 for p in pontos if p.get("cobertura") == PARCIAL)
+    """Contagens de Total e Parcial para o painel."""
     return {
-        "total": total,
-        "parcial": parcial,
-        "usa_cnefe": any(p.get("precisao") == PRECISAO_PREFIXO for p in pontos),
+        "total": sum(1 for p in pontos if p.get("cobertura") == TOTAL),
+        "parcial": sum(1 for p in pontos if p.get("cobertura") == PARCIAL),
     }

@@ -18,11 +18,12 @@ Marque `[x]` conforme for concluindo. Um prompt por vez. Depois de cada um: revi
 - [x] Etapa 2b, fase 2 — Acre: CNEFE por prefixo de CEP gravado no Neon (45 prefixos)
 - [x] Etapa 2b, passos 1 e 2 — `localidade` (bairro), tabela de municípios do IBGE e código IBGE fixo corrigido
 - [x] Etapa 2b — municípios, faixas com `ibge`, AC e DF gravados no Neon (`cep_prefixos` 800 linhas, `ibge_municipios` 5.571)
+- [x] **Etapa 2b concluída** — CEPs do Brasil inteiro (IBGE/CNEFE): 27 UFs, ~24,6 mil prefixos, ~4 MB no Neon; cobertura por prefixo com Total/Parcial validada no site; faixas manuais e fallback removidos
 - [x] Limpezas: requirements em UTF-8, senhas fora do código, código morto removido, CLAUDE.md
 
 ---
 
-## 🔄 Etapa 2b — CEPs do Brasil inteiro (IBGE/CNEFE)
+## ✅ Etapa 2b — CEPs do Brasil inteiro (IBGE/CNEFE) — concluída
 
 - [x] **Registrar a fase 1 como validada**
 ```
@@ -34,7 +35,7 @@ Atualize docs/STATUS_E_PLANO_ATUALIZADO.md marcando a fase 1 da Etapa 2b como va
 Execute a fase 2, só com o Acre: script offline que baixa o CNEFE do AC, calcula a mediana por prefixo de 5 dígitos (com n_enderecos e dispersão) e grava com upsert no banco apontado pela variável DATABASE_URL, sem gravar a string em arquivo. Rode primeiro em um SQLite local e me mostre o resultado. Só grave no Neon depois que eu confirmar.
 ```
   Depois de confirmar: no PowerShell, defina `$env:DATABASE_URL`, rode o comando que o Claude Code indicar e confira o tamanho no Neon.
-  - [ ] Conferir o tamanho de `cep_prefixos` no Neon (`pg_total_relation_size`).
+  - [x] Conferir o tamanho de `cep_prefixos` no Neon (`pg_total_relation_size`): ~4 MB com as 27 UFs.
 
 - [x] **Fase 2b, passos 1 e 2 — `localidade`, municípios do IBGE, código IBGE** (feito no código; testes passando)
 - [x] **Gravar no Neon: municípios, faixas (agora com `ibge`), AC (agora com `localidade`) e DF.** No PowerShell, na raiz do projeto (a string do banco só na sessão, nunca em arquivo ou no chat):
@@ -56,16 +57,18 @@ Remove-Item Env:DATABASE_URL
 ```
 - [x] **Validar o passo 3 no site:** Av. Paulista (24, todas "Parcial", sem fonte), Praça dos Três Poderes (682: 649 Total, 33 Parcial, com fonte), Florianópolis com aviso, XLSX com a coluna "Cobertura" por último e a aba "Cobertura e fonte".
 - [ ] **Testar a importação do XLSX na transportadora** — antes do primeiro uso real (o sistema ainda está em produção sem uso real).
+- [x] **Investigar os 3 prefixos de fronteira descartados** (PB 59225 legítimo mas sem efeito prático; MA 68527 inconsistente; BA 49117 erro de digitação): regra de descarte mantida, sem carga adicional. Detalhes no STATUS.
+- [x] **Legenda do XLSX** diz que a distância (Raio X km) é em linha reta entre o hub e o centro do prefixo, não por estrada.
 - [x] **Mensagens de tela sem termos técnicos** (aviso de região sem cobertura em linguagem do operador; sem nome de tabela, script, arquivo, API ou serviço nas mensagens da cobertura).
 
 - [x] **Preparar a carga do Brasil inteiro** (script pronto e testado com SP, a maior UF: 22,95 milhões de endereços, pico de memória de 571 MB, 201 s; apaga o download de cada UF; para sozinho se a tabela passar de 100 MB)
-- [ ] **Repetir o SP no Neon** (a 1ª tentativa falhou ao gravar: conexão ociosa derrubada pelo Neon; já corrigido, a conexão agora só abre para gravar e reconecta até 3 vezes). Mesmo procedimento, só com o SP (o arquivo baixado foi guardado):
+- [x] **Repetir o SP no Neon** (a 1ª tentativa falhou ao gravar: conexão ociosa derrubada pelo Neon; já corrigido, a conexão agora só abre para gravar e reconecta até 3 vezes). Mesmo procedimento, só com o SP (o arquivo baixado foi guardado):
 ```
 $env:DATABASE_URL = "<string do Neon>"
 python scripts/carregar_cnefe.py --uf SP
 Remove-Item Env:DATABASE_URL
 ```
-- [ ] **Rodar a carga do Brasil inteiro no Neon, uma UF por vez** *(as UFs menores já foram gravadas na 1ª execução; confira com `scripts/conferir_cobertura.py`, que lista as UFs com prefixos no banco)* (as maiores são SP ~1 GB, MG, BA e RJ; estimativa de ~4 MB no banco). No PowerShell, na raiz do projeto (a string do banco só na sessão, nunca em arquivo ou no chat):
+- [x] **Rodar a carga do Brasil inteiro no Neon, uma UF por vez** (concluída: 27 UFs) *(as UFs menores já foram gravadas na 1ª execução; confira com `scripts/conferir_cobertura.py`, que lista as UFs com prefixos no banco)* (as maiores são SP ~1 GB, MG, BA e RJ; estimativa de ~4 MB no banco). No PowerShell, na raiz do projeto (a string do banco só na sessão, nunca em arquivo ou no chat):
 ```
 $env:DATABASE_URL = "<string do Neon>"
 python scripts/carregar_cnefe.py --todas --pular AC DF
@@ -77,13 +80,13 @@ Remove-Item Env:DATABASE_URL
 O Acre foi validado. Rode o Brasil inteiro, uma UF de cada vez, medindo o tamanho da tabela no banco ao final de cada UF. Pare e me avise se passar de 100 MB no total. Faça commit sem push.
 ```
 
-- [ ] **Fase 3 — completar com a BrasilAPI e usar o IBGE por município como último recurso**
+- [x] **Fase 3 — completar com a BrasilAPI e usar o IBGE por município como último recurso** *(código IBGE fixo corrigido e tabela de municípios feitos; BrasilAPI sob demanda e centroides de município **não foram necessários** com a base nacional completa: ficam como melhoria futura)*
 ```
 Execute a fase 3 do plano da Etapa 2b: completar CEPs ausentes com a BrasilAPI v2 sob demanda, gravando no cache com precisao='brasilapi', e usar os centroides de município do IBGE como último recurso. Corrija também o código IBGE fixo (3550308) em database.py. Sem push.
 ```
   *(O código IBGE fixo já foi corrigido nos passos 1 e 2; a tabela de municípios do IBGE também já existe.)*
 
-- [ ] **Fase 4 — limpeza e atribuição**
+- [x] **Fase 4 — limpeza e atribuição** *(concluída: faixas manuais, `ceps_reais` no app, `faixas_cep.py`, `carregar_faixas.py` e o CSV removidos; atribuição "Fonte: IBGE, CNEFE 2022" na aba "Cobertura e fonte" e na tela. A tabela `ceps_reais` segue no Neon, sem uso, e pode ser apagada quando quiser.)*
 ```
 Execute a fase 4: remova as faixas manuais que o CNEFE já cobre, e coloque "Fonte: IBGE, CNEFE 2022" nas exportações. Atualize o STATUS. Sem push.
 ```

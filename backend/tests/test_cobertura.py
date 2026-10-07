@@ -7,8 +7,8 @@ from backend.cobertura import (
     TOTAL,
     caixa_do_raio,
     classificar_cobertura,
-    combinar_cobertura,
     formatar_titulo,
+    montar_cobertura,
     montar_ponto_prefixo,
     resumir_cobertura,
 )
@@ -21,16 +21,6 @@ def _prefixo(**kw):
         "prefixo": "70254", "uf": "DF", "cod_municipio": 5300108, "cidade": "Brasília",
         "localidade": "ASA SUL", "localidade_pct": 100.0, "lat": -15.8198, "lon": -47.9012,
         "n_enderecos": 398, "dispersao_km": 0.14, "distancia_km": 3.0,
-    }
-    base.update(kw)
-    return base
-
-
-def _faixa(**kw):
-    base = {
-        "ibge": 5212501, "uf": "GO", "cidade": "Luziânia", "bairro": "Entorno DF",
-        "cep_inicial": "72800000", "cep_final": "72899999", "faixa_completa": "72800-000 a 72899-999",
-        "distancia_km": 25.0, "dias_sla": 2, "lat": -16.25, "lon": -47.95,
     }
     base.update(kw)
     return base
@@ -69,7 +59,7 @@ def test_ponto_do_prefixo_tem_faixa_000_a_999_cobertura_e_prazo_de_12_km():
     assert ponto["faixa_completa"] == "70254-000 a 70254-999"
     assert ponto["bairro"] == "Asa Sul" and ponto["bairro_aproximado"] is False
     assert ponto["cidade"] == "Brasília" and ponto["ibge"] == 5300108
-    assert ponto["cobertura"] == TOTAL and ponto["precisao"] == "prefixo" and ponto["dias_sla"] == 1
+    assert ponto["cobertura"] == TOTAL and ponto["dias_sla"] == 1
     assert montar_ponto_prefixo(_prefixo(distancia_km=12.0), 30.0)["dias_sla"] == 1
     assert montar_ponto_prefixo(_prefixo(distancia_km=12.01), 30.0)["dias_sla"] == 2
 
@@ -83,46 +73,45 @@ def test_bairro_aproximado_quando_a_localidade_nao_representa_o_prefixo():
     assert sem_nome["bairro"] == "" and sem_nome["bairro_aproximado"] is False
 
 
-def test_faixas_de_uf_com_prefixos_sao_descartadas_e_de_uf_sem_prefixos_entram_como_parcial():
-    prefixos = [_prefixo(distancia_km=3.0), _prefixo(prefixo="72019", distancia_km=20.0, dispersao_km=15.0)]
-    faixas = [
-        _faixa(uf="DF", cidade="Brasília", distancia_km=1.0),  # DF já tem prefixos: descartada
-        _faixa(uf="GO", distancia_km=25.0),                    # GO não tem: entra
-    ]
-    pontos = combinar_cobertura(prefixos, faixas, {"DF", "AC"}, 30.0)
-    assert [p["distancia_km"] for p in pontos] == [3.0, 20.0, 25.0]  # ordenado por distância
-    assert [p["cobertura"] for p in pontos] == [TOTAL, PARCIAL, PARCIAL]
-    assert [p["precisao"] for p in pontos] == ["prefixo", "prefixo", "faixa"]
-    assert not any(p["uf"] == "DF" and p["precisao"] == "faixa" for p in pontos)
-
-
-def test_uf_sem_nenhum_prefixo_usa_so_as_faixas_e_todas_sao_parciais():
-    faixas = [_faixa(uf="SP", cidade="São Paulo", distancia_km=d) for d in (1.0, 5.0)]
-    pontos = combinar_cobertura([], faixas, {"AC", "DF"}, 30.0)
-    assert len(pontos) == 2 and {p["cobertura"] for p in pontos} == {PARCIAL}
-    assert resumir_cobertura(pontos) == {"total": 0, "parcial": 2, "usa_cnefe": False}
+def test_montar_cobertura_ordena_por_distancia_e_classifica_cada_prefixo():
+    pontos = montar_cobertura([
+        _prefixo(prefixo="72019", distancia_km=20.0, dispersao_km=15.0),
+        _prefixo(prefixo="70254", distancia_km=3.0),
+        _prefixo(prefixo="73350", distancia_km=29.0, dispersao_km=0.5),
+    ], 30.0)
+    assert [p["distancia_km"] for p in pontos] == [3.0, 20.0, 29.0]
+    assert [p["cobertura"] for p in pontos] == [TOTAL, PARCIAL, TOTAL]
 
 
 def test_regiao_sem_dados_devolve_lista_vazia():
-    assert combinar_cobertura([], [], {"AC", "DF"}, 30.0) == []
-    assert resumir_cobertura([]) == {"total": 0, "parcial": 0, "usa_cnefe": False}
+    assert montar_cobertura([], 30.0) == []
+    assert resumir_cobertura([]) == {"total": 0, "parcial": 0}
 
 
-def test_resumo_conta_total_parcial_e_detecta_uso_do_cnefe():
-    pontos = combinar_cobertura(
-        [_prefixo(distancia_km=3.0), _prefixo(prefixo="72019", distancia_km=29.0, dispersao_km=5.0)], [], {"DF"}, 30.0)
-    assert resumir_cobertura(pontos) == {"total": 1, "parcial": 1, "usa_cnefe": True}
+def test_resumo_conta_total_e_parcial():
+    pontos = montar_cobertura([_prefixo(distancia_km=3.0), _prefixo(prefixo="72019", distancia_km=29.0, dispersao_km=5.0)], 30.0)
+    assert resumir_cobertura(pontos) == {"total": 1, "parcial": 1}
 
 
-def test_legenda_e_atribuicao():
+def test_legenda_de_uma_linha_com_total_parcial_e_a_nota_da_distancia_em_linha_reta():
+    legenda = cobertura.LEGENDA_COBERTURA
+    assert "\n" not in legenda  # uma linha só
+    assert "Total" in legenda and "Parcial" in legenda
+    assert "Raio X km" in legenda and "linha reta" in legenda and "não por estrada" in legenda
+    assert "centro do prefixo" in legenda and "hub" in legenda
     assert cobertura.ATRIBUICAO_CNEFE == "Fonte: IBGE, CNEFE 2022"
-    assert "\n" not in cobertura.LEGENDA_COBERTURA  # uma linha só
-    assert "Total" in cobertura.LEGENDA_COBERTURA and "Parcial" in cobertura.LEGENDA_COBERTURA
 
 
 def test_consulta_de_prefixos_filtra_por_caixa_e_nao_tem_comando_destrutivo():
     texto = (RAIZ / "backend" / "database.py").read_text(encoding="utf-8")
     inicio = texto.index("async def consultar_prefixos_por_raio")
-    trecho = texto[inicio:texto.index("async def consultar_ceps_por_raio")]
+    trecho = texto[inicio:texto.index("# --- Modelos ORM do SQLAlchemy ---")]
     assert "BETWEEN $4 AND $5" in trecho and "BETWEEN $6 AND $7" in trecho
     assert not re.search(r"\b(DROP|TRUNCATE|DELETE|UPDATE|INSERT)\b", trecho, re.IGNORECASE)
+
+
+def test_o_app_nao_depende_mais_das_faixas_manuais():
+    for arquivo in ("main.py", "database.py", "cobertura.py"):
+        texto = (RAIZ / "backend" / arquivo).read_text(encoding="utf-8")
+        for termo in ("ceps_reais", "faixas_cep", "consultar_ceps_por_raio", "ufs_com_prefixos", "combinar_cobertura"):
+            assert termo not in texto, f"{termo} ainda aparece em {arquivo}"

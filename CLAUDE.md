@@ -16,7 +16,7 @@ Contexto detalhado: `docs/MEMORIA_PROJETO_roteirizacao.md` (regras e decisões) 
 
 - **Frontend:** React (Vite) + Tailwind + React-Leaflet, hospedado na Vercel.
 - **Backend:** FastAPI (Python), hospedado no Render (plano free). `backend/main.py` é o ponto de entrada.
-- **Banco:** PostgreSQL (SQLAlchemy). O do Render expira; migração para Neon (gratuito) é a Etapa 0. Adotar Alembic antes de novas tabelas.
+- **Banco:** PostgreSQL (SQLAlchemy) no Neon (gratuito; o do Render expirava). Pendentes da Etapa 0: backup automático (GitHub Actions) e Alembic, que deve ser adotado antes de novas tabelas.
 - **Roteamento viário:** OSRM. **Solver VRP:** OR-Tools, síncrono dentro do FastAPI.
 - **Geocodificação:** BrasilAPI v2 (primária) + ViaCEP (validação cruzada) + Nominatim, com cache em Postgres.
 - **Auth:** JWT + bcrypt; registro exige `codigo_convite` (`OPERATOR_INVITE_CODE`). Env vars: `DATABASE_URL`, `JWT_SECRET_KEY`, `OPERATOR_INVITE_CODE`; frontend: `VITE_API_URL`.
@@ -28,7 +28,7 @@ Contexto detalhado: `docs/MEMORIA_PROJETO_roteirizacao.md` (regras e decisões) 
 - **Motoristas:** cadastro próprio (nome + tipo de veículo), até 3 turnos/dia (manhã, tarde, noite).
 - **Capacidade:** varia por loja; combina peso + volume (o que estourar primeiro).
 - **Limite de km por rota/dia:** não interfere no VRP; conferência pós-cálculo com aviso e taxa extra à loja.
-- **Precificação por CEP:** função separada da roteirização, botão "Raio Xkm" (padrão 30 km, configurável). **Nunca** usar fallback sintético: CEP não geolocalizado é informado explicitamente. Cache em Postgres como base de cobertura viva. Faixas manuais em `scripts/data/faixas_cep.csv`, carregadas só por `scripts/carregar_faixas.py` (upsert; nunca `DROP`/`TRUNCATE` em `ceps_reais`). Nenhum script pode ter URL/senha de banco no código: usar `DATABASE_URL`.
+- **Precificação por CEP:** função separada da roteirização, botão "Raio Xkm" (padrão 30 km, configurável). **Nunca** usar fallback sintético: CEP não geolocalizado é informado explicitamente. A cobertura vem **só** da tabela `cep_prefixos` (CNEFE 2022 do IBGE, um registro por prefixo de CEP de 5 dígitos, 27 UFs, ~24,6 mil linhas, ~4 MB), carregada por `scripts/carregar_cnefe.py` (uma UF por vez, upsert, apaga o download, para se a tabela passar de 100 MB; nunca `DROP`/`TRUNCATE`). Municípios do IBGE em `ibge_municipios` (`scripts/carregar_municipios.py`). A distância do "Raio X km" é em linha reta entre o hub e o centro do prefixo, não por estrada, e a legenda diz isso. Não há mais faixas manuais nem fallback: região sem prefixos mostra o aviso de região sem cobertura. Mensagens de tela não citam tabela, script, arquivo, API nem nome de serviço. Nenhum script pode ter URL/senha de banco no código: usar `DATABASE_URL`.
 - **VRP:** sugere agrupamento automático respeitando capacidade; operador valida/ajusta. Região = 8 setores cardeais por azimute loja→pedido (Bairro só para exibição). Uma rota pode cobrir vários setores no mesmo turno. Motorista não repete a mesma região em turnos diferentes no mesmo dia. Excedeu capacidade → múltiplas viagens (setores opostos), com retorno à loja.
 - **Tempo da rota:** tempo OSRM + (tempo médio de parada, padrão 10 min × paradas). Exibir distância entre paradas consecutivas. Falha de geocodificação de pedido: "Erro ao tentar encontrar endereço do pedido".
 - **Janelas de entrega:** Manhã 08–13h, Tarde 13–18h, Noite 18–21h (configuráveis por loja). Validação é só relatório informativo pós-cálculo, sem alterar o agrupamento. Turno escolhido manualmente pelo operador.
@@ -42,17 +42,16 @@ Contexto detalhado: `docs/MEMORIA_PROJETO_roteirizacao.md` (regras e decisões) 
 
 ## Ordem das etapas
 
-Feitas: **1** Autenticação; **2** CEP/raio sem fallback sintético; **2b, fase 1** faixas de CEP unificadas (`scripts/carregar_faixas.py`, upsert sem DROP); **2b, fase 2 (parcial)** CNEFE por prefixo de CEP (`scripts/carregar_cnefe.py`, tabela `cep_prefixos`, AC no Neon), tabela `ibge_municipios` (`scripts/carregar_municipios.py`) e código IBGE vindo de busca real, nunca fixo.
+Feitas: **1** Autenticação; **2** CEP/raio sem fallback sintético; **2b** Base nacional de CEP via CNEFE/IBGE, **concluída** (27 UFs, ~24,6 mil prefixos, ~4 MB no Neon; cobertura por prefixo com Total/Parcial validada no site; faixas manuais e fallback removidos; código IBGE vindo de busca real, nunca fixo). Pendência da 2b antes do primeiro uso real: testar a importação do XLSX (coluna "Cobertura" por último e aba "Cobertura e fonte") na transportadora; e confirmar o termo de uso do CNEFE antes de entregar tabelas a clientes.
 
 Ordem atual (a partir de agora):
 
-1. **Etapa 0** — Banco permanente (Neon) e **0b** — `requirements.txt` em UTF-8 (+ remover `correcoes_etapa1_auth.patch` da raiz).
-2. **Etapa 2b (restante)** — Base nacional de CEP via CNEFE/IBGE, nesta ordem: gravar municípios, `ibge`, AC e DF no Neon; **passo 3** (publicado e validado em produção; pendente: testar a importação do XLSX na transportadora antes do primeiro uso real) trocar a consulta de `ceps_reais` para `cep_prefixos` (filtro por caixa lat/lon, Total/Parcial pela dispersão, regra por UF com fallback para as faixas); carregar o Brasil inteiro uma UF por vez (script `scripts/carregar_cnefe.py --todas --pular AC DF` pronto; falta rodar no Neon); por fim aposentar as faixas manuais onde o CNEFE cobrir. **Exportação:** coluna "Cobertura" (Total/Parcial) mantendo os parciais, legenda de uma linha explicando Total e Parcial e a atribuição "Fonte: IBGE, CNEFE 2022" (no XLSX, na aba "Cobertura e fonte"). Detalhes em `docs/STATUS_E_PLANO_ATUALIZADO.md` e `docs/CHECKLIST_PROJETO.md`.
-3. Proteger rotas de negócio (`/upload`, `/otimizar`, `/cobertura-ceps`) com o token.
-4. **Etapa 3** — Cadastro de motoristas e veículos; **Etapa 4** — Lojas, hub no mapa, capacidade e janelas.
-5. **Etapa 6** — Seleção de pedidos por loja/data; depois **Etapa 5** — Conectores Sheets/BigQuery (aguardam schema).
-6. **Etapa 7** — VRP com OR-Tools, junto com **Etapa 8** — Controle de duplicidade.
-7. **Etapas 9** (matriz de despacho), **10** (relatórios de janela e km), **11** (histórico) e **12** (romaneio com novas colunas).
-8. Decidir o layout do frontend (mapa grande + painel retrátil de pedidos).
+1. **Etapa 0 (restante)** — backup automático (GitHub Actions) e Alembic; **0b** — remover `correcoes_etapa1_auth.patch` da raiz.
+2. Proteger rotas de negócio (`/upload`, `/otimizar`, `/cobertura-ceps`) com o token.
+3. **Etapa 3** — Cadastro de motoristas e veículos; **Etapa 4** — Lojas, hub no mapa, capacidade e janelas.
+4. **Etapa 6** — Seleção de pedidos por loja/data; depois **Etapa 5** — Conectores Sheets/BigQuery (aguardam schema).
+5. **Etapa 7** — VRP com OR-Tools, junto com **Etapa 8** — Controle de duplicidade.
+6. **Etapas 9** (matriz de despacho), **10** (relatórios de janela e km), **11** (histórico) e **12** (romaneio com novas colunas).
+7. Decidir o layout do frontend (mapa grande + painel retrátil de pedidos).
 
 Pendências externas: schema do BigQuery e queries pré-salvas; credenciais de BigQuery e Google Sheets; confirmar o termo de uso/atribuição do CNEFE com o IBGE.

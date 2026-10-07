@@ -11,7 +11,9 @@ scripts/carregar_cnefe.py. As funções de gravação recebem a conexão pronta.
 import numpy as np
 import pandas as pd
 
-from backend.faixas_cep import LAT_MAX, LAT_MIN, LON_MAX, LON_MIN
+# Caixa que contém o território brasileiro (inclui as ilhas oceânicas): descarta coordenadas fora do país.
+LAT_MIN, LAT_MAX = -34.0, 6.0
+LON_MIN, LON_MAX = -74.0, -28.0
 
 FONTE = "IBGE, CNEFE 2022"
 

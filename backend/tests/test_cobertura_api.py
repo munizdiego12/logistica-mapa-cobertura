@@ -19,14 +19,6 @@ def _prefixo(prefixo, distancia, dispersao, uf="DF", localidade="ASA SUL", pct=1
     }
 
 
-def _faixa(uf, cidade, distancia, ibge):
-    return {
-        "ibge": ibge, "uf": uf, "cidade": cidade, "bairro": "Sede", "cep_inicial": "72800000",
-        "cep_final": "72899999", "faixa_completa": "72800-000 a 72899-999", "distancia_km": distancia,
-        "dias_sla": 2, "lat": -16.25, "lon": -47.95,
-    }
-
-
 @pytest.fixture
 def cliente(monkeypatch):
     async def geocode_falso(client, *args, **kwargs):
@@ -40,65 +32,51 @@ def cliente(monkeypatch):
     return TestClient(main.app)
 
 
-def _simular_banco(monkeypatch, prefixos, ufs, faixas):
+def _simular_banco(monkeypatch, prefixos):
     async def _prefixos(lat, lon, raio):
         return prefixos
 
-    async def _ufs():
-        return ufs
-
-    async def _faixas(lat, lon, raio):
-        return faixas
-
     monkeypatch.setattr(main.database, "consultar_prefixos_por_raio", _prefixos)
-    monkeypatch.setattr(main.database, "ufs_com_prefixos", _ufs)
-    monkeypatch.setattr(main.database, "consultar_ceps_por_raio", _faixas)
 
 
-def test_hub_do_df_usa_prefixos_e_mantem_o_entorno_em_go_como_parcial(cliente, monkeypatch):
-    _simular_banco(
-        monkeypatch,
-        prefixos=[_prefixo("70254", 3.0, 0.14), _prefixo("72499", 20.0, 90.0, localidade="GAMA", pct=30.0)],
-        ufs={"DF", "AC"},
-        faixas=[_faixa("DF", "Brasília", 1.0, 5300108), _faixa("GO", "Luziânia", 25.0, 5212501)],
-    )
+def test_cobertura_vem_so_dos_prefixos_do_cnefe_com_total_parcial_legenda_e_fonte(cliente, monkeypatch):
+    _simular_banco(monkeypatch, [
+        _prefixo("72499", 20.0, 90.0, localidade="GAMA", pct=30.0),
+        _prefixo("70254", 3.0, 0.14),
+    ])
     r = cliente.post("/api/cobertura-ceps", json=REQ)
     assert r.status_code == 200
     d = r.json()
     assert d["hub"]["ibge"] == 5300108  # vem de ibge_municipios, não de valor fixo
-    assert d["total_pontos"] == 3 and d["aviso"] is None
-    assert [(p["uf"], p["cobertura"], p["precisao"]) for p in d["pontos_cobertos"]] == [
-        ("DF", "Total", "prefixo"), ("DF", "Parcial", "prefixo"), ("GO", "Parcial", "faixa")]
+    assert d["total_pontos"] == 2 and d["aviso"] is None
+    assert [(p["uf"], p["cobertura"]) for p in d["pontos_cobertos"]] == [("DF", "Total"), ("DF", "Parcial")]  # por distância
     assert d["pontos_cobertos"][1]["bairro"] == "Gama e outros"  # localidade com só 30% do prefixo
-    assert d["resumo_cobertura"] == {"total": 1, "parcial": 2, "usa_cnefe": True}
+    assert d["resumo_cobertura"] == {"total": 1, "parcial": 1}
     assert d["legenda_cobertura"] == LEGENDA_COBERTURA and d["fonte"] == ATRIBUICAO_CNEFE
 
 
-def test_hub_de_sp_sem_prefixos_continua_com_as_faixas_manuais(cliente, monkeypatch):
-    _simular_banco(monkeypatch, prefixos=[], ufs={"DF", "AC"},
-                   faixas=[_faixa("SP", "São Paulo", float(i), 3550308) for i in range(24)])
-    d = cliente.post("/api/cobertura-ceps", json=REQ).json()
-    assert d["total_pontos"] == 24 and d["aviso"] is None
-    assert {p["cobertura"] for p in d["pontos_cobertos"]} == {"Parcial"}
-    assert d["fonte"] is None  # sem dado do CNEFE, sem atribuição ao CNEFE
+def test_nao_consulta_mais_as_faixas_manuais(cliente, monkeypatch):
+    _simular_banco(monkeypatch, [_prefixo("70254", 3.0, 0.14)])
+    assert not hasattr(main.database, "consultar_ceps_por_raio")
+    assert not hasattr(main.database, "ufs_com_prefixos")
+    assert cliente.post("/api/cobertura-ceps", json=REQ).json()["total_pontos"] == 1
 
 
 def test_hub_sem_nenhuma_cobertura_devolve_aviso_como_florianopolis(cliente, monkeypatch):
-    _simular_banco(monkeypatch, prefixos=[], ufs={"DF", "AC"}, faixas=[])
+    _simular_banco(monkeypatch, [])
     d = cliente.post("/api/cobertura-ceps", json=REQ).json()
     assert d["total_pontos"] == 0 and d["pontos_cobertos"] == []
     assert d["aviso"] == (
         "Ainda não temos CEPs cadastrados para essa região. Confira o endereço da loja "
         "ou peça ao administrador do sistema para incluir a região."
     )
-    assert d["resumo_cobertura"] == {"total": 0, "parcial": 0, "usa_cnefe": False}
+    assert d["resumo_cobertura"] == {"total": 0, "parcial": 0} and d["fonte"] is None
 
 
 def test_falha_do_banco_vira_503_e_nao_o_aviso_de_sem_cobertura(cliente, monkeypatch):
     async def quebrado(*args):
         raise RuntimeError("banco de dados indisponível")
 
-    _simular_banco(monkeypatch, prefixos=[], ufs=set(), faixas=[])
     monkeypatch.setattr(main.database, "consultar_prefixos_por_raio", quebrado)
     r = cliente.post("/api/cobertura-ceps", json=REQ)
     assert r.status_code == 503
@@ -115,7 +93,7 @@ def test_mensagens_de_tela_da_cobertura_nao_citam_termos_tecnicos(cliente, monke
     mensagens = []
 
     # 1) aviso de região sem cobertura
-    _simular_banco(monkeypatch, prefixos=[], ufs={"DF"}, faixas=[])
+    _simular_banco(monkeypatch, [])
     mensagens.append(cliente.post("/api/cobertura-ceps", json=REQ).json()["aviso"])
 
     # 2) falha do banco (503)
@@ -140,10 +118,10 @@ def test_mensagens_de_tela_da_cobertura_nao_citam_termos_tecnicos(cliente, monke
             assert termo.lower() not in texto.lower(), f"termo técnico '{termo}' em: {texto}"
 
 
-def _ponto(cobertura, precisao="prefixo", ibge=5300108, bairro="Asa Sul"):
+def _ponto(cobertura, ibge=5300108, bairro="Asa Sul"):
     return {
         "ibge": ibge, "uf": "DF", "cidade": "Brasília", "bairro": bairro, "cep_inicial": "70254000",
-        "cep_final": "70254999", "distancia_km": 3.0, "dias_sla": 1, "cobertura": cobertura, "precisao": precisao,
+        "cep_final": "70254999", "distancia_km": 3.0, "dias_sla": 1, "cobertura": cobertura,
     }
 
 
@@ -154,7 +132,7 @@ def _xlsx(cliente, pontos):
 
 
 def test_xlsx_tem_coluna_cobertura_por_ultimo_mantem_parciais_e_aba_de_fonte(cliente):
-    wb = _xlsx(cliente, [_ponto("Total"), _ponto("Parcial"), _ponto("Parcial", precisao="faixa")])
+    wb = _xlsx(cliente, [_ponto("Total"), _ponto("Parcial"), _ponto("Parcial")])
     assert wb.sheetnames == ["Prazos e preços", "TZR e TDE", "Cobertura e fonte"]
     ws = wb["Prazos e preços"]
     cabecalho = [c.value for c in ws[3]]
@@ -165,22 +143,19 @@ def test_xlsx_tem_coluna_cobertura_por_ultimo_mantem_parciais_e_aba_de_fonte(cli
     assert linhas[0][0] == 5300108 and linhas[0][5] == "70254000" and linhas[0][7] == 1
 
 
-def test_xlsx_legenda_de_uma_linha_e_atribuicao_na_aba_extra(cliente):
+def test_xlsx_legenda_de_uma_linha_com_a_nota_de_distancia_e_atribuicao_na_aba_extra(cliente):
     aba = _xlsx(cliente, [_ponto("Total")])["Cobertura e fonte"]
     assert aba["A1"].value == LEGENDA_COBERTURA
+    assert "Raio X km" in aba["A1"].value and "em linha reta entre o hub e o centro do prefixo" in aba["A1"].value
+    assert "não por estrada" in aba["A1"].value and "\n" not in aba["A1"].value
     assert aba["A2"].value == "Fonte: IBGE, CNEFE 2022"
     assert aba["A3"].value is None
-
-
-def test_xlsx_so_com_faixas_manuais_nao_atribui_o_cnefe(cliente):
-    aba = _xlsx(cliente, [_ponto("Parcial", precisao="faixa")])["Cobertura e fonte"]
-    assert aba["A1"].value == LEGENDA_COBERTURA and aba["A2"].value is None
 
 
 def test_xlsx_sem_codigo_ibge_deixa_a_celula_vazia_em_vez_de_inventar(cliente):
     r = cliente.post(
         "/api/exportar-tabela-frete-xlsx",
-        json={"hub": {"uf": "SC"}, "pontos_cobertos": [{**_ponto("Parcial", precisao="faixa"), "ibge": None}]},
+        json={"hub": {"uf": "SC"}, "pontos_cobertos": [{**_ponto("Parcial"), "ibge": None}]},
     )
     ws = openpyxl.load_workbook(io.BytesIO(r.content))["Prazos e preços"]
     assert ws.cell(row=4, column=1).value is None

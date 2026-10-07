@@ -264,14 +264,11 @@ class RaioCepRequest(BaseModel):
 
 async def _buscar_cobertura(lat: float, lon: float, raio_km: float):
     """
-    Cobertura por raio: prefixos de CEP do CNEFE (cep_prefixos) e, só para UFs ainda sem prefixos,
-    as faixas manuais (ceps_reais). Falha do banco vira erro 503 explícito: lista vazia só significa
-    "sem dados para essa região", nunca "deu erro".
+    Cobertura por raio: prefixos de CEP do CNEFE (cep_prefixos). Falha do banco vira erro 503 explícito:
+    lista vazia só significa "sem dados para essa região", nunca "deu erro".
     """
     try:
         prefixos = await database.consultar_prefixos_por_raio(lat, lon, raio_km)
-        ufs = await database.ufs_com_prefixos()
-        faixas = await database.consultar_ceps_por_raio(lat, lon, raio_km)
     except Exception as e:
         print(f"[cobertura] Falha ao consultar a base de CEPs: {e!r}")
         raise HTTPException(
@@ -281,7 +278,7 @@ async def _buscar_cobertura(lat: float, lon: float, raio_km: float):
                 "se o problema continuar, avise o administrador do sistema."
             ),
         )
-    return cobertura.combinar_cobertura(prefixos, faixas, ufs, raio_km)
+    return cobertura.montar_cobertura(prefixos, raio_km)
 
 @app.post("/api/cobertura-ceps")
 async def gerar_cobertura_ceps_instantanea(req: RaioCepRequest):
@@ -307,9 +304,8 @@ async def gerar_cobertura_ceps_instantanea(req: RaioCepRequest):
 
     raio_max = req.raio_km or 30.0
 
-    # Cobertura real dentro do raio (prefixos do CNEFE + faixas manuais onde a UF ainda não foi
-    # carregada). O gerador sintético foi removido: sem dados reais devolvemos lista vazia com um
-    # aviso explícito em vez de inventar CEPs.
+    # Cobertura real dentro do raio (prefixos do CNEFE). Sem dados reais para a região devolvemos
+    # lista vazia com um aviso explícito em vez de inventar CEPs.
     pontos_cobertos = await _buscar_cobertura(lat, lon, raio_max)
     resumo = cobertura.resumir_cobertura(pontos_cobertos)
 
@@ -331,7 +327,7 @@ async def gerar_cobertura_ceps_instantanea(req: RaioCepRequest):
         "pontos_cobertos": pontos_cobertos,
         "resumo_cobertura": resumo,
         "legenda_cobertura": cobertura.LEGENDA_COBERTURA,
-        "fonte": cobertura.ATRIBUICAO_CNEFE if resumo["usa_cnefe"] else None,
+        "fonte": cobertura.ATRIBUICAO_CNEFE if pontos_cobertos else None,
         "aviso": aviso,
     }
 
@@ -407,7 +403,7 @@ def exportar_tabela_frete_xlsx(req: ExportarXlsxRequest):
     # transportadora não leia essas linhas como faixas de CEP.
     ws3 = wb.create_sheet(title="Cobertura e fonte")
     ws3.append([cobertura.LEGENDA_COBERTURA])
-    if cobertura.resumir_cobertura(req.pontos_cobertos)["usa_cnefe"]:
+    if req.pontos_cobertos:
         ws3.append([cobertura.ATRIBUICAO_CNEFE])
     ws3.column_dimensions["A"].width = 140
     

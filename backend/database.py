@@ -25,7 +25,6 @@ except ImportError:
 
 # Importa as configurações globais
 from config import DATABASE_URL as CONFIG_DATABASE_URL
-from faixas_cep import SCHEMA_CEPS_REAIS, INDICE_UNICO_CEPS_REAIS
 from ibge import SCHEMA_IBGE_MUNICIPIOS, normalizar_nome
 from cobertura import caixa_do_raio
 
@@ -120,15 +119,6 @@ async def init_db():
         )
         await conn.execute("ALTER TABLE geocode_cache ALTER COLUMN lat DROP NOT NULL")
         await conn.execute("ALTER TABLE geocode_cache ALTER COLUMN lon DROP NOT NULL")
-
-        # Faixas de CEP usadas na cobertura por raio. Os dados entram por
-        # scripts/carregar_faixas.py (upsert); aqui só garantimos que a tabela existe.
-        for comando in SCHEMA_CEPS_REAIS:
-            await conn.execute(comando)
-        try:
-            await conn.execute(INDICE_UNICO_CEPS_REAIS)
-        except Exception as e:
-            print(f"[database] Índice único de ceps_reais não criado (faixas duplicadas?): {e}")
 
         # Municípios do IBGE (código, nome, UF). Dados entram por scripts/carregar_municipios.py.
         for comando in SCHEMA_IBGE_MUNICIPIOS:
@@ -246,16 +236,6 @@ _DISTANCIA_HAVERSINE_SQL = """(6371 * acos(
                ))"""
 
 
-async def ufs_com_prefixos() -> set:
-    """UFs que já têm prefixos do CNEFE carregados em cep_prefixos. Levanta erro se o banco estiver indisponível."""
-    pool = await get_pool()
-    if not pool:
-        raise RuntimeError("banco de dados indisponível")
-    async with pool.acquire() as conn:
-        rows = await conn.fetch("SELECT DISTINCT uf FROM cep_prefixos")
-    return {r["uf"] for r in rows}
-
-
 async def consultar_prefixos_por_raio(lat_origem: float, lon_origem: float, raio_km: float) -> list:
     """
     Prefixos de CEP (5 dígitos, CNEFE) cujo ponto central está dentro do raio. Filtra primeiro por caixa
@@ -281,57 +261,6 @@ async def consultar_prefixos_por_raio(lat_origem: float, lon_origem: float, raio
     async with pool.acquire() as conn:
         rows = await conn.fetch(query, lat_origem, lon_origem, raio_km, lat_min, lat_max, lon_min, lon_max)
     return [dict(r) for r in rows]
-
-
-async def consultar_ceps_por_raio(lat_origem: float, lon_origem: float, raio_km: float):
-    pool = await get_pool()
-    if not pool:
-        return []
-
-    query = """
-        SELECT cep_inicial, cep_final, uf, cidade, bairro, lat, lon, ibge,
-               (6371 * acos(
-                   LEAST(1.0, GREATEST(-1.0,
-                       cos(radians($1)) * cos(radians(lat)) *
-                       cos(radians(lon) - radians($2)) + 
-                       sin(radians($1)) * sin(radians(lat))
-                   ))
-               )) AS distancia_km
-        FROM ceps_reais
-        WHERE (6371 * acos(
-                   LEAST(1.0, GREATEST(-1.0,
-                       cos(radians($1)) * cos(radians(lat)) *
-                       cos(radians(lon) - radians($2)) + 
-                       sin(radians($1)) * sin(radians(lat))
-                   ))
-               )) <= $3
-        ORDER BY distancia_km ASC;
-    """
-
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(query, lat_origem, lon_origem, raio_km)
-
-    resultados = []
-    for row in rows:
-        dist = float(row['distancia_km'])
-        cep_ini_fmt = f"{str(row['cep_inicial']).zfill(8)[:5]}-{str(row['cep_inicial']).zfill(8)[5:]}"
-        cep_fim_fmt = f"{str(row['cep_final']).zfill(8)[:5]}-{str(row['cep_final']).zfill(8)[5:]}"
-
-        resultados.append({
-            "ibge": row['ibge'],  # None se a faixa ainda não tem código (rodar scripts/carregar_faixas.py)
-            "uf": row['uf'],
-            "cidade": row['cidade'],
-            "bairro": row['bairro'],
-            "cep_inicial": str(row['cep_inicial']).zfill(8),
-            "cep_final": str(row['cep_final']).zfill(8),
-            "faixa_completa": f"{cep_ini_fmt} a {cep_fim_fmt}",
-            "distancia_km": round(dist, 2),
-            "dias_sla": 1 if dist <= 12 else 2,
-            "lat": float(row['lat']),
-            "lon": float(row['lon'])
-        })
-
-    return resultados
 
 
 # --- Modelos ORM do SQLAlchemy ---

@@ -9,7 +9,7 @@ from pathlib import Path
 
 CAMINHO_CSV_PADRAO = Path(__file__).resolve().parent.parent / "scripts" / "data" / "faixas_cep.csv"
 
-COLUNAS_CSV = ["cep_inicial", "cep_final", "uf", "cidade", "bairro", "lat", "lon"]
+COLUNAS_CSV = ["cep_inicial", "cep_final", "uf", "cidade", "bairro", "lat", "lon", "ibge"]
 
 UFS = {
     "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG", "PA",
@@ -36,6 +36,7 @@ SCHEMA_CEPS_REAIS = [
     """,
     "ALTER TABLE ceps_reais ADD COLUMN IF NOT EXISTS fonte TEXT NOT NULL DEFAULT 'manual'",
     "ALTER TABLE ceps_reais ADD COLUMN IF NOT EXISTS precisao TEXT NOT NULL DEFAULT 'faixa'",
+    "ALTER TABLE ceps_reais ADD COLUMN IF NOT EXISTS ibge INTEGER",
     "CREATE INDEX IF NOT EXISTS idx_ceps_coords ON ceps_reais(lat, lon)",
 ]
 
@@ -45,7 +46,7 @@ INDICE_UNICO_CEPS_REAIS = (
 )
 
 UPSERT_CEPS_REAIS = """
-    INSERT INTO ceps_reais (cep_inicial, cep_final, uf, cidade, bairro, lat, lon, fonte, precisao)
+    INSERT INTO ceps_reais (cep_inicial, cep_final, uf, cidade, bairro, lat, lon, fonte, precisao, ibge)
     VALUES %s
     ON CONFLICT (cep_inicial, cep_final) DO UPDATE SET
         uf = EXCLUDED.uf,
@@ -54,7 +55,8 @@ UPSERT_CEPS_REAIS = """
         lat = EXCLUDED.lat,
         lon = EXCLUDED.lon,
         fonte = EXCLUDED.fonte,
-        precisao = EXCLUDED.precisao
+        precisao = EXCLUDED.precisao,
+        ibge = EXCLUDED.ibge
     RETURNING (xmax = 0) AS inserido
 """
 
@@ -89,6 +91,10 @@ def validar_faixas(faixas: list) -> list:
         for campo in ("cidade", "bairro"):
             if not (f.get(campo) or "").strip():
                 erros.append(f"{rotulo}: {campo} vazio")
+
+        ibge = f.get("ibge") or ""
+        if not (len(ibge) == 7 and ibge.isdigit()):
+            erros.append(f"{rotulo}: código IBGE deve ter 7 dígitos")
 
         try:
             lat, lon = float(f["lat"]), float(f["lon"])

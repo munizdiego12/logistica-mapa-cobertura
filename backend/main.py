@@ -55,20 +55,6 @@ CORES_ROTAS = [
     '#F97316', '#14B8A6', '#6366F1', '#D946EF'
 ]
 
-ESTADOS_IBGE_BRASIL = {
-    "SP": {"ibge": 3550308, "nome": "São Paulo"},
-    "PR": {"ibge": 4106902, "nome": "Curitiba"},
-    "CE": {"ibge": 2304400, "nome": "Fortaleza"},
-    "RJ": {"ibge": 3304557, "nome": "Rio de Janeiro"},
-    "MG": {"ibge": 3106200, "nome": "Belo Horizonte"},
-    "RS": {"ibge": 4314902, "nome": "Porto Alegre"},
-    "SC": {"ibge": 4205407, "nome": "Florianópolis"},
-    "GO": {"ibge": 5208707, "nome": "Goiânia"},
-    "BA": {"ibge": 2927408, "nome": "Salvador"},
-    "PE": {"ibge": 2611606, "nome": "Recife"},
-    "DF": {"ibge": 5300108, "nome": "Brasília"}
-}
-
 def haversine_distance(coord1: tuple, coord2: tuple) -> float:
     lat1, lon1 = coord1
     lat2, lon2 = coord2
@@ -307,7 +293,8 @@ async def gerar_cobertura_ceps_instantanea(req: RaioCepRequest):
         )
 
     clean_cep = str(clean_cep or "").replace("-", "").strip().zfill(8)
-    ibge_base = ESTADOS_IBGE_BRASIL.get(uf, {}).get("ibge", 3550308 if uf == "SP" else 2304400)
+    # Código IBGE real do município da loja (tabela ibge_municipios); None se não achar, nunca um valor fixo.
+    ibge_base = await database.buscar_ibge_municipio(uf, cidade)
 
     raio_max = req.raio_km or 30.0
 
@@ -369,7 +356,7 @@ def exportar_tabela_frete_xlsx(req: ExportarXlsxRequest):
     ws1.append(header_l3)
     
     for p in req.pontos_cobertos:
-        ibge = p.get("ibge") or req.hub.get("ibge") or 3550308
+        ibge = p.get("ibge") or req.hub.get("ibge")  # vazio se desconhecido, em vez de um código inventado
         uf = p.get("uf") or req.hub.get("uf") or "SP"
         cidade = p.get("cidade") or req.hub.get("cidade") or "Município"
         bairro = p.get("bairro") or ""

@@ -60,7 +60,7 @@ def main():
 
     linhas = [
         (f["cep_inicial"], f["cep_final"], f["uf"], f["cidade"], f["bairro"],
-         float(f["lat"]), float(f["lon"]), FONTE, PRECISAO)
+         float(f["lat"]), float(f["lon"]), FONTE, PRECISAO, int(f["ibge"]))
         for f in faixas
     ]
 

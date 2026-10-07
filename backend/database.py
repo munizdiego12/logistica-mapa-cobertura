@@ -26,6 +26,7 @@ except ImportError:
 # Importa as configurações globais
 from config import DATABASE_URL as CONFIG_DATABASE_URL
 from faixas_cep import SCHEMA_CEPS_REAIS, INDICE_UNICO_CEPS_REAIS
+from ibge import SCHEMA_IBGE_MUNICIPIOS, normalizar_nome
 
 # Obtém a URL vinda de config.py ou direto do os.environ
 DATABASE_URL = CONFIG_DATABASE_URL or os.environ.get("DATABASE_URL", "")
@@ -127,6 +128,10 @@ async def init_db():
             await conn.execute(INDICE_UNICO_CEPS_REAIS)
         except Exception as e:
             print(f"[database] Índice único de ceps_reais não criado (faixas duplicadas?): {e}")
+
+        # Municípios do IBGE (código, nome, UF). Dados entram por scripts/carregar_municipios.py.
+        for comando in SCHEMA_IBGE_MUNICIPIOS:
+            await conn.execute(comando)
     print("[database] Cache de geocodificação persistente (Postgres) pronto.")
 
 
@@ -212,13 +217,32 @@ async def cache_stats():
     return {"persistente": True, "total_enderecos": total}
 
 
+async def buscar_ibge_municipio(uf: str, cidade: str):
+    """Código IBGE do município (UF + nome da cidade), ou None se não achar. Nunca devolve um código inventado."""
+    nome = normalizar_nome(cidade)
+    if not uf or not nome:
+        return None
+    pool = await get_pool()
+    if not pool:
+        return None
+    try:
+        async with pool.acquire() as conn:
+            return await conn.fetchval(
+                "SELECT codigo FROM ibge_municipios WHERE uf = $1 AND nome_normalizado = $2",
+                uf.strip().upper(), nome,
+            )
+    except Exception as e:
+        print(f"[database] Falha ao buscar código IBGE de {cidade}/{uf}: {e}")
+        return None
+
+
 async def consultar_ceps_por_raio(lat_origem: float, lon_origem: float, raio_km: float):
     pool = await get_pool()
     if not pool:
         return []
 
     query = """
-        SELECT cep_inicial, cep_final, uf, cidade, bairro, lat, lon,
+        SELECT cep_inicial, cep_final, uf, cidade, bairro, lat, lon, ibge,
                (6371 * acos(
                    LEAST(1.0, GREATEST(-1.0,
                        cos(radians($1)) * cos(radians(lat)) *
@@ -247,7 +271,7 @@ async def consultar_ceps_por_raio(lat_origem: float, lon_origem: float, raio_km:
         cep_fim_fmt = f"{str(row['cep_final']).zfill(8)[:5]}-{str(row['cep_final']).zfill(8)[5:]}"
 
         resultados.append({
-            "ibge": 3550308,
+            "ibge": row['ibge'],  # None se a faixa ainda não tem código (rodar scripts/carregar_faixas.py)
             "uf": row['uf'],
             "cidade": row['cidade'],
             "bairro": row['bairro'],

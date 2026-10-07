@@ -11,8 +11,9 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 
 def _df(linhas):
-    """linhas: (municipio, cep, lat, lon, nivel) em texto, como vêm do CSV do IBGE."""
-    return pd.DataFrame(linhas, columns=COLUNAS_CNEFE, dtype=str)
+    """linhas: (municipio, cep, lat, lon, nivel[, localidade]) em texto, como vêm do CSV do IBGE."""
+    completas = [tuple(l) + ("CENTRO",) * (len(COLUNAS_CNEFE) - len(l)) for l in linhas]
+    return pd.DataFrame(completas, columns=COLUNAS_CNEFE, dtype=str)
 
 
 def _por_prefixo(linhas_saida):
@@ -104,6 +105,45 @@ def test_sem_linhas_validas_nao_devolve_prefixos():
     assert agregar_prefixos([], "AC")[0] == []
 
 
+def test_localidade_e_a_mais_frequente_com_percentual():
+    df = _df([
+        ("1200401", "69900100", "-9.97", "-67.81", "1", "BOSQUE"),
+        ("1200401", "69900101", "-9.97", "-67.81", "1", "BOSQUE"),
+        ("1200401", "69900102", "-9.97", "-67.81", "1", "BOSQUE"),
+        ("1200401", "69900103", "-9.97", "-67.81", "1", "VITORIA"),
+    ])
+    linha = _por_prefixo(agregar_prefixos([df], "AC")[0])["69900"]
+    assert linha["localidade"] == "BOSQUE"
+    assert linha["localidade_pct"] == 75.0
+
+
+def test_empate_de_localidade_resolve_pelo_nome_e_vazio_nao_conta():
+    empate = _df([
+        ("1200401", "69900100", "-9.97", "-67.81", "1", "ZETA"),
+        ("1200401", "69900101", "-9.97", "-67.81", "1", "ALFA"),
+    ])
+    assert _por_prefixo(agregar_prefixos([empate], "AC")[0])["69900"]["localidade"] == "ALFA"
+
+    sem_nome = _df([("1200401", "69900100", "-9.97", "-67.81", "1", ""), ("1200401", "69900101", "-9.97", "-67.81", "1", "  ")])
+    linha = _por_prefixo(agregar_prefixos([sem_nome], "AC")[0])["69900"]
+    assert linha["localidade"] is None and linha["localidade_pct"] == 0.0
+
+
+def test_gravar_sqlite_migra_banco_criado_sem_localidade():
+    """O AC já gravado no Neon foi criado sem localidade: a carga seguinte precisa acrescentar as colunas."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        "CREATE TABLE cep_prefixos (prefixo VARCHAR(5) PRIMARY KEY, uf VARCHAR(2) NOT NULL, cod_municipio INTEGER NOT NULL, "
+        "lat DOUBLE PRECISION NOT NULL, lon DOUBLE PRECISION NOT NULL, n_enderecos INTEGER NOT NULL, "
+        "n_pontos_exatos INTEGER NOT NULL, dispersao_km REAL NOT NULL, fonte TEXT NOT NULL DEFAULT 'IBGE, CNEFE 2022')"
+    )
+    conn.execute("INSERT INTO cep_prefixos VALUES ('69900','AC',1200401,-9.97,-67.81,5,5,1.0,'IBGE, CNEFE 2022')")
+    linhas, _ = agregar_prefixos([_df([("1200401", "69900100", "-9.97", "-67.81", "1", "BOSQUE")])], "AC")
+    assert gravar_sqlite(conn, linhas) == (0, 1)
+    assert conn.execute("SELECT localidade, localidade_pct FROM cep_prefixos WHERE prefixo = '69900'").fetchone() == ("BOSQUE", 100.0)
+    assert gravar_sqlite(conn, linhas) == (0, 1)  # e a segunda carga não tenta recriar as colunas
+
+
 def test_upsert_sqlite_e_idempotente_e_atualiza_sem_apagar():
     linhas, _ = agregar_prefixos([_df([
         ("1200401", "69900100", "-9.97", "-67.81", "1"),
@@ -122,7 +162,7 @@ def test_upsert_sqlite_e_idempotente_e_atualiza_sem_apagar():
 
 def test_carga_cnefe_nunca_apaga_tabela_e_nao_tem_credencial():
     script = (RAIZ / "scripts" / "carregar_cnefe.py").read_text(encoding="utf-8")
-    sql = " ".join([cnefe.SCHEMA_CEP_PREFIXOS, cnefe.UPSERT_POSTGRES, cnefe.UPSERT_SQLITE])
+    sql = " ".join([cnefe.SCHEMA_CEP_PREFIXOS, *cnefe.MIGRACOES_POSTGRES, cnefe.UPSERT_POSTGRES, cnefe.UPSERT_SQLITE])
     for texto in (sql, script, Path(cnefe.__file__).read_text(encoding="utf-8")):
         assert not re.search(r"DROP\s+(TABLE|INDEX|SCHEMA|DATABASE)", texto, re.IGNORECASE)
         assert not re.search(r"TRUNCATE", texto, re.IGNORECASE)

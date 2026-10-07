@@ -10,7 +10,7 @@ Contexto detalhado: `docs/MEMORIA_PROJETO_roteirizacao.md` (regras e decisões) 
 
 ## Atualização do status (obrigatório)
 
-**Ao concluir cada etapa, atualizar `docs/STATUS_E_PLANO_ATUALIZADO.md`** (mover a etapa para "O que já está feito" com a evidência/commit e ajustar "O que falta" e a ordem sugerida).
+**Ao concluir cada etapa, atualizar `docs/STATUS_E_PLANO_ATUALIZADO.md` e marcar a etapa em `docs/CHECKLIST_PROJETO.md`** (mover a etapa para "O que já está feito" com a evidência/commit e ajustar "O que falta" e a ordem sugerida).
 
 ## Stack
 
@@ -42,12 +42,12 @@ Contexto detalhado: `docs/MEMORIA_PROJETO_roteirizacao.md` (regras e decisões) 
 
 ## Ordem das etapas
 
-Feitas: **1** Autenticação; **2** CEP/raio sem fallback sintético; **2b, fase 1** faixas de CEP unificadas (`scripts/carregar_faixas.py`, upsert sem DROP).
+Feitas: **1** Autenticação; **2** CEP/raio sem fallback sintético; **2b, fase 1** faixas de CEP unificadas (`scripts/carregar_faixas.py`, upsert sem DROP); **2b, fase 2 (parcial)** CNEFE por prefixo de CEP (`scripts/carregar_cnefe.py`, tabela `cep_prefixos`, AC no Neon), tabela `ibge_municipios` (`scripts/carregar_municipios.py`) e código IBGE vindo de busca real, nunca fixo.
 
 Ordem atual (a partir de agora):
 
 1. **Etapa 0** — Banco permanente (Neon) e **0b** — `requirements.txt` em UTF-8 (+ remover `correcoes_etapa1_auth.patch` da raiz).
-2. **Etapa 2b (fases 2 a 4)** — Base nacional de CEP via CNEFE/IBGE: carga por prefixo de 5 dígitos (~24,6 mil linhas), depois coluna `precisao`, consulta por caixa, centroides do IBGE e BrasilAPI v2 sob demanda; por fim aposentar as faixas manuais onde o CNEFE cobrir. **Toda exportação com dados do CNEFE deve trazer a atribuição "Fonte: IBGE, CNEFE 2022".** Detalhes em `docs/STATUS_E_PLANO_ATUALIZADO.md`.
+2. **Etapa 2b (restante)** — Base nacional de CEP via CNEFE/IBGE, nesta ordem: gravar municípios, `ibge`, AC e DF no Neon; **passo 3** trocar a consulta de `ceps_reais` para `cep_prefixos` (filtro por caixa lat/lon, Total/Parcial pela dispersão, regra por UF com fallback para as faixas); carregar o Brasil inteiro uma UF por vez; por fim aposentar as faixas manuais onde o CNEFE cobrir. **Exportação:** coluna "Cobertura" (Total/Parcial) mantendo os parciais, legenda de uma linha explicando Total e Parcial e a atribuição "Fonte: IBGE, CNEFE 2022". Detalhes em `docs/STATUS_E_PLANO_ATUALIZADO.md` e `docs/CHECKLIST_PROJETO.md`.
 3. Proteger rotas de negócio (`/upload`, `/otimizar`, `/cobertura-ceps`) com o token.
 4. **Etapa 3** — Cadastro de motoristas e veículos; **Etapa 4** — Lojas, hub no mapa, capacidade e janelas.
 5. **Etapa 6** — Seleção de pedidos por loja/data; depois **Etapa 5** — Conectores Sheets/BigQuery (aguardam schema).

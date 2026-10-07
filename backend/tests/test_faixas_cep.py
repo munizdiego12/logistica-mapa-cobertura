@@ -14,7 +14,7 @@ RAIZ = Path(__file__).resolve().parents[2]
 def _faixa(**sobrescrever):
     base = {
         "cep_inicial": "01000000", "cep_final": "01999999", "uf": "SP",
-        "cidade": "São Paulo", "bairro": "Centro", "lat": "-23.5505", "lon": "-46.6333",
+        "cidade": "São Paulo", "bairro": "Centro", "lat": "-23.5505", "lon": "-46.6333", "ibge": "3550308",
     }
     base.update(sobrescrever)
     return base
@@ -50,6 +50,23 @@ def test_validador_detecta_cep_malformado_e_invertido():
     assert any("8 dígitos" in e for e in validar_faixas([_faixa(cep_inicial="1000000")]))
     assert any("8 dígitos" in e for e in validar_faixas([_faixa(cep_final="0199999A")]))
     assert any("maior que" in e for e in validar_faixas([_faixa(cep_inicial="02000000", cep_final="01000000")]))
+
+
+def test_validador_exige_codigo_ibge_de_7_digitos():
+    assert any("IBGE" in e for e in validar_faixas([_faixa(ibge="")]))
+    assert any("IBGE" in e for e in validar_faixas([_faixa(ibge="355030")]))
+    assert any("IBGE" in e for e in validar_faixas([_faixa(ibge="35503AB")]))
+
+
+def test_codigos_ibge_das_faixas_batem_com_a_tabela_de_municipios():
+    from backend.ibge import ler_municipios_csv, normalizar_nome
+
+    municipios = {int(m["codigo"]): m for m in ler_municipios_csv()}
+    for f in ler_faixas_csv():
+        m = municipios.get(int(f["ibge"]))
+        assert m is not None, f"IBGE {f['ibge']} ({f['cidade']}) não existe na tabela de municípios"
+        assert m["uf"] == f["uf"], f"{f['cidade']}: UF {f['uf']} difere da UF do código {f['ibge']} ({m['uf']})"
+        assert normalizar_nome(m["nome"]) == normalizar_nome(f["cidade"].split(" / ")[0]), f"{f['cidade']} x {m['nome']}"
 
 
 def test_validador_detecta_uf_texto_e_coordenada_invalidos():

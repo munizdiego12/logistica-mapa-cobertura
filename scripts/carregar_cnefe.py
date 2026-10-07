@@ -66,6 +66,8 @@ PASTA_PADRAO = RAIZ / "data" / "cnefe"
 LINHAS_POR_BLOCO = 250_000
 LIMITE_PADRAO_MB = 100
 LIMITE_FORA_DA_UF = 0.01  # acima de 1% dos endereços com CEP de outra UF, a carga da UF é recusada
+TENTATIVAS_CONEXAO = 3  # tentativas (no total) de falar com o banco antes de desistir da UF
+ESPERAS_RECONEXAO = (2, 5)  # segundos de espera antes da 2ª e da 3ª tentativa (o Neon pode estar acordando)
 
 
 def ordem_ufs(ufs=None, pular=()) -> list:
@@ -170,38 +172,84 @@ class DestinoPostgres:
         self.conn.close()
 
 
-def processar_uf(uf: str, pasta: Path, abrir_destino, limite_bytes: int, manter_download: bool) -> dict:
-    """Baixa, agrega, grava e apaga o download de uma UF. Levanta LimiteExcedido se a tabela passar do limite."""
-    inicio = time.time()
-    destino = abrir_destino()
+def erros_de_conexao() -> tuple:
+    """Erros de conexão do Postgres que valem uma nova tentativa (conexão derrubada ou já fechada)."""
     try:
-        atual = destino.tamanho_atual()
-        if atual > limite_bytes:
-            raise LimiteExcedido(atual, limite_bytes)  # já passou do limite: nem baixa a próxima UF
+        import psycopg2
 
-        arquivo = baixar_uf(uf, pasta)
-        linhas, est = agregar_prefixos(ler_blocos(arquivo), uf)
-        if not linhas:
-            raise RuntimeError(f"{uf}: nenhum prefixo calculado; nada foi gravado")
-        if est["enderecos_fora_da_uf"] > LIMITE_FORA_DA_UF * est["linhas_lidas"]:
-            raise RuntimeError(
-                f"{uf}: {est['enderecos_fora_da_uf']:,} endereços ({est['enderecos_fora_da_uf'] / est['linhas_lidas']:.1%}) "
-                "têm CEP fora da faixa da UF; arquivo errado ou tabela de faixas desatualizada. Nada foi gravado"
+        return (psycopg2.OperationalError, psycopg2.InterfaceError)
+    except ImportError:
+        return ()
+
+
+def executar_com_reconexao(abrir_destino, operacao, tentativas=TENTATIVAS_CONEXAO, esperas=ESPERAS_RECONEXAO, dormir=time.sleep):
+    """
+    Abre uma conexão NOVA, executa `operacao(destino)` e fecha. Se a conexão cair (OperationalError/InterfaceError),
+    reconecta e repete, até `tentativas` no total. Outros erros (limite de tamanho, dados inválidos) não são repetidos.
+    Devolve (resultado, tentativas_usadas). Repetir é seguro: a gravação é um upsert numa transação só.
+    """
+    for tentativa in range(1, tentativas + 1):
+        destino = None
+        try:
+            destino = abrir_destino()
+            return operacao(destino), tentativa
+        except erros_de_conexao() as erro:
+            if tentativa == tentativas:
+                raise
+            print(
+                f"  a conexão com o banco caiu ({type(erro).__name__}); reconectando "
+                f"(tentativa {tentativa + 1} de {tentativas}) ..."
             )
+            dormir(esperas[min(tentativa - 1, len(esperas) - 1)] if esperas else 0)
+        finally:
+            if destino is not None:
+                try:
+                    destino.fechar()
+                except Exception:
+                    pass  # a conexão já estava quebrada: não há o que fechar
 
-        relatorio = {}
-        novas, atualizadas = destino.gravar(linhas, limite_bytes, relatorio)
-    finally:
-        destino.fechar()
+
+def processar_uf(
+    uf: str, pasta: Path, abrir_destino, limite_bytes: int, manter_download: bool,
+    tentativas=TENTATIVAS_CONEXAO, esperas=ESPERAS_RECONEXAO, dormir=time.sleep,
+) -> dict:
+    """
+    Baixa, agrega, grava e apaga o download de uma UF. Levanta LimiteExcedido se a tabela passar do limite.
+
+    O banco NÃO fica conectado durante o download e a agregação (levam minutos e o Neon derruba conexões
+    ociosas): a conexão é aberta só para conferir o tamanho, fechada, e aberta de novo imediatamente antes de gravar.
+    """
+    inicio = time.time()
+    atual, _ = executar_com_reconexao(abrir_destino, lambda d: d.tamanho_atual(), tentativas, esperas, dormir)
+    if atual > limite_bytes:
+        raise LimiteExcedido(atual, limite_bytes)  # já passou do limite: nem baixa a próxima UF
+
+    arquivo = baixar_uf(uf, pasta)
+    linhas, est = agregar_prefixos(ler_blocos(arquivo), uf)
+    if not linhas:
+        raise RuntimeError(f"{uf}: nenhum prefixo calculado; nada foi gravado")
+    if est["enderecos_fora_da_uf"] > LIMITE_FORA_DA_UF * est["linhas_lidas"]:
+        raise RuntimeError(
+            f"{uf}: {est['enderecos_fora_da_uf']:,} endereços ({est['enderecos_fora_da_uf'] / est['linhas_lidas']:.1%}) "
+            "têm CEP fora da faixa da UF; arquivo errado ou tabela de faixas desatualizada. Nada foi gravado"
+        )
+
+    relatorio = {}
+
+    def gravar(destino):
+        relatorio.clear()  # cada tentativa começa do zero
+        return destino.gravar(linhas, limite_bytes, relatorio)
+
+    (novas, atualizadas), tentativas_usadas = executar_com_reconexao(abrir_destino, gravar, tentativas, esperas, dormir)
 
     if not manter_download:  # só chega aqui se gravou: em caso de erro o arquivo fica para tentar de novo
         arquivo.unlink(missing_ok=True)
     return {
         "uf": uf, "enderecos": est["linhas_lidas"], "descartados": est["linhas_descartadas"], "prefixos": len(linhas),
-        "sem_ponto_exato": est["prefixos_sem_ponto_exato"], "fora_da_uf": est["prefixos_fora_da_uf"], "novas": novas, "atualizadas": atualizadas,
-        "mantidas": relatorio["mantidas"], "conflitos": relatorio["conflitos"],
+        "sem_ponto_exato": est["prefixos_sem_ponto_exato"], "fora_da_uf": est["prefixos_fora_da_uf"], "novas": novas,
+        "atualizadas": atualizadas, "mantidas": relatorio["mantidas"], "conflitos": relatorio["conflitos"],
         "tamanho_mb": relatorio["tamanho_bytes"] / 1e6, "segundos": time.time() - inicio,
-        "apagado": not manter_download
+        "apagado": not manter_download, "tentativas_gravacao": tentativas_usadas,
     }
 
 
@@ -220,6 +268,8 @@ def imprimir_resultado(r: dict) -> None:
         f"{'%.0f MB' % pico if pico else 'n/d'} | {r['segundos']:.0f}s | "
         f"download {'apagado' if r['apagado'] else 'mantido'}"
     )
+    if r.get("tentativas_gravacao", 1) > 1:
+        print(f"      gravou na tentativa {r['tentativas_gravacao']} (a conexão caiu antes; nada foi duplicado)")
     if r["fora_da_uf"]:
         print(f"      descartados {len(r['fora_da_uf'])} prefixo(s) com CEP fora da faixa de {r['uf']} (provável erro de digitação no CNEFE):")
         for f in sorted(r["fora_da_uf"], key=lambda f: -f["n_enderecos"])[:5]:
@@ -275,6 +325,12 @@ def main():
             print(f"\nPAROU em {uf}: {e}. Nada de {uf} foi gravado; o que veio antes está salvo.")
             print(f"UFs já gravadas nesta execução: {' '.join(feitas) or 'nenhuma'}")
             sys.exit(2)
+        except erros_de_conexao() as e:
+            print(f"\nPAROU em {uf}: não foi possível falar com o banco após {TENTATIVAS_CONEXAO} tentativas ({type(e).__name__}: {e}).")
+            print(f"Nada de {uf} foi gravado e o arquivo baixado foi mantido. UFs já gravadas nesta execução: {' '.join(feitas) or 'nenhuma'}.")
+            pular = sorted(set(args.pular) | set(feitas))
+            print(f"Repita o comando acrescentando as UFs já gravadas em --pular: --pular {' '.join(pular) or 'AC DF'}")
+            sys.exit(3)
         imprimir_resultado(resultado)
         feitas.append(uf)
         total_prefixos += resultado["prefixos"]

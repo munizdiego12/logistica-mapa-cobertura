@@ -59,7 +59,13 @@ Remove-Item Env:DATABASE_URL
 - [x] **Mensagens de tela sem termos técnicos** (aviso de região sem cobertura em linguagem do operador; sem nome de tabela, script, arquivo, API ou serviço nas mensagens da cobertura).
 
 - [x] **Preparar a carga do Brasil inteiro** (script pronto e testado com SP, a maior UF: 22,95 milhões de endereços, pico de memória de 571 MB, 201 s; apaga o download de cada UF; para sozinho se a tabela passar de 100 MB)
-- [ ] **Rodar a carga do Brasil inteiro no Neon, uma UF por vez** (as maiores são SP ~1 GB, MG, BA e RJ; estimativa de ~4 MB no banco). No PowerShell, na raiz do projeto (a string do banco só na sessão, nunca em arquivo ou no chat):
+- [ ] **Repetir o SP no Neon** (a 1ª tentativa falhou ao gravar: conexão ociosa derrubada pelo Neon; já corrigido, a conexão agora só abre para gravar e reconecta até 3 vezes). Mesmo procedimento, só com o SP (o arquivo baixado foi guardado):
+```
+$env:DATABASE_URL = "<string do Neon>"
+python scripts/carregar_cnefe.py --uf SP
+Remove-Item Env:DATABASE_URL
+```
+- [ ] **Rodar a carga do Brasil inteiro no Neon, uma UF por vez** *(as UFs menores já foram gravadas na 1ª execução; confira com `scripts/conferir_cobertura.py`, que lista as UFs com prefixos no banco)* (as maiores são SP ~1 GB, MG, BA e RJ; estimativa de ~4 MB no banco). No PowerShell, na raiz do projeto (a string do banco só na sessão, nunca em arquivo ou no chat):
 ```
 $env:DATABASE_URL = "<string do Neon>"
 python scripts/carregar_cnefe.py --todas --pular AC DF

@@ -50,3 +50,6 @@ backend/tests/*.db
 
 # Downloads do CNEFE/IBGE e bancos de teste locais (Etapa 2b)
 data/cnefe/
+
+# Dados de pesos/pedidos do BigQuery (repositório público: nunca versionar)
+data/peso/

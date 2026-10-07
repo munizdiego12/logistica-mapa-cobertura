@@ -23,6 +23,7 @@ Base: `MEMORIA_PROJETO_roteirizacao.md` (31/08/2026) comparado com o repositóri
 | 4. Lojas, hub no mapa, capacidade e janelas | Alta | Não existe. Hub ainda é texto livre. |
 | 5. Origem dos pedidos (Sheets/BigQuery) | Alta | Só CSV/XLSX. Conectores pendentes do schema do BigQuery. |
 | 6. Seleção de pedidos por loja/data (checkbox) | Alta | Não existe. |
+| **Peso dos pedidos (NOVO)** | Alta | Decisão tomada e subetapa 1 (estudo e CSV inicial) feita; faltam a tabela `item_pesos`, a tela de manutenção e o peso por pedido/rota/veículo. Ver seção abaixo. |
 | 7. VRP com OR-Tools | Crítica | `ortools` não está no `requirements.txt`. `routing.py` tem um VRPTW próprio e `main.py` faz agrupamento simples. Falta setor cardeal e regra de rotação. |
 | 8. Controle de duplicidade (`pedidos_roteirizados_hoje`) | Alta | Não existe. |
 | 9. Matriz de despacho com sugestão e alternativas | Média | Não existe. |
@@ -84,15 +85,40 @@ Alternativas:
 
 **Validar (feito):** a consulta por raio devolve CEPs de qualquer UF; recarregar não apaga dados; tamanho no Neon dentro do previsto.
 
+## Peso dos pedidos — decisão e estudo de viabilidade
+
+**Decisão:** não depender da API do Atacadão (ela não devolve peso). Vamos manter uma **tabela `item_pesos` no Neon**, com carga inicial extraída do nome do produto e **conferência manual dos itens mais vendidos**. Pedidos com itens sem peso aparecem como **"peso incompleto"** (o peso mostrado é um piso).
+
+**Subetapas:**
+1. **Estudo de viabilidade e CSV inicial — feita.** `scripts/estudo_peso.py` (só lê arquivos locais: sem rede, sem banco) lê `data/peso/skus.csv` e `data/peso/itens_pedidos.csv`, extrai o peso do nome (kg, g, mg, ml, L; `2x500g`, `12 x 1L`, `500g x 2` como multiplicador; ml/L = kg com densidade 1; contagens, dimensões e capacidades como saco de lixo e copo nunca viram peso) e gera `data/peso/item_pesos_inicial.csv` (`id_sku`, `reference_code`, `nome`, `peso_kg_sugerido`, `fonte`, `confianca`, `unidades_vendidas`), ordenado por unidades vendidas para revisão de cima para baixo. **`data/peso/` está no `.gitignore` (o repositório é público): nenhum dado de pedido vai para o git**, e o script recusa gravar o CSV dentro do repositório fora de pasta ignorada. Opção `--excel` gera o CSV com `;` e vírgula decimal (o Excel em português lê `1.5` como data).
+2. **Tabela `item_pesos`, tela de manutenção e fila "sem peso" — pendente** (depende das perguntas em aberto).
+3. **Peso por pedido, rota e veículo — pendente** (a Etapa 7, OR-Tools, usa o peso na capacidade).
+
+**Resultado do estudo (amostra de 6.675 SKUs, 32.422 itens, 2.164 pedidos, 13 lojas, 152.753 unidades; soma de `quantity_sku` por SKU = `unidades` em 100% dos casos):**
+- **Cobertura por unidades vendidas: 93,6%** (confiança alta 92,1%; baixa 1,5%); por SKU 89,8% (alta 86,2%; baixa 3,6%); 681 SKUs (10,2%) sem medida no nome.
+- **Pedidos completos: 39,1%** (847 de 2.164; só com confiança alta, 32,9%), porque basta 1 item sem peso entre os ~12 do pedido; os incompletos têm mediana de 2 itens sem peso em 17.
+- **Quanto a conferência manual ajuda** (SKUs sem peso mais vendidos): 248 SKUs → 80% dos pedidos completos; 426 → 90%; 567 → 95%; 681 → 100%. Os 100 primeiros da lista cobrem 76% das unidades sem peso.
+- **Categorias de risco entre os sem peso:** contagens "un" (572 SKUs, 92,7% das unidades sem peso, em geral combinadas com as outras), rolos (97 SKUs, 24,5%), folhas (81 SKUs, 22,1%), só dimensões (129 SKUs, 23,0%), capacidade em ml/L (54 SKUs, 6,6%), ovos (22 SKUs, 4,7%), kit/leve-pague (47 SKUs, 3,0%).
+- **Peso estimado dos pedidos completos (kg):** P10 9,6 | mediana 34,3 | P90 124,9 | máximo 1.520.
+- **Limites:** densidade 1 para ml/L (erro pequeno); peso líquido, não bruto; os SKUs de confiança baixa (3,6%: multiplicador, contagem, kit) pedem conferência; pedidos incompletos mostram só um piso.
+
+**Perguntas em aberto:**
+- Existe outra fonte de peso? As colunas `weight` (BigQuery) e "Peso Entrega" (Sheets) do plano original trazem o peso do pedido ou do item?
+- O peso deve ser **líquido** (o do rótulo, como no estudo) ou **bruto** (com embalagem)?
+- **Quem mantém** a tabela `item_pesos` (corrige os itens sem peso e os de confiança baixa) e com que frequência?
+- **Janela de entrega:** onde está esse dado (BigQuery, Sheets, outro)? Ela não aparece nos dois CSVs do estudo.
+- A tabela do BigQuery é **atualizada todo dia**? Isso define se SKUs novos entram na fila "sem peso" diariamente.
+
 ## Ordem sugerida a partir de agora
 
 1. Etapa 0 restante (backup automático e Alembic) e 0b (remover o `.patch`).
 2. Proteger rotas de negócio com o token.
 3. Etapas 3 e 4 (motoristas, lojas): base de dados para tudo o resto.
 4. Etapas 6 e 5 (seleção de pedidos, depois conectores quando o schema do BigQuery chegar).
-5. Etapa 7 (OR-Tools), com 8 (duplicidade).
-6. Etapas 9, 10, 11 e 12.
-7. Decidir o layout.
+5. Peso dos pedidos (subetapas 2 e 3): o solver usa o peso na capacidade.
+6. Etapa 7 (OR-Tools), com 8 (duplicidade).
+7. Etapas 9, 10, 11 e 12.
+8. Decidir o layout.
 
 ## Pendências externas
 - Schema do BigQuery e queries pré-salvas.

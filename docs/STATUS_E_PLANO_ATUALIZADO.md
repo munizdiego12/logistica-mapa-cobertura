@@ -9,14 +9,16 @@ Base: `MEMORIA_PROJETO_roteirizacao.md` (31/08/2026) comparado com o repositóri
 | 1. Autenticação | **Feita** | `auth.py`, tabela `operadores`, `/api/auth/register` (com código de convite), `/login`, `/me`, `Login.jsx` conectado ao `App.jsx`. Bug do "Network Error" corrigido no commit `862ee49` (`frontend/src/config.js` unifica a URL do backend). |
 | 2. CEP/raio sem fallback sintético | **Feita** | Commit `21c28ad`: BrasilAPI v2 + ViaCEP, CEPs com erro sinalizados em vez de substituídos. |
 | Extras | Feitos | Paleta da tela de login; `geocache.db` removido do git. |
+| 0. Banco permanente (Neon) — parte concluída | **Feita** (parcial) | Banco migrado para o Neon; operador recadastrado; login em produção funcionando (backend no Render com `psycopg2` corrigido, commit `a3ab502`). **Pendentes:** backup automático e Alembic (ver Etapa 0). |
+| 0b. `requirements.txt` em UTF-8 | **Feita** (parcial) | Regravado em UTF-8 e `sqlalchemy>=2.0,<2.1` fixado no commit `a3ab502`. Falta remover `correcoes_etapa1_auth.patch` da raiz. |
 | 2b, fase 1: faixas de CEP unificadas | **Feita** | `scripts/data/faixas_cep.csv` (76 faixas) + `scripts/carregar_faixas.py` (upsert, sem DROP) + `backend/faixas_cep.py` (schema, validador) + `ceps_reais` criada no `init_db`. Scripts antigos removidos. **Validada em produção** (ver Etapa 2b). |
 
 ## O que falta
 
 | Etapa | Prioridade | Situação no código |
 |---|---|---|
-| **0. Banco permanente (NOVO)** | **Urgente** | Banco do Render expirou. Ver seção abaixo. |
-| 0b. `requirements.txt` voltou a UTF-16 | **Urgente** | O arquivo no GitHub está de novo em UTF-16 (o bug 1 da memória). Regravar em UTF-8. Também remover `correcoes_etapa1_auth.patch` da raiz. |
+| **0. Banco permanente — restante** | Alta | Neon já concluído. Faltam o **backup automático (GitHub Actions)** — Etapa 3 do CHECKLIST — e o **Alembic** — Etapa 4 do CHECKLIST. Ver seção abaixo. |
+| 0b. Remover `correcoes_etapa1_auth.patch` | Baixa | O `requirements.txt` já foi regravado em UTF-8. Resta tirar o `.patch` da raiz. |
 | **2b. Base nacional de CEP via CNEFE (NOVO)** | Alta | Hoje `ceps_reais` só tem faixas manuais de capitais e regiões metropolitanas. Ver seção abaixo. **Fase 1 concluída e validada em produção**; fases 2 a 4 pendentes. |
 | 3. Cadastro de motoristas e veículos | Alta | Não existe. `main.py` ainda usa frota gerada ("Motorista 01"). Falta tabela, CRUD, 2 tipos de veículo com custo fixo (R$130 / R$260). |
 | 4. Lojas, hub no mapa, capacidade e janelas | Alta | Não existe. Hub ainda é texto livre. |
@@ -33,6 +35,8 @@ Base: `MEMORIA_PROJETO_roteirizacao.md` (31/08/2026) comparado com o repositóri
 
 ## Etapa 0 — Banco de dados permanente
 
+**Situação:** a parte do Neon está **concluída** (passos 1 a 5 abaixo). **Pendentes:** backup automático com GitHub Actions (passo 6, Etapa 3 do CHECKLIST) e Alembic (passo 7, Etapa 4 do CHECKLIST).
+
 **Problema:** o Postgres gratuito do Render expira (cerca de 30 dias) e depois é apagado.
 
 **Recomendação: Neon (neon.tech).**
@@ -46,15 +50,15 @@ Alternativas:
 - **Ideal em produção:** o time de TI da empresa hospedar o banco.
 
 **Passos:**
-1. Criar conta e projeto no Neon (região São Paulo, se disponível) e copiar a connection string.
-2. No Render, trocar `DATABASE_URL` pela string do Neon. Usar `?sslmode=require`.
-3. Redeploy. O `create_all` e o `CREATE TABLE IF NOT EXISTS` recriam `operadores`, `geocode_cache` e `geocache`.
-4. Recadastrar o operador (Diego) via `/api/auth/register` com o código de convite.
-5. Repovoar o cache de CEPs e as faixas rodando `scripts/carregar_faixas.py` (Etapa 2b, fase 1) apontando para o novo banco. O cache também volta a crescer com o uso.
-6. Agendar um backup periódico (`pg_dump`) para o banco nunca mais virar um ponto único de falha.
-7. Antes de criar as tabelas das próximas etapas (motoristas, lojas, histórico), adotar **Alembic** para migrations, assim mudanças de schema não dependem só de `create_all`.
+1. ✅ Criar conta e projeto no Neon (região São Paulo, se disponível) e copiar a connection string.
+2. ✅ No Render, trocar `DATABASE_URL` pela string do Neon. Usar `?sslmode=require`.
+3. ✅ Redeploy. O `create_all` e o `CREATE TABLE IF NOT EXISTS` recriam `operadores`, `geocode_cache` e `geocache`.
+4. ✅ Recadastrar o operador (Diego) via `/api/auth/register` com o código de convite.
+5. ✅ Repovoar o cache de CEPs e as faixas rodando `scripts/carregar_faixas.py` (Etapa 2b, fase 1) apontando para o novo banco. O cache também volta a crescer com o uso.
+6. ⏳ **Pendente.** Agendar um backup periódico automático (`pg_dump` via GitHub Actions) para o banco nunca mais virar um ponto único de falha.
+7. ⏳ **Pendente.** Antes de criar as tabelas das próximas etapas (motoristas, lojas, histórico), adotar **Alembic** para migrations, assim mudanças de schema não dependem só de `create_all`.
 
-**Validar:** `/api/auth/login` funciona, o cache persiste após reiniciar o Render, e o banco continua lá depois de 30 dias.
+**Validar:** ✅ `/api/auth/login` funciona em produção. ⏳ Ainda a confirmar: o cache persiste após reiniciar o Render, e o banco continua lá depois de 30 dias.
 
 ## Etapa 2b — Base nacional de CEP via CNEFE
 
@@ -76,7 +80,7 @@ Alternativas:
 
 ## Ordem sugerida a partir de agora
 
-1. Etapa 0 (banco) e 0b (requirements UTF-8).
+1. Etapa 0 restante (backup automático e Alembic) e 0b (remover o `.patch`).
 2. Etapa 2b (base nacional de CEP). A fase 1 já está carregada e validada no Neon.
 3. Proteger rotas de negócio com o token.
 4. Etapas 3 e 4 (motoristas, lojas): base de dados para tudo o resto.

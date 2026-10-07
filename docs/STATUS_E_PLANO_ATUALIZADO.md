@@ -9,7 +9,7 @@ Base: `MEMORIA_PROJETO_roteirizacao.md` (31/08/2026) comparado com o repositóri
 | 1. Autenticação | **Feita** | `auth.py`, tabela `operadores`, `/api/auth/register` (com código de convite), `/login`, `/me`, `Login.jsx` conectado ao `App.jsx`. Bug do "Network Error" corrigido no commit `862ee49` (`frontend/src/config.js` unifica a URL do backend). |
 | 2. CEP/raio sem fallback sintético | **Feita** | Commit `21c28ad`: BrasilAPI v2 + ViaCEP, CEPs com erro sinalizados em vez de substituídos. |
 | Extras | Feitos | Paleta da tela de login; `geocache.db` removido do git. |
-| 2b, fase 1: faixas de CEP unificadas | **Feita** | `scripts/data/faixas_cep.csv` (76 faixas) + `scripts/carregar_faixas.py` (upsert, sem DROP) + `backend/faixas_cep.py` (schema, validador) + `ceps_reais` criada no `init_db`. Scripts antigos removidos. |
+| 2b, fase 1: faixas de CEP unificadas | **Feita** | `scripts/data/faixas_cep.csv` (76 faixas) + `scripts/carregar_faixas.py` (upsert, sem DROP) + `backend/faixas_cep.py` (schema, validador) + `ceps_reais` criada no `init_db`. Scripts antigos removidos. **Validada em produção** (ver Etapa 2b). |
 
 ## O que falta
 
@@ -17,7 +17,7 @@ Base: `MEMORIA_PROJETO_roteirizacao.md` (31/08/2026) comparado com o repositóri
 |---|---|---|
 | **0. Banco permanente (NOVO)** | **Urgente** | Banco do Render expirou. Ver seção abaixo. |
 | 0b. `requirements.txt` voltou a UTF-16 | **Urgente** | O arquivo no GitHub está de novo em UTF-16 (o bug 1 da memória). Regravar em UTF-8. Também remover `correcoes_etapa1_auth.patch` da raiz. |
-| **2b. Base nacional de CEP via CNEFE (NOVO)** | Alta | Hoje `ceps_reais` só tem faixas manuais de capitais e regiões metropolitanas. Ver seção abaixo. **Fase 1 concluída**; fases 2 a 4 pendentes. |
+| **2b. Base nacional de CEP via CNEFE (NOVO)** | Alta | Hoje `ceps_reais` só tem faixas manuais de capitais e regiões metropolitanas. Ver seção abaixo. **Fase 1 concluída e validada em produção**; fases 2 a 4 pendentes. |
 | 3. Cadastro de motoristas e veículos | Alta | Não existe. `main.py` ainda usa frota gerada ("Motorista 01"). Falta tabela, CRUD, 2 tipos de veículo com custo fixo (R$130 / R$260). |
 | 4. Lojas, hub no mapa, capacidade e janelas | Alta | Não existe. Hub ainda é texto livre. |
 | 5. Origem dos pedidos (Sheets/BigQuery) | Alta | Só CSV/XLSX. Conectores pendentes do schema do BigQuery. |
@@ -67,7 +67,7 @@ Alternativas:
 - **Toda exportação que use dados do CNEFE deve trazer a atribuição "Fonte: IBGE, CNEFE 2022".**
 
 **Fases:**
-1. **Unificar as faixas manuais, sem DROP.** Um CSV (`scripts/data/faixas_cep.csv`), um carregador com upsert (`scripts/carregar_faixas.py`), `UNIQUE (cep_inicial, cep_final)`, validador (formato, limites do Brasil, sobreposição) e remoção dos scripts antigos. — **concluída** (a sobreposição do Rio de Janeiro foi corrigida: Centro passou a `20000000–20499999`; o carregador não apaga faixas antigas de um banco já populado, então um banco que já tenha a faixa velha precisa dela removida à mão)
+1. **Unificar as faixas manuais, sem DROP.** Um CSV (`scripts/data/faixas_cep.csv`), um carregador com upsert (`scripts/carregar_faixas.py`), `UNIQUE (cep_inicial, cep_final)`, validador (formato, limites do Brasil, sobreposição) e remoção dos scripts antigos. — **concluída** (a sobreposição do Rio de Janeiro foi corrigida: Centro passou a `20000000–20499999`; o carregador não apaga faixas antigas de um banco já populado, então um banco que já tenha a faixa velha precisa dela removida à mão). **Validada em produção:** Neon com as 76 faixas carregadas; cobertura testada na Av. Paulista (24 CEPs) e na Av. Atlântica (6 CEPs); Florianópolis, que não tem faixas, devolveu o aviso correto de CEPs sem cobertura em vez de um resultado inventado
 2. **Carga do CNEFE por prefixo de 5 dígitos.** Script offline que lê cada UF (download total ~3,7 GB, não vai para o banco), calcula a mediana dos pontos por prefixo e grava com upsert. Testar primeiro com o AC e medir com `pg_total_relation_size`. Inclui a atribuição nas exportações.
 3. **Complementos e consulta.** Consulta com filtro por caixa antes da distância, coluna `precisao` (`cep`, `faixa`, `cidade`, `brasilapi`), cobertura "parcial", tabela de centroides do IBGE (corrige o `ibge` fixo em 3550308 de `database.py`) e BrasilAPI v2 sob demanda para CEPs ausentes.
 4. **Aposentar as faixas manuais** nas regiões que o CNEFE já cobrir.
@@ -77,7 +77,7 @@ Alternativas:
 ## Ordem sugerida a partir de agora
 
 1. Etapa 0 (banco) e 0b (requirements UTF-8).
-2. Etapa 2b (base nacional de CEP). A fase 1 só precisa do banco novo para ser carregada.
+2. Etapa 2b (base nacional de CEP). A fase 1 já está carregada e validada no Neon.
 3. Proteger rotas de negócio com o token.
 4. Etapas 3 e 4 (motoristas, lojas): base de dados para tudo o resto.
 5. Etapas 6 e 5 (seleção de pedidos, depois conectores quando o schema do BigQuery chegar).

@@ -58,7 +58,15 @@ Remove-Item Env:DATABASE_URL
 - [ ] **Testar a importação do XLSX na transportadora** — antes do primeiro uso real (o sistema ainda está em produção sem uso real).
 - [x] **Mensagens de tela sem termos técnicos** (aviso de região sem cobertura em linguagem do operador; sem nome de tabela, script, arquivo, API ou serviço nas mensagens da cobertura).
 
-- [ ] **Fase 2 — Brasil inteiro, uma UF por vez** *(ordem aprovada: só depois do passo 3)*
+- [x] **Preparar a carga do Brasil inteiro** (script pronto e testado com SP, a maior UF: 22,95 milhões de endereços, pico de memória de 571 MB, 201 s; apaga o download de cada UF; para sozinho se a tabela passar de 100 MB)
+- [ ] **Rodar a carga do Brasil inteiro no Neon, uma UF por vez** (as maiores são SP ~1 GB, MG, BA e RJ; estimativa de ~4 MB no banco). No PowerShell, na raiz do projeto (a string do banco só na sessão, nunca em arquivo ou no chat):
+```
+$env:DATABASE_URL = "<string do Neon>"
+python scripts/carregar_cnefe.py --todas --pular AC DF
+Remove-Item Env:DATABASE_URL
+```
+  AC e DF já estão no Neon e são pulados. Se interromper, repita o comando acrescentando as UFs já feitas em `--pular`. Depois: me mande a saída (ou o resumo final) e conferimos o tamanho no Neon.
+- [x] **Fase 2 — Brasil inteiro (prompt original, substituído pelos dois itens acima)**
 ```
 O Acre foi validado. Rode o Brasil inteiro, uma UF de cada vez, medindo o tamanho da tabela no banco ao final de cada UF. Pare e me avise se passar de 100 MB no total. Faça commit sem push.
 ```

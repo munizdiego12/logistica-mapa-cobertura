@@ -81,7 +81,16 @@ Alternativas:
    - **Feito:** `scripts/carregar_cnefe.py` + `backend/cnefe.py` (tabela `cep_prefixos`, upsert por prefixo, `fonte` = "IBGE, CNEFE 2022"). AC gravado no Neon (45 prefixos, idênticos à lista oficial de CEPs do IBGE). DF medido em SQLite local: 755 prefixos, também idênticos à lista oficial.
    - **Medição da dispersão (raio com 90% dos pontos):** DF mediana 0,46 km, p90 3,3 km, máx. 90 km (86% dos prefixos até 2 km); AC mediana 17 km (19 de 45 prefixos acima de 30 km). Com raio de 30 km, "parcial" fica em ~9% dos prefixos tanto em Brasília (hub no Plano Piloto) quanto em Rio Branco; com 10 km, o AC chega a 31%. Hub no interior de estado rural não foi medido.
    - **Passos 1 e 2 (07/10/2026):** (a) `localidade` (DSC_LOCALIDADE mais frequente do prefixo) e `localidade_pct` (% dos endereços que ela representa), para o Bairro da exportação: no DF 621 de 755 prefixos têm 80% ou mais numa só localidade; no AC só 2 de 45, então lá o bairro é aproximado. (b) Tabela `ibge_municipios` (5.571 municípios: código, nome, UF) em `scripts/data/municipios_ibge.csv`, carregada por `scripts/carregar_municipios.py`; dá nome ao `cod_municipio` do CNEFE. (c) Código IBGE fixo corrigido: removidos o dicionário `ESTADOS_IBGE_BRASIL` e os valores 3550308/2304400 de `main.py` e `database.py`; a loja busca o código por UF + nome em `ibge_municipios`, as faixas de `ceps_reais` ganharam a coluna `ibge` (76 casadas com municípios reais) e, se não houver código, a célula da exportação fica vazia em vez de um valor inventado.
-   - **Gravado no Neon (07/10/2026):** municípios (5.571), faixas com `ibge`, AC e DF (`cep_prefixos` = 800 linhas). **Falta:** medir o tamanho no Neon e processar as demais UFs (depois do passo 3).
+   - **Gravado no Neon (07/10/2026):** municípios (5.571), faixas com `ibge`, AC e DF (`cep_prefixos` = 800 linhas). **Falta:** medir o tamanho no Neon e processar as demais UFs.
+   - **Carga do Brasil inteiro preparada (07/10/2026), ainda não executada no Neon:** `scripts/carregar_cnefe.py --todas` processa uma UF por vez, das menores para as maiores (RR, AP, AC ... RJ, BA, MG, SP), e faz sozinho: (a) leitura e agregação por partes, guardando só 8 bytes por endereço (SP real: 22,95 milhões de endereços, 7.329 prefixos, 201 s, **pico de memória de 571 MB**; DF 183 MB; resultado idêntico ao método anterior em AC e DF); (b) descarta prefixos com CEP fora da faixa da UF (erro de digitação no CNEFE: em SP, `71693` e `31317`, 16 endereços de 22,95 milhões) e recusa a UF se mais de 1% dos endereços estiver fora; (c) uma UF só substitui um prefixo gravado por outra UF se tiver mais endereços; (d) **apaga o arquivo baixado de cada UF** depois de gravar (no máximo ~1 GB ocupado de uma vez, nunca os 3,7 GB); (e) **para sozinho se a tabela passar de 100 MB** (a UF que estourou não é gravada); (f) imprime por UF endereços, prefixos (com o esperado), tamanho da tabela e pico de memória.
+   - **Estimativa de tamanho no Neon:** ~170 bytes por prefixo (linha + índice): total ~4 MB para os 24.649 prefixos (faixa provável de 2,5 a 6 MB), cerca de 1% do limite de 0,5 GB; SP ~1,2 MB, MG ~0,4 MB, as demais abaixo de 0,3 MB. O limite de 100 MB é só uma rede de segurança.
+   - **Comando (PowerShell, na raiz do projeto; a string do banco só na sessão):**
+     ```
+     $env:DATABASE_URL = "<string do Neon>"
+     python scripts/carregar_cnefe.py --todas --pular AC DF
+     Remove-Item Env:DATABASE_URL
+     ```
+     AC e DF já estão no Neon e são pulados. Cada UF é gravada numa transação própria: dá para interromper (Ctrl+C) e retomar depois repetindo o comando com `--pular` das UFs já feitas.
    - **Como gravar no Neon** (PowerShell, na raiz do projeto; a string do banco só na sessão, nunca em arquivo ou no chat):
      ```
      $env:DATABASE_URL = "<string do Neon>"
@@ -108,7 +117,7 @@ Alternativas:
 ## Ordem sugerida a partir de agora
 
 1. Etapa 0 restante (backup automático e Alembic) e 0b (remover o `.patch`).
-2. Etapa 2b (base nacional de CEP). Fase 1 validada e AC/DF no Neon. Passo 3 (troca da consulta) publicado e validado; em seguida: carga do resto do Brasil (CNEFE), uma UF por vez.
+2. Etapa 2b (base nacional de CEP). Fase 1 validada e AC/DF no Neon. Passo 3 (troca da consulta) publicado e validado; em seguida: rodar a carga do resto do Brasil (CNEFE), uma UF por vez (comando na seção da Etapa 2b).
 3. Proteger rotas de negócio com o token.
 4. Etapas 3 e 4 (motoristas, lojas): base de dados para tudo o resto.
 5. Etapas 6 e 5 (seleção de pedidos, depois conectores quando o schema do BigQuery chegar).

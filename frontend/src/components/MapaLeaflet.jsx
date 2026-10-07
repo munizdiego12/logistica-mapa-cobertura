@@ -353,6 +353,12 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
                       <span className="text-slate-500">Prazo de Entrega:</span>
                       <span className="font-bold text-emerald-600">{c.dias_sla} dia(s)</span>
                     </div>
+                    {c.cobertura && (
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Cobertura:</span>
+                        <span className={`font-bold ${c.cobertura === 'Total' ? 'text-emerald-600' : 'text-amber-600'}`}>{c.cobertura}</span>
+                      </div>
+                    )}
                     <div className="flex justify-between">
                       <span className="text-slate-500">IBGE:</span>
                       <span className="font-mono text-slate-700">{c.ibge}</span>

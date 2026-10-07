@@ -27,6 +27,7 @@ except ImportError:
 from config import DATABASE_URL as CONFIG_DATABASE_URL
 from faixas_cep import SCHEMA_CEPS_REAIS, INDICE_UNICO_CEPS_REAIS
 from ibge import SCHEMA_IBGE_MUNICIPIOS, normalizar_nome
+from cobertura import caixa_do_raio
 
 # Obtém a URL vinda de config.py ou direto do os.environ
 DATABASE_URL = CONFIG_DATABASE_URL or os.environ.get("DATABASE_URL", "")
@@ -234,6 +235,52 @@ async def buscar_ibge_municipio(uf: str, cidade: str):
     except Exception as e:
         print(f"[database] Falha ao buscar código IBGE de {cidade}/{uf}: {e}")
         return None
+
+
+_DISTANCIA_HAVERSINE_SQL = """(6371 * acos(
+                   LEAST(1.0, GREATEST(-1.0,
+                       cos(radians($1)) * cos(radians(p.lat)) *
+                       cos(radians(p.lon) - radians($2)) +
+                       sin(radians($1)) * sin(radians(p.lat))
+                   ))
+               ))"""
+
+
+async def ufs_com_prefixos() -> set:
+    """UFs que já têm prefixos do CNEFE carregados em cep_prefixos. Levanta erro se o banco estiver indisponível."""
+    pool = await get_pool()
+    if not pool:
+        raise RuntimeError("banco de dados indisponível")
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT DISTINCT uf FROM cep_prefixos")
+    return {r["uf"] for r in rows}
+
+
+async def consultar_prefixos_por_raio(lat_origem: float, lon_origem: float, raio_km: float) -> list:
+    """
+    Prefixos de CEP (5 dígitos, CNEFE) cujo ponto central está dentro do raio. Filtra primeiro por caixa
+    lat/lon e só então calcula a distância. Devolve dicts com o nome do município (ibge_municipios).
+    Levanta erro se o banco estiver indisponível: a lista vazia significa "sem dados", nunca "falha".
+    """
+    pool = await get_pool()
+    if not pool:
+        raise RuntimeError("banco de dados indisponível")
+
+    lat_min, lat_max, lon_min, lon_max = caixa_do_raio(lat_origem, lon_origem, raio_km)
+    query = f"""
+        SELECT p.prefixo, p.uf, p.cod_municipio, m.nome AS cidade, p.localidade, p.localidade_pct,
+               p.lat, p.lon, p.n_enderecos, p.dispersao_km,
+               {_DISTANCIA_HAVERSINE_SQL} AS distancia_km
+        FROM cep_prefixos p
+        LEFT JOIN ibge_municipios m ON m.codigo = p.cod_municipio
+        WHERE p.lat BETWEEN $4 AND $5
+          AND p.lon BETWEEN $6 AND $7
+          AND {_DISTANCIA_HAVERSINE_SQL} <= $3
+        ORDER BY distancia_km ASC
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(query, lat_origem, lon_origem, raio_km, lat_min, lat_max, lon_min, lon_max)
+    return [dict(r) for r in rows]
 
 
 async def consultar_ceps_por_raio(lat_origem: float, lon_origem: float, raio_km: float):

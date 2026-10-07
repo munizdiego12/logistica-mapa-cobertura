@@ -269,7 +269,7 @@ export default function App() {
       return;
     }
 
-    let csvContent = "data:text/csv;charset=utf-8,Codigo IBGE,UF,Cidade,Regiao_Bairro,Faixa Precificacao,CEP Inicial,CEP Final,Prazo Dias,Distancia KM\n";
+    let csvContent = "data:text/csv;charset=utf-8,Codigo IBGE,UF,Cidade,Regiao_Bairro,Faixa Precificacao,CEP Inicial,CEP Final,Prazo Dias,Distancia KM,Cobertura\n";
 
     dadosCoberturaCeps.pontos_cobertos.forEach((p) => {
       const ibge = p.ibge || dadosCoberturaCeps.hub?.ibge || "";
@@ -278,7 +278,7 @@ export default function App() {
       const bairro = p.bairro || "Área Atendida";
       const cepIni = p.cep_inicial || "";
       const cepFim = p.cep_final || "";
-      const prazo = p.dias_sla || (p.distancia_km <= 15 ? 1 : 2);
+      const prazo = p.dias_sla || (p.distancia_km <= 12 ? 1 : 2);
       const dist = p.distancia_km || 0;
 
       const linha = [
@@ -290,10 +290,19 @@ export default function App() {
         `"${cepIni}"`,
         `"${cepFim}"`,
         prazo,
-        dist
+        dist,
+        `"${p.cobertura || ""}"`
       ].join(',');
       csvContent += linha + "\n";
     });
+
+    // Legenda e fonte no fim do arquivo (depois de uma linha em branco), como na aba "Cobertura e fonte" do XLSX.
+    if (dadosCoberturaCeps.legenda_cobertura) {
+      csvContent += `\n"${dadosCoberturaCeps.legenda_cobertura}"\n`;
+    }
+    if (dadosCoberturaCeps.fonte) {
+      csvContent += `"${dadosCoberturaCeps.fonte}"\n`;
+    }
 
     const nomeHubLimpo = (origem.rua || dadosCoberturaCeps.hub?.cidade || 'hub')
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
@@ -491,8 +500,20 @@ export default function App() {
               <div className="p-2.5 rounded-lg bg-emerald-950/30 border border-emerald-500/30 text-[11px] space-y-2">
                 <div className="flex justify-between items-center text-emerald-400 font-bold">
                   <span>Cobertura Haversine:</span>
-                  <span>{dadosCoberturaCeps.total_pontos} CEPs no Raio de {dadosCoberturaCeps.raio_limite_km} km</span>
+                  <span>{dadosCoberturaCeps.total_pontos} prefixos de CEP no Raio de {dadosCoberturaCeps.raio_limite_km} km</span>
                 </div>
+                {dadosCoberturaCeps.resumo_cobertura && (
+                  <div className="flex justify-between items-center text-emerald-300 font-semibold">
+                    <span>Cobertura Total: {dadosCoberturaCeps.resumo_cobertura.total}</span>
+                    <span className="text-amber-300">Parcial: {dadosCoberturaCeps.resumo_cobertura.parcial}</span>
+                  </div>
+                )}
+                {dadosCoberturaCeps.legenda_cobertura && (
+                  <p className="text-[10px] leading-snug text-slate-400">{dadosCoberturaCeps.legenda_cobertura}</p>
+                )}
+                {dadosCoberturaCeps.fonte && (
+                  <p className="text-[10px] text-slate-500 italic">{dadosCoberturaCeps.fonte}</p>
+                )}
                 <div className="grid grid-cols-2 gap-2 pt-1">
                   <button
                     onClick={exportarTabelaCsv}

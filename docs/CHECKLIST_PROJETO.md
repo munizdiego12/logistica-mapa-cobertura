@@ -16,7 +16,8 @@ Marque `[x]` conforme for concluindo. Um prompt por vez. Depois de cada um: revi
 - [x] Etapa 2 — CEP/raio sem CEPs inventados
 - [x] Etapa 2b, fase 1 — 76 faixas de CEP unificadas (10 estados), testado em produção
 - [x] Etapa 2b, fase 2 — Acre: CNEFE por prefixo de CEP gravado no Neon (45 prefixos)
-- [x] Etapa 2b, passos 1 e 2 — `localidade` (bairro), tabela de municípios do IBGE e código IBGE fixo corrigido (no código; falta gravar no Neon, ver abaixo)
+- [x] Etapa 2b, passos 1 e 2 — `localidade` (bairro), tabela de municípios do IBGE e código IBGE fixo corrigido
+- [x] Etapa 2b — municípios, faixas com `ibge`, AC e DF gravados no Neon (`cep_prefixos` 800 linhas, `ibge_municipios` 5.571)
 - [x] Limpezas: requirements em UTF-8, senhas fora do código, código morto removido, CLAUDE.md
 
 ---
@@ -36,7 +37,7 @@ Execute a fase 2, só com o Acre: script offline que baixa o CNEFE do AC, calcul
   - [ ] Conferir o tamanho de `cep_prefixos` no Neon (`pg_total_relation_size`).
 
 - [x] **Fase 2b, passos 1 e 2 — `localidade`, municípios do IBGE, código IBGE** (feito no código; testes passando)
-- [ ] **Gravar no Neon: municípios, faixas (agora com `ibge`), AC (agora com `localidade`) e DF.** No PowerShell, na raiz do projeto (a string do banco só na sessão, nunca em arquivo ou no chat):
+- [x] **Gravar no Neon: municípios, faixas (agora com `ibge`), AC (agora com `localidade`) e DF.** No PowerShell, na raiz do projeto (a string do banco só na sessão, nunca em arquivo ou no chat):
 ```
 $env:DATABASE_URL = "<string do Neon>"
 python scripts/carregar_municipios.py
@@ -46,7 +47,14 @@ python scripts/carregar_cnefe.py --uf DF
 Remove-Item Env:DATABASE_URL
 ```
   Rode isto **antes** do `git push`: assim o app já encontra os códigos IBGE ao subir.
-- [ ] **Passo 3 — trocar a consulta de `ceps_reais` para `cep_prefixos`** (plano apresentado; **aguarda sua confirmação**). Decisões de negócio já tomadas: a exportação ganha a coluna **"Cobertura" (Total/Parcial)** mantendo os parciais, uma **legenda de uma linha** explicando Total e Parcial e a atribuição **"Fonte: IBGE, CNEFE 2022"**. Só depois disso vem o Brasil inteiro.
+- [x] **Passo 3 — trocar a consulta de `ceps_reais` para `cep_prefixos`** (implementado, commit local; decisões: só prefixos com centro dentro do raio, Total/Parcial pela dispersão, faixas manuais = Parcial enquanto a UF não tiver prefixos, coluna "Cobertura" por último no XLSX, legenda e fonte na aba "Cobertura e fonte", bairro em Title Case, prazo de 1 dia até 12 km)
+- [ ] **Conferir o passo 3 no Neon e fazer o push.** Antes do push, rode a conferência (somente leitura, só SELECT) e me mande a saída:
+```
+$env:DATABASE_URL = "<string do Neon>"
+python scripts/conferir_cobertura.py
+Remove-Item Env:DATABASE_URL
+```
+  Esperado: DF (Plano Piloto) com cerca de 671 pontos (639 Total, 32 Parcial); Av. Paulista com 24 e Av. Atlântica com 6, todas "Parcial"; Florianópolis com 0. Depois: `git push`, esperar o deploy no Render e testar no site (cobertura no DF, SP e Florianópolis; baixar o CSV e o XLSX).
 
 - [ ] **Fase 2 — Brasil inteiro, uma UF por vez** *(ordem aprovada: só depois do passo 3)*
 ```

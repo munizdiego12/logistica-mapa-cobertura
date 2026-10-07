@@ -19,6 +19,7 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
 import database
+import cobertura
 from database import get_db, Operador, init_db
 from config import OPERATOR_INVITE_CODE
 from auth import (
@@ -261,17 +262,26 @@ class RaioCepRequest(BaseModel):
     origem_uf: Optional[str] = ""
     raio_km: Optional[float] = 30.0
 
-async def _buscar_ceps_reais_banco(lat: float, lon: float, raio_km: float):
+async def _buscar_cobertura(lat: float, lon: float, raio_km: float):
     """
-    STUB DE IMPLEMENTAÇÃO (Projeto IBGE):
-    Tenta buscar na tabela CNEFE. Se falhar, faz fallback para simulação.
+    Cobertura por raio: prefixos de CEP do CNEFE (cep_prefixos) e, só para UFs ainda sem prefixos,
+    as faixas manuais (ceps_reais). Falha do banco vira erro 503 explícito: lista vazia só significa
+    "sem dados para essa região", nunca "deu erro".
     """
     try:
-        if hasattr(database, "consultar_ceps_por_raio"):
-            return await database.consultar_ceps_por_raio(lat, lon, raio_km)
-        return []
+        prefixos = await database.consultar_prefixos_por_raio(lat, lon, raio_km)
+        ufs = await database.ufs_com_prefixos()
+        faixas = await database.consultar_ceps_por_raio(lat, lon, raio_km)
     except Exception as e:
-        return []
+        print(f"[cobertura] Falha ao consultar a base de CEPs: {e!r}")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Não foi possível consultar a base de CEPs agora. Tente novamente em instantes; "
+                "se persistir, avise o administrador."
+            ),
+        )
+    return cobertura.combinar_cobertura(prefixos, faixas, ufs, raio_km)
 
 @app.post("/api/cobertura-ceps")
 async def gerar_cobertura_ceps_instantanea(req: RaioCepRequest):
@@ -298,19 +308,17 @@ async def gerar_cobertura_ceps_instantanea(req: RaioCepRequest):
 
     raio_max = req.raio_km or 30.0
 
-    # Busca a cobertura real de CEPs cadastrados (tabela ceps_reais) dentro do raio.
-    # O gerador sintético de 48 pontos radiais foi removido: se não houver dados
-    # reais cadastrados para essa região, devolvemos a lista vazia com um aviso
-    # explícito em vez de inventar CEPs fictícios.
-    pontos_cobertos = await _buscar_ceps_reais_banco(lat, lon, raio_max)
-    pontos_cobertos.sort(key=lambda x: x["distancia_km"])
+    # Cobertura real dentro do raio (prefixos do CNEFE + faixas manuais onde a UF ainda não foi
+    # carregada). O gerador sintético foi removido: sem dados reais devolvemos lista vazia com um
+    # aviso explícito em vez de inventar CEPs.
+    pontos_cobertos = await _buscar_cobertura(lat, lon, raio_max)
+    resumo = cobertura.resumir_cobertura(pontos_cobertos)
 
     aviso = None
     if not pontos_cobertos:
         aviso = (
-            "Nenhuma faixa de CEP cadastrada foi encontrada dentro desse raio. "
-            "Cadastre as faixas de CEP reais dessa região (tabela ceps_reais) "
-            "para que a cobertura apareça aqui."
+            "Nenhum CEP foi encontrado dentro desse raio: a base ainda não cobre essa região. "
+            "Carregue a UF com scripts/carregar_cnefe.py (ou cadastre as faixas em scripts/data/faixas_cep.csv)."
         )
 
     return {
@@ -322,6 +330,9 @@ async def gerar_cobertura_ceps_instantanea(req: RaioCepRequest):
         "raio_limite_km": raio_max,
         "total_pontos": len(pontos_cobertos),
         "pontos_cobertos": pontos_cobertos,
+        "resumo_cobertura": resumo,
+        "legenda_cobertura": cobertura.LEGENDA_COBERTURA,
+        "fonte": cobertura.ATRIBUICAO_CNEFE if resumo["usa_cnefe"] else None,
         "aviso": aviso,
     }
 
@@ -348,7 +359,8 @@ def exportar_tabela_frete_xlsx(req: ExportarXlsxRequest):
         "Balsa (R$)", "Suframa Valor (R$)", "TAS (R$)", "SEC CAT (R$)", "DAT (R$)",
         "% Percentual", "Mínimo (R$)", "Máximo (R$)", "% Percentual NF", "Valor por fração 100Kg (R$)", "Valor fixo (R$)", "Mínimo (R$)", "Máximo (R$)",
         "Valor (R$)", "Fração KG", "Mínimo (R$)", "Máximo (R$)", "Fator de Cubagem",
-        "Altura Máxima", "Largura Máxima", "Comprimento Máximo", "Soma Máxima", "% Percentual da rota", "ICMS sobre o pedágio"
+        "Altura Máxima", "Largura Máxima", "Comprimento Máximo", "Soma Máxima", "% Percentual da rota", "ICMS sobre o pedágio",
+        "Cobertura"  # sempre a última coluna: não desloca nenhuma coluna do modelo da transportadora
     ]
     
     ws1.append(header_l1)
@@ -362,7 +374,7 @@ def exportar_tabela_frete_xlsx(req: ExportarXlsxRequest):
         bairro = p.get("bairro") or ""
         cep_ini = str(p.get("cep_inicial", "00000000")).zfill(8)
         cep_fim = str(p.get("cep_final", "99999999")).zfill(8)
-        dias = p.get("dias_sla") or (1 if p.get("distancia_km", 0) <= 12 else 2)
+        dias = p.get("dias_sla") or (1 if p.get("distancia_km", 0) <= cobertura.LIMITE_PRAZO_1_DIA_KM else 2)
         dist = p.get("distancia_km", 0)
         
         linha = [
@@ -374,7 +386,8 @@ def exportar_tabela_frete_xlsx(req: ExportarXlsxRequest):
             0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0,
             0, 100, 0, 0, 250,
-            0, 0, 0, 0, 0, 0
+            0, 0, 0, 0, 0, 0,
+            p.get("cobertura") or ""
         ]
         ws1.append(linha)
 
@@ -390,6 +403,14 @@ def exportar_tabela_frete_xlsx(req: ExportarXlsxRequest):
     ws2 = wb.create_sheet(title="TZR e TDE")
     ws2.append(["CNPJ", "TZR", "TDE"])
     ws2.append(["00.000.000/0000-00", 0, 0])
+
+    # Legenda e atribuição ficam numa aba própria (não abaixo dos dados) para que um importador da
+    # transportadora não leia essas linhas como faixas de CEP.
+    ws3 = wb.create_sheet(title="Cobertura e fonte")
+    ws3.append([cobertura.LEGENDA_COBERTURA])
+    if cobertura.resumir_cobertura(req.pontos_cobertos)["usa_cnefe"]:
+        ws3.append([cobertura.ATRIBUICAO_CNEFE])
+    ws3.column_dimensions["A"].width = 140
     
     output = io.BytesIO()
     wb.save(output)

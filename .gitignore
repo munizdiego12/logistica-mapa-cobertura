@@ -47,3 +47,6 @@ sql_app.db
 # ==============================
 backend/tests/*.db
 *.db
+
+# Downloads do CNEFE/IBGE e bancos de teste locais (Etapa 2b)
+data/cnefe/

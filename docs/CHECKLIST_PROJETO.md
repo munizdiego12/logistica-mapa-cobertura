@@ -48,13 +48,13 @@ Remove-Item Env:DATABASE_URL
 ```
   Rode isto **antes** do `git push`: assim o app já encontra os códigos IBGE ao subir.
 - [x] **Passo 3 — trocar a consulta de `ceps_reais` para `cep_prefixos`** (implementado, commit local; decisões: só prefixos com centro dentro do raio, Total/Parcial pela dispersão, faixas manuais = Parcial enquanto a UF não tiver prefixos, coluna "Cobertura" por último no XLSX, legenda e fonte na aba "Cobertura e fonte", bairro em Title Case, prazo de 1 dia até 12 km)
-- [ ] **Conferir o passo 3 no Neon e fazer o push.** Antes do push, rode a conferência (somente leitura, só SELECT) e me mande a saída:
+- [x] **Conferir o passo 3 no Neon e fazer o push.** Conferência feita (somente leitura, só SELECT): DF 671 (639 Total, 32 Parcial), Av. Paulista 24, Av. Atlântica 6, Florianópolis 0, Rio Branco 22. Push feito em `960ef8c`. Comando usado:
 ```
 $env:DATABASE_URL = "<string do Neon>"
 python scripts/conferir_cobertura.py
 Remove-Item Env:DATABASE_URL
 ```
-  Esperado: DF (Plano Piloto) com cerca de 671 pontos (639 Total, 32 Parcial); Av. Paulista com 24 e Av. Atlântica com 6, todas "Parcial"; Florianópolis com 0. Depois: `git push`, esperar o deploy no Render e testar no site (cobertura no DF, SP e Florianópolis; baixar o CSV e o XLSX).
+- [ ] **Validar o passo 3 no site** (depois do deploy no Render): calcular a cobertura no DF (deve mostrar Total e Parcial, legenda e fonte), em SP (24, todas "Parcial", sem fonte do IBGE) e em Florianópolis (aviso de região sem cobertura); baixar o CSV e o XLSX e conferir a coluna "Cobertura", a legenda e a aba "Cobertura e fonte".
 
 - [ ] **Fase 2 — Brasil inteiro, uma UF por vez** *(ordem aprovada: só depois do passo 3)*
 ```

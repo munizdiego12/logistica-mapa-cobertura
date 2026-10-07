@@ -14,7 +14,7 @@ Base: `MEMORIA_PROJETO_roteirizacao.md` (31/08/2026) comparado com o repositóri
 | 2b, fase 1: faixas de CEP unificadas | **Feita** | `scripts/data/faixas_cep.csv` (76 faixas) + `scripts/carregar_faixas.py` (upsert, sem DROP) + `backend/faixas_cep.py` (schema, validador) + `ceps_reais` criada no `init_db`. Scripts antigos removidos. **Validada em produção** (ver Etapa 2b). |
 | 2b, fase 2 (parcial): CNEFE por prefixo de CEP | **Feita** (parcial) | `scripts/carregar_cnefe.py` + `backend/cnefe.py` (tabela `cep_prefixos`, upsert). AC gravado no Neon (45 prefixos). DF medido em SQLite local (755 prefixos). |
 | 2b, passos 1 e 2: `localidade`, municípios do IBGE e código IBGE | **Feitos no código** | `localidade`/`localidade_pct` em `cep_prefixos`; tabela `ibge_municipios` (5.571) com `scripts/carregar_municipios.py`; coluna `ibge` em `ceps_reais`; código IBGE fixo removido de `main.py` e `database.py`. **Gravados no Neon** (`cep_prefixos` 800 linhas = AC 45 + DF 755; `ibge_municipios` 5.571). |
-| 2b, passo 3: troca da consulta para `cep_prefixos` | **Publicada** (push em `960ef8c`; falta validar no site) | `backend/cobertura.py` (regras), `database.consultar_prefixos_por_raio` (caixa lat/lon + distância), `/api/cobertura-ceps` com Total/Parcial e regra por UF, XLSX com coluna "Cobertura" + aba "Cobertura e fonte", legenda e atribuição na tela e no CSV. Conferida no Neon com `scripts/conferir_cobertura.py`. **Falta:** validar no site. |
+| 2b, passo 3: troca da consulta para `cep_prefixos` | **Publicada e validada em produção** (`960ef8c`) | `backend/cobertura.py` (regras), `database.consultar_prefixos_por_raio` (caixa lat/lon + distância), `/api/cobertura-ceps` com Total/Parcial e regra por UF, XLSX com coluna "Cobertura" + aba "Cobertura e fonte", legenda e atribuição na tela e no CSV. Conferida no Neon e validada no site: Av. Paulista (24, todas "Parcial", sem fonte), Praça dos Três Poderes (682: 649 Total e 33 Parcial, com fonte), Florianópolis com aviso e XLSX com a aba "Cobertura e fonte". **Pendência antes do primeiro uso real:** testar a importação do XLSX na transportadora. |
 
 ## O que falta
 
@@ -22,7 +22,7 @@ Base: `MEMORIA_PROJETO_roteirizacao.md` (31/08/2026) comparado com o repositóri
 |---|---|---|
 | **0. Banco permanente — restante** | Alta | Neon já concluído. Faltam o **backup automático (GitHub Actions)** — Etapa 3 do CHECKLIST — e o **Alembic** — Etapa 4 do CHECKLIST. Ver seção abaixo. |
 | 0b. Remover `correcoes_etapa1_auth.patch` | Baixa | O `requirements.txt` já foi regravado em UTF-8. Resta tirar o `.patch` da raiz. |
-| **2b. Base nacional de CEP via CNEFE (NOVO)** | Alta | Hoje `ceps_reais` só tem faixas manuais de capitais e regiões metropolitanas. Ver seção abaixo. **Fase 1 concluída e validada em produção**; fase 2 em andamento (AC e DF no Neon; faltam as demais UFs); **passo 3 (troca da consulta) publicado em `960ef8c`, falta só validar no site**; fase 4 pendente. |
+| **2b. Base nacional de CEP via CNEFE (NOVO)** | Alta | Hoje `ceps_reais` só tem faixas manuais de capitais e regiões metropolitanas. Ver seção abaixo. **Fase 1 concluída e validada em produção**; fase 2 em andamento (AC e DF no Neon; faltam as demais UFs); **passo 3 (troca da consulta) publicado e validado em produção** (pendente: importar o XLSX na transportadora antes do primeiro uso real); fase 4 pendente. |
 | 3. Cadastro de motoristas e veículos | Alta | Não existe. `main.py` ainda usa frota gerada ("Motorista 01"). Falta tabela, CRUD, 2 tipos de veículo com custo fixo (R$130 / R$260). |
 | 4. Lojas, hub no mapa, capacidade e janelas | Alta | Não existe. Hub ainda é texto livre. |
 | 5. Origem dos pedidos (Sheets/BigQuery) | Alta | Só CSV/XLSX. Conectores pendentes do schema do BigQuery. |
@@ -91,13 +91,15 @@ Alternativas:
      python scripts/carregar_cnefe.py --uf DF
      Remove-Item Env:DATABASE_URL
      ```
-3. **Troca da consulta para `cep_prefixos`** — **publicada** (push em `960ef8c`); falta só validar no site.
+3. **Troca da consulta para `cep_prefixos`** — **publicada e validada em produção** (`960ef8c`).
    - **Consulta:** `database.consultar_prefixos_por_raio` filtra por caixa lat/lon e depois calcula a distância; une com `ibge_municipios` para o nome da cidade. `backend/cobertura.py` decide Total/Parcial, formata o bairro e junta as fontes: faixas manuais só entram para UFs sem nenhum prefixo (hoje tudo fora de AC e DF).
    - **Erros visíveis:** falha do banco agora vira HTTP 503 com mensagem clara; antes `_buscar_ceps_reais_banco` engolia o erro e a tela dizia "nenhuma faixa cadastrada".
    - **Resposta/telas:** cada ponto traz `cobertura`, `precisao` (`prefixo`/`faixa`), `bairro_aproximado` (bairro vira "X e outros" quando a localidade representa menos de 50% do prefixo), `dispersao_km`; a resposta traz `resumo_cobertura`, `legenda_cobertura` e `fonte`. A tela mostra Total/Parcial, a legenda e a fonte; o popup do mapa mostra a cobertura; o CSV ganhou a coluna e, no fim, a legenda e a fonte; o XLSX ganhou a coluna "Cobertura" (última) e a aba "Cobertura e fonte". A atribuição "Fonte: IBGE, CNEFE 2022" só aparece quando há dado do CNEFE na resposta.
    - **Comparação no DF (hub no Plano Piloto, 30 km):** consulta antiga = 3 faixas grandes; nova = 671 prefixos (639 Total, 32 Parcial; 21 com bairro aproximado). Av. Paulista = 24 faixas e Av. Atlântica = 6 faixas, iguais à produção (todas "Parcial", sem atribuição ao CNEFE); Florianópolis = 0 pontos e o aviso de região sem cobertura.
    - **Conferência no Neon (feita):** `scripts/conferir_cobertura.py` (somente leitura) devolveu DF/Plano Piloto 671 pontos (639 Total, 32 Parcial), Av. Paulista 24, Av. Atlântica 6, Florianópolis 0 e Rio Branco 22, iguais ao esperado.
-   - **Falta:** validar no site (depois do deploy no Render): cobertura no DF, em SP e em Florianópolis; baixar o CSV e o XLSX e conferir a coluna "Cobertura", a legenda e a fonte.
+   - **Validação no site (feita):** Av. Paulista = 24 faixas, todas "Parcial", sem fonte do IBGE; Praça dos Três Poderes = 682 (649 Total, 33 Parcial), com fonte; Florianópolis = aviso de região sem cobertura; XLSX com a coluna "Cobertura" por último e a aba "Cobertura e fonte" com a legenda e a fonte.
+   - **Pendência (antes do primeiro uso real):** testar a importação do XLSX na transportadora. O sistema ainda está em produção sem uso real, então isso não foi testado.
+   - **Mensagens de tela sem termos técnicos:** o aviso de região sem cobertura agora diz "Ainda não temos CEPs cadastrados para essa região. Confira o endereço da loja ou peça ao administrador do sistema para incluir a região."; as mensagens de erro não citam mais tabela, script, arquivo, API nem nome de serviço (um teste garante isso para as três mensagens da cobertura). Rótulos fixos com "Haversine", "OSRM" e "Polar VRP" nos títulos continuam; podem ser trocados se você quiser.
    - **Depois (fase posterior):** BrasilAPI v2 sob demanda para CEPs ausentes e centroides de município do IBGE como último recurso.
 4. **Aposentar as faixas manuais** nas regiões que o CNEFE já cobrir.
 
@@ -106,7 +108,7 @@ Alternativas:
 ## Ordem sugerida a partir de agora
 
 1. Etapa 0 restante (backup automático e Alembic) e 0b (remover o `.patch`).
-2. Etapa 2b (base nacional de CEP). Fase 1 validada e AC/DF no Neon. Passo 3 (troca da consulta) publicado; em seguida: validar no site; só então carregar o resto do Brasil.
+2. Etapa 2b (base nacional de CEP). Fase 1 validada e AC/DF no Neon. Passo 3 (troca da consulta) publicado e validado; em seguida: carga do resto do Brasil (CNEFE), uma UF por vez.
 3. Proteger rotas de negócio com o token.
 4. Etapas 3 e 4 (motoristas, lojas): base de dados para tudo o resto.
 5. Etapas 6 e 5 (seleção de pedidos, depois conectores quando o schema do BigQuery chegar).

@@ -277,8 +277,8 @@ async def _buscar_cobertura(lat: float, lon: float, raio_km: float):
         raise HTTPException(
             status_code=503,
             detail=(
-                "Não foi possível consultar a base de CEPs agora. Tente novamente em instantes; "
-                "se persistir, avise o administrador."
+                "Não foi possível consultar a cobertura de CEPs agora. Tente novamente em instantes; "
+                "se o problema continuar, avise o administrador do sistema."
             ),
         )
     return cobertura.combinar_cobertura(prefixos, faixas, ufs, raio_km)
@@ -296,8 +296,7 @@ async def gerar_cobertura_ceps_instantanea(req: RaioCepRequest):
         raise HTTPException(
             status_code=422,
             detail=(
-                "Não foi possível localizar o endereço/CEP informado para a loja "
-                "(BrasilAPI, ViaCEP e Nominatim não retornaram nenhum resultado). "
+                "Não foi possível localizar o endereço ou o CEP informado para a loja. "
                 "Verifique o CEP e o endereço digitados."
             ),
         )
@@ -317,8 +316,8 @@ async def gerar_cobertura_ceps_instantanea(req: RaioCepRequest):
     aviso = None
     if not pontos_cobertos:
         aviso = (
-            "Nenhum CEP foi encontrado dentro desse raio: a base ainda não cobre essa região. "
-            "Carregue a UF com scripts/carregar_cnefe.py (ou cadastre as faixas em scripts/data/faixas_cep.csv)."
+            "Ainda não temos CEPs cadastrados para essa região. Confira o endereço da loja "
+            "ou peça ao administrador do sistema para incluir a região."
         )
 
     return {
@@ -897,7 +896,7 @@ async def iniciar_otimizacao(req: "OtimizarRequest"):
 def status_otimizacao(job_id: str):
     job = JOBS.get(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="Job não encontrado (pode ter expirado).")
+        raise HTTPException(status_code=404, detail="Cálculo não encontrado (pode ter expirado). Gere as rotas novamente.")
     resposta = {
         "status": job["status"],
         "etapa": job["etapa"],

@@ -87,7 +87,10 @@ def test_hub_sem_nenhuma_cobertura_devolve_aviso_como_florianopolis(cliente, mon
     _simular_banco(monkeypatch, prefixos=[], ufs={"DF", "AC"}, faixas=[])
     d = cliente.post("/api/cobertura-ceps", json=REQ).json()
     assert d["total_pontos"] == 0 and d["pontos_cobertos"] == []
-    assert d["aviso"] and "não cobre essa região" in d["aviso"]
+    assert d["aviso"] == (
+        "Ainda não temos CEPs cadastrados para essa região. Confira o endereço da loja "
+        "ou peça ao administrador do sistema para incluir a região."
+    )
     assert d["resumo_cobertura"] == {"total": 0, "parcial": 0, "usa_cnefe": False}
 
 
@@ -99,7 +102,42 @@ def test_falha_do_banco_vira_503_e_nao_o_aviso_de_sem_cobertura(cliente, monkeyp
     monkeypatch.setattr(main.database, "consultar_prefixos_por_raio", quebrado)
     r = cliente.post("/api/cobertura-ceps", json=REQ)
     assert r.status_code == 503
-    assert "base de CEPs" in r.json()["detail"]
+    assert "cobertura de CEPs" in r.json()["detail"]
+
+
+TERMOS_TECNICOS = (
+    "ceps_reais", "cep_prefixos", "ibge_municipios", "scripts", ".py", ".csv", "tabela", "banco de dados",
+    "BrasilAPI", "ViaCEP", "Nominatim", "API", "SQL", "carregar_", "DATABASE",
+)
+
+
+def test_mensagens_de_tela_da_cobertura_nao_citam_termos_tecnicos(cliente, monkeypatch):
+    mensagens = []
+
+    # 1) aviso de região sem cobertura
+    _simular_banco(monkeypatch, prefixos=[], ufs={"DF"}, faixas=[])
+    mensagens.append(cliente.post("/api/cobertura-ceps", json=REQ).json()["aviso"])
+
+    # 2) falha do banco (503)
+    async def quebrado(*args):
+        raise RuntimeError("banco de dados indisponível")
+
+    monkeypatch.setattr(main.database, "consultar_prefixos_por_raio", quebrado)
+    mensagens.append(cliente.post("/api/cobertura-ceps", json=REQ).json()["detail"])
+
+    # 3) endereço da loja não encontrado (422)
+    async def geocode_vazio(client, *args, **kwargs):
+        return None, None, "", "", "", "", "ERRO_CEP_INVALIDO"
+
+    monkeypatch.setattr(main, "geocode_async", geocode_vazio)
+    r = cliente.post("/api/cobertura-ceps", json=REQ)
+    assert r.status_code == 422
+    mensagens.append(r.json()["detail"])
+
+    assert all(mensagens) and len(mensagens) == 3
+    for texto in mensagens:
+        for termo in TERMOS_TECNICOS:
+            assert termo.lower() not in texto.lower(), f"termo técnico '{termo}' em: {texto}"
 
 
 def _ponto(cobertura, precisao="prefixo", ibge=5300108, bairro="Asa Sul"):

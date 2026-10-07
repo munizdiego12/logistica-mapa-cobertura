@@ -173,7 +173,7 @@ export default function App() {
       setDadosCoberturaCeps(res.data);
     } catch (err) {
       const detalhe = err?.response?.data?.detail;
-      alert(detalhe || 'Erro ao calcular cobertura dinâmica de CEPs. Verifique a conexão com a API.');
+      alert(detalhe || 'Não foi possível calcular a cobertura de CEPs. Verifique sua conexão e tente de novo.');
     } finally {
       setLoadingCeps(false);
     }
@@ -232,7 +232,7 @@ export default function App() {
         }, 1200);
       });
     } catch (err) {
-      alert(err?.message || 'Erro ao processar roteirização. Verifique os endereços informados e o status da API.');
+      alert(err?.message || 'Não foi possível gerar as rotas. Verifique os endereços informados e tente de novo.');
     } finally {
       setLoading(false);
       setProgresso(null);
@@ -499,8 +499,8 @@ export default function App() {
             {dadosCoberturaCeps && dadosCoberturaCeps.total_pontos > 0 && (
               <div className="p-2.5 rounded-lg bg-emerald-950/30 border border-emerald-500/30 text-[11px] space-y-2">
                 <div className="flex justify-between items-center text-emerald-400 font-bold">
-                  <span>Cobertura Haversine:</span>
-                  <span>{dadosCoberturaCeps.total_pontos} prefixos de CEP no Raio de {dadosCoberturaCeps.raio_limite_km} km</span>
+                  <span>Cobertura no raio:</span>
+                  <span>{dadosCoberturaCeps.total_pontos} faixas de CEP em {dadosCoberturaCeps.raio_limite_km} km</span>
                 </div>
                 {dadosCoberturaCeps.resumo_cobertura && (
                   <div className="flex justify-between items-center text-emerald-300 font-semibold">

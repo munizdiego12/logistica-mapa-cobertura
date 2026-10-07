@@ -54,7 +54,9 @@ $env:DATABASE_URL = "<string do Neon>"
 python scripts/conferir_cobertura.py
 Remove-Item Env:DATABASE_URL
 ```
-- [ ] **Validar o passo 3 no site** (depois do deploy no Render): calcular a cobertura no DF (deve mostrar Total e Parcial, legenda e fonte), em SP (24, todas "Parcial", sem fonte do IBGE) e em Florianópolis (aviso de região sem cobertura); baixar o CSV e o XLSX e conferir a coluna "Cobertura", a legenda e a aba "Cobertura e fonte".
+- [x] **Validar o passo 3 no site:** Av. Paulista (24, todas "Parcial", sem fonte), Praça dos Três Poderes (682: 649 Total, 33 Parcial, com fonte), Florianópolis com aviso, XLSX com a coluna "Cobertura" por último e a aba "Cobertura e fonte".
+- [ ] **Testar a importação do XLSX na transportadora** — antes do primeiro uso real (o sistema ainda está em produção sem uso real).
+- [x] **Mensagens de tela sem termos técnicos** (aviso de região sem cobertura em linguagem do operador; sem nome de tabela, script, arquivo, API ou serviço nas mensagens da cobertura).
 
 - [ ] **Fase 2 — Brasil inteiro, uma UF por vez** *(ordem aprovada: só depois do passo 3)*
 ```

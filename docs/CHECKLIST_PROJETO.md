@@ -132,7 +132,13 @@ Implemente a lista de pedidos com checkbox, filtrada pela loja selecionada e por
 
 ## 🔄 Etapa 7b — Peso dos pedidos *(antes da Etapa 8: o solver usa o peso na capacidade)*
 
-**Decisão:** em vez de depender da API do Atacadão (que não devolve peso), mantemos uma **tabela `item_pesos` no Neon**, com carga inicial extraída do nome do produto e **conferência manual dos itens mais vendidos**. Pedidos com itens sem peso aparecem como **"peso incompleto"** (o peso mostrado é então só um piso).
+**Decisões do Diego (08/10/2026):**
+1. **Ordem:** a subetapa 2 **não começa agora**. Primeiro vêm o **backup automático (Etapa 3)** e o **Alembic com rotas protegidas (Etapa 4)**, porque a tabela de pesos terá dados conferidos à mão e uma tela de edição que precisa de login e de migration.
+2. **"Peso incompleto" é mostrado como mínimo**, por exemplo: "no mínimo 34 kg; faltam 2 itens".
+3. **Quem mantém a tabela:** qualquer operador logado pode editar; o sistema registra **quem alterou e quando**.
+4. **Janela de entrega** é outro assunto e fica em aberto.
+
+**Decisão original:** em vez de depender da API do Atacadão (que não devolve peso), mantemos uma **tabela `item_pesos` no Neon**, com carga inicial extraída do nome do produto e **conferência manual dos itens mais vendidos**. Pedidos com itens sem peso aparecem como **"peso incompleto"** (o peso mostrado é então só um piso).
 
 - [x] **Subetapa 1 — Estudo de viabilidade e CSV inicial** (feito, sem integrar nada, sem rede e sem tocar no banco): `scripts/estudo_peso.py` lê `data/peso/skus.csv` e `data/peso/itens_pedidos.csv` (ambos **fora do git**: o repositório é público) e gera `data/peso/item_pesos_inicial.csv` para revisão manual. Resultado com os 6.675 SKUs e 2.164 pedidos da amostra:
   - o nome traz o peso de **93,6% das unidades vendidas** (92,1% com confiança alta) e de 89,8% dos SKUs; 681 SKUs ficam sem medida;
@@ -140,21 +146,21 @@ Implemente a lista de pedidos com checkbox, filtrada pela loja selecionada e por
   - conferindo à mão os **248 SKUs** mais vendidos sem peso chega-se a 80% de pedidos completos, com **426** a 90%, com 567 a 95% e com 681 a 100%;
   - os sem peso são sobretudo contagens (un, rolos, folhas, ovos), dimensões e capacidades (saco de lixo, copo): o CSV traz esses casos em branco para você preencher.
 - [ ] **Revisar o `data/peso/item_pesos_inicial.csv`** de cima para baixo (já vem ordenado por unidades vendidas): preencher os sem peso e conferir os de confiança "baixa". Para abrir no Excel em português use `python scripts/estudo_peso.py --excel` (o Excel lê "1.5" como data).
-- [ ] **Subetapa 2 — Tabela `item_pesos`, tela de manutenção e fila "sem peso"** *(depende das perguntas em aberto; rascunho do prompt)*
+- [ ] **Subetapa 2 — Tabela `item_pesos`, tela de manutenção e fila "sem peso"** *(só depois das Etapas 3 e 4 deste checklist: backup automático, Alembic e rotas protegidas; rascunho do prompt)*
 ```
-Crie a tabela item_pesos no Neon via Alembic (id_sku, reference_code, nome, peso_kg, fonte, confianca, atualizado_em, atualizado_por), com carga a partir do CSV revisado (script com upsert, DATABASE_URL só pela variável de ambiente). Crie a tela de manutenção protegida por token: listar/editar o peso de um SKU e uma fila "sem peso" ordenada pelas unidades vendidas. SKUs novos que aparecerem nos pedidos entram na fila. Sem push.
+Crie a tabela item_pesos no Neon via Alembic (id_sku, reference_code, nome, peso_kg, fonte, confianca, atualizado_em, atualizado_por; qualquer operador logado edita e o sistema registra quem alterou e quando), com carga a partir do CSV revisado (script com upsert, DATABASE_URL só pela variável de ambiente). Crie a tela de manutenção protegida por token: listar/editar o peso de um SKU e uma fila "sem peso" ordenada pelas unidades vendidas. SKUs novos que aparecerem nos pedidos entram na fila. Sem push.
 ```
 - [ ] **Subetapa 3 — Peso por pedido, rota e veículo** *(rascunho do prompt)*
 ```
-Calcule o peso de cada pedido (quantidade x peso do item) e mostre "peso incompleto" quando algum item não tiver peso (o valor é um piso). Some o peso por rota e compare com a capacidade do veículo (peso + volume, o que estourar primeiro). Sem push.
+Calcule o peso de cada pedido (quantidade x peso do item) e, quando algum item não tiver peso, mostre "peso incompleto" como mínimo (ex.: "no mínimo 34 kg; faltam 2 itens"). Some o peso por rota e compare com a capacidade do veículo (peso + volume, o que estourar primeiro). Sem push.
 ```
 
-**Perguntas em aberto:**
-- Existe outra fonte de peso? As colunas `weight` (BigQuery) e "Peso Entrega" (Sheets) do plano original trazem o peso do pedido ou do item?
-- O peso deve ser **líquido** (o do rótulo, como no estudo) ou **bruto** (com embalagem)?
-- **Quem mantém** a tabela `item_pesos` (corrige os itens sem peso e os de confiança baixa) e com que frequência?
-- **Janela de entrega:** onde está esse dado (BigQuery, Sheets, outro)? Ela não aparece nos dois CSVs do estudo.
-- A tabela do BigQuery é **atualizada todo dia**? Isso define se SKUs novos entram na fila "sem peso" diariamente.
+**Perguntas:**
+- ✅ **Quem mantém a tabela?** Qualquer operador logado, com registro de quem alterou e quando (decisão 3).
+- ➡️ **Janela de entrega:** outro assunto, fica em aberto (decisão 4); não aparece nos dois CSVs do estudo.
+- ❓ Existe outra fonte de peso? As colunas `weight` (BigQuery) e "Peso Entrega" (Sheets) do plano original trazem o peso do pedido ou do item?
+- ❓ O peso deve ser **líquido** (o do rótulo, como no estudo) ou **bruto** (com embalagem)? A pesquisa de pesos na internet registra o tipo de cada peso achado (líquido, bruto ou estimativa) para ajudar nessa decisão.
+- ❓ A tabela do BigQuery é **atualizada todo dia**? Isso define se SKUs novos entram na fila "sem peso" diariamente.
 
 ## ⬜ Etapa 8 — Roteirização automática (OR-Tools)  *(use o modo plano)*
 ```

@@ -3,6 +3,18 @@
 > Documento gerado em 31/08/2026 para servir como contexto completo, caso a conversa
 > seja perdida ou seja necessário retomar o trabalho do zero.
 
+> **Nota (08/10/2026): este documento é o histórico original do projeto.** As decisões mais
+> recentes estão em `docs/CHECKLIST_PROJETO.md` e `docs/STATUS_E_PLANO_ATUALIZADO.md`, que
+> **prevalecem em caso de conflito**. Principais mudanças desde este texto:
+> - **Peso dos pedidos é apenas informativo:** nunca bloqueia nem avisa por capacidade de
+>   veículo; a capacidade por loja (peso e volume) é opcional (isso substitui as regras de
+>   capacidade por peso + volume e de múltiplas viagens por excesso de capacidade, abaixo).
+> - **Pesos estimados por item:** tabela `item_pesos`, com carga inicial extraída do nome do
+>   produto e conferência manual dos mais vendidos; a API do Atacadão não devolve peso.
+> - **Base nacional de CEP pelo CNEFE (IBGE):** a cobertura por raio usa só a tabela
+>   `cep_prefixos` (27 UFs); acabaram as faixas manuais e o fallback.
+> - **Banco no Neon** (no lugar do Postgres do Render, que expirava).
+
 ---
 
 ## 1. O QUE É O PROJETO

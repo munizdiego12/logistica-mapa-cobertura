@@ -115,14 +115,15 @@ Implemente o cadastro de motoristas e veículos:
 - Tabela motoristas (nome, tipo_veiculo, ativo) via Alembic. Tipos: "Carro de passeio" (R$130 por rota) e "Fiorino/Utilitário" (R$260 por rota), em uma tabela ou enum de configuração.
 - CRUD protegido por token e tela de cadastro no frontend.
 - O custo de rota passa a ser o valor fixo do veículo; remova os campos de combustível (R$/L) e custo-hora da UI e do cálculo (reescreva costs.py e seus testes).
+- Cada tipo de veículo ganha o campo opcional peso_referencia_kg ("peso de referência (kg)"), que pode ficar em branco ("sem referência"). Ele NÃO é limite: é só um guia para o motor de roteirização.
 - Troque a frota gerada ("Motorista 01") em main.py pelos motoristas cadastrados.
 Rode os testes e o build do frontend. Sem push.
 ```
 
-## ⬜ Etapa 6 — Lojas, hub no mapa, capacidade e janelas
+## ⬜ Etapa 6 — Lojas, hub no mapa, capacidade (opcional) e janelas
 - [ ] Fora do código: exportar do Google My Maps a lista de lojas (nome, filial, endereço, latitude, longitude) em CSV.
 ```
-Implemente a tabela lojas (nome, filial, endereço, lat, lng, capacidade_peso, capacidade_volume, janelas manhã/tarde/noite com início e fim configuráveis). Crie um script para importar lojas de um CSV, o CRUD em tela de admin e o mapa permanente com marcadores. O hover mostra nome, filial e endereço; o clique define a loja como hub (borda verde) e recalcula cobertura e faixas de CEP. Adicione o botão "Raio Xkm" ao lado do nome da loja, com raio configurável (padrão 30). Sem push.
+Implemente a tabela lojas (nome, filial, endereço, lat, lng, capacidade_peso e capacidade_volume (ambas OPCIONAIS: podem ficar em branco), janelas manhã/tarde/noite com início e fim configuráveis). Crie um script para importar lojas de um CSV, o CRUD em tela de admin e o mapa permanente com marcadores. O hover mostra nome, filial e endereço; o clique define a loja como hub (borda verde) e recalcula cobertura e faixas de CEP. Adicione o botão "Raio Xkm" ao lado do nome da loja, com raio configurável (padrão 30). Sem push.
 ```
 
 ## ⬜ Etapa 7 — Seleção de pedidos por loja e data
@@ -130,13 +131,20 @@ Implemente a tabela lojas (nome, filial, endereço, lat, lng, capacidade_peso, c
 Implemente a lista de pedidos com checkbox, filtrada pela loja selecionada e por data. Só os pedidos marcados aparecem no mapa e entram na roteirização. Por enquanto a origem é o CSV/XLSX existente (descartado após o uso); inclua os campos ID, cliente, endereço, descrição, volume, peso, filial e janela. Crie uma camada de "fonte de pedidos" com interface única, para plugar Sheets e BigQuery depois. Mostre "Erro ao tentar encontrar endereço do pedido" quando a geocodificação falhar. Sem push.
 ```
 
-## 🔄 Etapa 7b — Peso dos pedidos *(antes da Etapa 8: o solver usa o peso na capacidade)*
+## 🔄 Etapa 7b — Peso dos pedidos *(informativo: nunca bloqueia nem avisa por capacidade; o motor só o usa como guia)*
 
 **Decisões do Diego (08/10/2026):**
 1. **Ordem:** a subetapa 2 **não começa agora**. Primeiro vêm o **backup automático (Etapa 3)** e o **Alembic com rotas protegidas (Etapa 4)**, porque a tabela de pesos terá dados conferidos à mão e uma tela de edição que precisa de login e de migration.
-2. **"Peso incompleto" é mostrado como mínimo**, por exemplo: "no mínimo 34 kg; faltam 2 itens".
+2. **"Peso incompleto" é mostrado como mínimo**, por exemplo: "≥ 34 kg, faltam 2 itens" (ver a decisão 5).
 3. **Quem mantém a tabela:** qualquer operador logado pode editar; o sistema registra **quem alterou e quando**.
 4. **Janela de entrega** é outro assunto e fica em aberto.
+5. **Decisão de produto (08/10/2026): o peso dos pedidos é apenas informativo.** O sistema mostra o peso de cada pedido e o total como **"≈ X kg (estimado)"**, ou **"≥ X kg, faltam N itens"** quando houver itens sem peso, e **NUNCA bloqueia nem avisa em vermelho por capacidade de veículo**. Quem decide o que o motorista leva é o operador. Ajustes por etapa:
+   - **Motoristas e veículos:** cada tipo de veículo ganha o campo opcional **"peso de referência (kg)"**, que pode ficar em branco ("sem referência"). Não é limite: é só um guia para o motor.
+   - **Lojas:** a capacidade por loja (peso e volume) deixa de ser obrigatória e passa a ser **opcional**.
+   - **Roteirização (OR-Tools):** o motor usa o peso de referência do veículo, quando existir, **apenas como guia** para equilibrar as rotas e dividir viagens (sugestão, nunca restrição rígida). Sem referência, agrupa só por proximidade e setor. O operador pode mudar qualquer agrupamento, o sistema nunca recusa e **o motor não deixa de montar uma rota por causa do peso**.
+   - **Telas:** mostrar o peso de cada pedido, o total das rotas selecionadas e o total por veículo, **sempre com o selo "estimado"** e o aviso de itens sem peso.
+   - **Removidos do plano:** o aviso de 90% da capacidade e qualquer trava por peso.
+6. **A pesquisa de pesos na internet foi encerrada:** rendeu pouco (**4 pesos de confiança média, 36 de baixa, 26 não achados e 34 não pesquisados**). O limite de buscas **não será aumentado** e os 34 **não serão continuados**. Próximo passo: **pedir os pesos à fonte real** (cadastro de itens do Atacadão, a operação ou pesagem) e **conferir à mão os SKUs mais vendidos**; os 4 pesos de confiança média e a revisão manual dos 36 de confiança baixa entram só como complemento.
 
 **Decisão original:** em vez de depender da API do Atacadão (que não devolve peso), mantemos uma **tabela `item_pesos` no Neon**, com carga inicial extraída do nome do produto e **conferência manual dos itens mais vendidos**. Pedidos com itens sem peso aparecem como **"peso incompleto"** (o peso mostrado é então só um piso).
 
@@ -147,15 +155,17 @@ Implemente a lista de pedidos com checkbox, filtrada pela loja selecionada e por
   - os sem peso são sobretudo contagens (un, rolos, folhas, ovos), dimensões e capacidades (saco de lixo, copo): o CSV traz esses casos em branco para você preencher.
 - [ ] **Revisar o `data/peso/item_pesos_inicial.csv`** de cima para baixo (já vem ordenado por unidades vendidas): preencher os sem peso e conferir os de confiança "baixa". Para abrir no Excel em português use `python scripts/estudo_peso.py --excel` (o Excel lê "1.5" como data).
 - [x] **Pesquisa de pesos na internet** (100 SKUs mais vendidos sem peso ou com confiança baixa; feita em 08/10/2026, fora do git, nada gravado no banco): `data/peso/item_pesos_pesquisa.csv`, ordenado por unidades vendidas, com peso sugerido, tipo (líquido, bruto ou estimativa), confiança (média ou baixa), link da fonte, trecho, como foi verificado e observação (inclusive o motivo de cada vazio). 40 dos 100 SKUs mais vendidos sem peso ou com confiança baixa ficaram com peso sugerido (**4 de confiança média**, conferidos em página aberta ou título claro, e **36 de confiança baixa**, em sua maioria só de resumo de busca ou de conta sobre pesos unitários); **26 foram pesquisados sem achar** e **34 ficaram com a pesquisa incompleta**, porque o limite de 200 buscas da sessão acabou. Os 40 pesos cobrem 37,8% das unidades desses 100 SKUs.
-- [ ] **Revisar o `data/peso/item_pesos_pesquisa.csv`** (de cima para baixo; confirmar principalmente os de confiança baixa abrindo o link). Lições: a busca genérica cai em páginas do Tenda, Drogasil, Drogaraia, Panvel e Magalu, que não trazem peso ou dão 403; com filtro de domínios (Amazon, Mercado Livre, Carrefour, Telhanorte, Leroy Merlin, Pão de Açúcar...) o resultado da busca traz a ficha técnica, mas as páginas da Amazon, do Mercado Livre e do Carrefour abrem sem a ficha ou dão 403; Telhanorte e Pão de Açúcar abrem com a linha de peso. O WebFetch devolve um resumo, não o texto literal, então os "trechos" precisam de conferência. Nenhum EAN foi confirmado (códigos internos de loja não são EAN).
-- [ ] **Continuar a pesquisa dos 34 SKUs com pesquisa incompleta** (coluna `situacao` = "sem peso: pesquisa incompleta"): exige aumentar o limite de buscas da sessão (`CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION`, segundo a mensagem de erro da ferramenta) ou começar uma nova sessão.
+- [ ] **Revisar o `data/peso/item_pesos_pesquisa.csv`** (complemento: conferir à mão os 36 de confiança baixa abrindo o link e aproveitar os 4 de confiança média). Lições: a busca genérica cai em páginas do Tenda, Drogasil, Drogaraia, Panvel e Magalu, que não trazem peso ou dão 403; com filtro de domínios (Amazon, Mercado Livre, Carrefour, Telhanorte, Leroy Merlin, Pão de Açúcar...) o resultado da busca traz a ficha técnica, mas as páginas da Amazon, do Mercado Livre e do Carrefour abrem sem a ficha ou dão 403; Telhanorte e Pão de Açúcar abrem com a linha de peso. O WebFetch devolve um resumo, não o texto literal, então os "trechos" precisam de conferência. Nenhum EAN foi confirmado (códigos internos de loja não são EAN).
+- [x] **Pesquisa na internet encerrada (decisão do Diego, 08/10/2026):** rendeu pouco (**4 pesos de confiança média, 36 de baixa, 26 não achados e 34 não pesquisados**). O limite de buscas **não será aumentado** e os 34 **não serão continuados**.
+- [ ] **Pedir os pesos à fonte real:** cadastro de itens do Atacadão ou da operação (planilha com `id_sku`/código de referência e peso líquido e bruto) ou pesagem. O `data/peso/item_pesos_inicial.csv`, já ordenado por unidades vendidas, serve de lista de conferência.
+- [ ] **Conferir à mão os SKUs mais vendidos** (de cima para baixo; 248 SKUs levam a 80% dos pedidos completos e 426 a 90%), com o que o Atacadão/operação mandar e, como complemento, os 4 pesos de confiança média e a revisão dos 36 de baixa da pesquisa.
 - [ ] **Subetapa 2 — Tabela `item_pesos`, tela de manutenção e fila "sem peso"** *(só depois das Etapas 3 e 4 deste checklist: backup automático, Alembic e rotas protegidas; rascunho do prompt)*
 ```
 Crie a tabela item_pesos no Neon via Alembic (id_sku, reference_code, nome, peso_kg, fonte, confianca, atualizado_em, atualizado_por; qualquer operador logado edita e o sistema registra quem alterou e quando), com carga a partir do CSV revisado (script com upsert, DATABASE_URL só pela variável de ambiente). Crie a tela de manutenção protegida por token: listar/editar o peso de um SKU e uma fila "sem peso" ordenada pelas unidades vendidas. SKUs novos que aparecerem nos pedidos entram na fila. Sem push.
 ```
 - [ ] **Subetapa 3 — Peso por pedido, rota e veículo** *(rascunho do prompt)*
 ```
-Calcule o peso de cada pedido (quantidade x peso do item) e, quando algum item não tiver peso, mostre "peso incompleto" como mínimo (ex.: "no mínimo 34 kg; faltam 2 itens"). Some o peso por rota e compare com a capacidade do veículo (peso + volume, o que estourar primeiro). Sem push.
+Calcule o peso de cada pedido (quantidade x peso do item) e mostre-o de forma apenas informativa: "≈ X kg (estimado)" ou, quando algum item não tiver peso, "≥ X kg, faltam N itens". Mostre também o total das rotas selecionadas e o total por veículo, sempre com o selo "estimado" e o aviso de itens sem peso. NUNCA bloqueie nem mostre aviso em vermelho por capacidade do veículo, e não crie aviso de 90% da capacidade: quem decide o que o motorista leva é o operador. Sem push.
 ```
 
 **Perguntas:**
@@ -168,8 +178,8 @@ Calcule o peso de cada pedido (quantidade x peso do item) e, quando algum item n
 ## ⬜ Etapa 8 — Roteirização automática (OR-Tools)  *(use o modo plano)*
 ```
 Adicione ortools ao requirements e crie um solver VRP síncrono no FastAPI.
-- Capacidade por peso e volume (o que estourar primeiro), da loja.
-- Divisão automática em múltiplas viagens, priorizando setores diferentes/opostos; o motorista volta à loja entre viagens.
+- Peso de referência do veículo (opcional): quando existir, o solver o usa APENAS como guia para equilibrar as rotas e dividir viagens (sugestão, nunca restrição rígida). Sem referência, agrupa só por proximidade e setor. O solver nunca deixa de montar uma rota por causa do peso, o operador pode mudar qualquer agrupamento e o sistema nunca recusa. Sem trava por peso e sem aviso de capacidade.
+- Divisão automática em múltiplas viagens, priorizando setores diferentes/opostos (usando o peso de referência só como guia, quando houver); o motorista volta à loja entre viagens.
 - Setores: 8 setores cardeais por azimute entre loja e pedido. Uma rota pode cobrir vários setores.
 - Regra de rotação: o mesmo motorista não repete região em turnos diferentes no mesmo dia.
 - Turno escolhido manualmente pelo operador.
@@ -201,7 +211,7 @@ Crie o histórico permanente de cada roteirização (dados da matriz + data/hora
 
 ## ⬜ Etapa 13 — Romaneio
 ```
-Adicione ao romaneio .csv as colunas ID do pedido, cliente, peso, latitude e longitude, mantendo todas as atuais. A coluna de janela de entrega fica pendente do schema do BigQuery. Sem push.
+Adicione ao romaneio .csv as colunas ID do pedido, cliente, peso (estimado, com o aviso de itens sem peso), latitude e longitude, mantendo todas as atuais. A coluna de janela de entrega fica pendente do schema do BigQuery. Sem push.
 ```
 
 ## ⬜ Etapa 14 — Layout novo

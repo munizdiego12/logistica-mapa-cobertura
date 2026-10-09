@@ -19,3 +19,4 @@ annotated-doc==0.0.5
 et_xmlfile==2.0.0
 tzdata==2026.3
 python-dotenv>=1.0.0
+alembic>=1.13,<2

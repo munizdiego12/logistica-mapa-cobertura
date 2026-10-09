@@ -3,7 +3,7 @@ import math
 import time
 import asyncio
 import uuid
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 
 import httpx
 import requests
@@ -15,11 +15,12 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.security import OAuth2PasswordRequestForm
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
 import database
 import cobertura
+import item_pesos
 from database import get_db, Operador, init_db
 from config import OPERATOR_INVITE_CODE
 from auth import (
@@ -968,6 +969,90 @@ def download_modelo_xlsx():
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
     
+# ---------------------------------------------------------------------------------------------
+# Pesos dos itens (SKUs): manutenção e fila "sem peso". Todas as rotas exigem operador logado.
+# O peso é apenas informativo: aqui só se guarda e se edita o peso de cada item.
+# ---------------------------------------------------------------------------------------------
+MSG_PESOS_INDISPONIVEL = (
+    "O cadastro de pesos não está disponível agora. Tente novamente em instantes; "
+    "se o problema continuar, avise o administrador do sistema."
+)
+
+
+async def _com_conexao_pesos(operacao):
+    """Roda `operacao(conn)` numa conexão do pool; falha do banco vira 503 claro, valor inválido vira 422."""
+    pool = await database.get_pool()
+    if not pool:
+        raise HTTPException(status_code=503, detail=MSG_PESOS_INDISPONIVEL)
+    try:
+        async with pool.acquire() as conn:
+            return await operacao(conn)
+    except HTTPException:
+        raise
+    except ValueError as erro:
+        raise HTTPException(status_code=422, detail=str(erro))
+    except Exception as erro:
+        print(f"[pesos] Falha no cadastro de pesos: {erro!r}")
+        raise HTTPException(status_code=503, detail=MSG_PESOS_INDISPONIVEL)
+
+
+def _rotulo_do_operador(operador: Operador) -> str:
+    return f"{operador.nome} ({operador.email})"
+
+
+class AtualizarPesoRequest(BaseModel):
+    peso_kg: Optional[Union[float, str]] = None  # vazio/None = tira o peso (o item volta para a fila "sem peso")
+    confianca: Optional[str] = "alta"
+
+
+class SkuVistoRequest(BaseModel):
+    id_sku: str
+    quantidade: int = 1
+    nome: Optional[str] = None
+    reference_code: Optional[str] = None
+
+
+class SkusVistosRequest(BaseModel):
+    itens: List[SkuVistoRequest] = Field(max_length=5000)
+
+
+@app.get("/api/item-pesos/resumo")
+async def resumo_item_pesos(operador: Operador = Depends(obter_operador_atual)):
+    return await _com_conexao_pesos(item_pesos.resumo)
+
+
+@app.get("/api/item-pesos/fila-sem-peso")
+async def fila_sem_peso(limite: int = 50, deslocamento: int = 0, operador: Operador = Depends(obter_operador_atual)):
+    """Itens sem peso, os mais vendidos primeiro."""
+    return await _com_conexao_pesos(lambda c: item_pesos.listar(c, None, True, limite, deslocamento))
+
+
+@app.get("/api/item-pesos")
+async def listar_item_pesos(
+    busca: Optional[str] = None, somente_sem_peso: bool = False, limite: int = 50, deslocamento: int = 0,
+    operador: Operador = Depends(obter_operador_atual),
+):
+    """Todos os itens (mais vendidos primeiro), com busca por nome, id_sku ou referência."""
+    return await _com_conexao_pesos(lambda c: item_pesos.listar(c, busca, somente_sem_peso, limite, deslocamento))
+
+
+@app.put("/api/item-pesos/{id_sku}")
+async def atualizar_item_peso(id_sku: str, dados: AtualizarPesoRequest, operador: Operador = Depends(obter_operador_atual)):
+    """Qualquer operador logado edita; o sistema registra quem alterou (atualizado_por) e quando (atualizado_em)."""
+    item = await _com_conexao_pesos(
+        lambda c: item_pesos.atualizar_peso(c, id_sku, dados.peso_kg, dados.confianca, _rotulo_do_operador(operador))
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item não encontrado no cadastro de pesos.")
+    return item
+
+
+@app.post("/api/item-pesos/skus-vistos")
+async def registrar_skus_vistos(dados: SkusVistosRequest, operador: Operador = Depends(obter_operador_atual)):
+    """SKUs que apareceram em pedidos: os novos entram na fila "sem peso"; os que já existem só somam unidades."""
+    return await _com_conexao_pesos(lambda c: item_pesos.registrar_skus_vistos(c, [i.model_dump() for i in dados.itens]))
+
+
 class RegistroOperadorSchema(BaseModel):
     nome: str
     email: EmailStr

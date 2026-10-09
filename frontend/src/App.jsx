@@ -6,10 +6,11 @@ import {
   ShieldCheck, Activity, Plus, Trash2, Users, AlertCircle,
   CheckSquare, Square, Download, FileSpreadsheet, FileDown,
   Settings, ChevronDown, ChevronUp, Layers, Compass, Table as TableIcon, 
-  AlertTriangle
+  AlertTriangle, Scale
 } from 'lucide-react';
 import MapaLeaflet from './components/MapaLeaflet';
 import Login from './components/Login';
+import PesosItens from './components/PesosItens';
 import { API_BASE } from './config';
 
 // Instância dedicada que anexa automaticamente o token do operador logado
@@ -43,6 +44,7 @@ export default function App() {
   };
 
   const [loading, setLoading] = useState(false);
+  const [mostrarPesos, setMostrarPesos] = useState(false);
   const [loadingCeps, setLoadingCeps] = useState(false);
   const [dadosCoberturaCeps, setDadosCoberturaCeps] = useState(null);
   const [progresso, setProgresso] = useState(null); // { etapa, atual, total } | null
@@ -427,6 +429,13 @@ export default function App() {
             <span>FastAPI Core</span>
           </div>
           <div className="flex items-center gap-2 pl-3 border-l border-slate-800">
+            <button
+              onClick={() => setMostrarPesos(true)}
+              className="flex items-center gap-1 text-[10px] font-semibold text-blue-300 hover:text-blue-200 bg-blue-500/10 border border-blue-500/20 px-2 py-1 rounded transition-colors"
+              title="Conferir e editar o peso dos itens"
+            >
+              <Scale className="w-3 h-3" /> Pesos dos itens
+            </button>
             <span className="text-slate-300 font-sans">{operador.nome}</span>
             <button
               onClick={handleLogout}
@@ -437,6 +446,10 @@ export default function App() {
           </div>
         </div>
       </header>
+
+      {mostrarPesos && (
+        <PesosItens api={apiAuth} onFechar={() => setMostrarPesos(false)} onSessaoExpirada={handleLogout} />
+      )}
 
       {/* Espaço de Trabalho */}
       <div className="flex-1 flex flex-col lg:flex-row">

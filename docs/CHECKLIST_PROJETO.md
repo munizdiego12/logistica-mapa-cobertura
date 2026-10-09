@@ -103,6 +103,7 @@ Crie um GitHub Actions (.github/workflows/backup.yml) que roda toda semana e man
 - [ ] Rodar o workflow uma vez à mão (aba Actions) e conferir o artifact.
 
 ## ⬜ Etapa 4 — Migrations e rotas protegidas
+*(Parcial em 09/10/2026: o Alembic já está configurado em `backend/` com a revisão `0001` vazia e a `0002` de `item_pesos`; pendentes: a migration inicial das tabelas antigas e proteger as rotas de negócio com o token.)*
 ```
 1) Configure Alembic no backend com migration inicial refletindo os models atuais (operadores, ceps_reais etc.), sem apagar dados existentes. Documente os comandos.
 2) Proteja com o token JWT (get_current_operador) todos os endpoints de negócio: /api/upload, /api/otimizar, /api/otimizar/status, /api/cobertura-ceps, /api/exportar-tabela-frete-xlsx e /api/modelo-xlsx. Deixe abertos só login e register. Confirme que o frontend já envia o token e trate 401 deslogando o usuário.
@@ -159,10 +160,30 @@ Implemente a lista de pedidos com checkbox, filtrada pela loja selecionada e por
 - [x] **Pesquisa na internet encerrada (decisão do Diego, 08/10/2026):** rendeu pouco (**4 pesos de confiança média, 36 de baixa, 26 não achados e 34 não pesquisados**). O limite de buscas **não será aumentado** e os 34 **não serão continuados**.
 - [ ] **Pedir os pesos à fonte real:** cadastro de itens do Atacadão ou da operação (planilha com `id_sku`/código de referência e peso líquido e bruto) ou pesagem. O `data/peso/item_pesos_inicial.csv`, já ordenado por unidades vendidas, serve de lista de conferência.
 - [ ] **Conferir à mão os SKUs mais vendidos** (de cima para baixo; 248 SKUs levam a 80% dos pedidos completos e 426 a 90%), com o que o Atacadão/operação mandar e, como complemento, os 4 pesos de confiança média e a revisão dos 36 de baixa da pesquisa.
-- [ ] **Subetapa 2 — Tabela `item_pesos`, tela de manutenção e fila "sem peso"** *(só depois das Etapas 3 e 4 deste checklist: backup automático, Alembic e rotas protegidas; rascunho do prompt)*
+- [x] **Subetapa 2 — Tabela `item_pesos`, tela de manutenção e fila "sem peso"** *(pronta no código em 09/10/2026, commit local sem push; falta aplicar no Neon, ver os passos abaixo; o backup automático da Etapa 3 deste checklist ainda não foi feito: recomendado antes de gravar dados conferidos à mão)*
 ```
 Crie a tabela item_pesos no Neon via Alembic (id_sku, reference_code, nome, peso_kg, fonte, confianca, atualizado_em, atualizado_por; qualquer operador logado edita e o sistema registra quem alterou e quando), com carga a partir do CSV revisado (script com upsert, DATABASE_URL só pela variável de ambiente). Crie a tela de manutenção protegida por token: listar/editar o peso de um SKU e uma fila "sem peso" ordenada pelas unidades vendidas. SKUs novos que aparecerem nos pedidos entram na fila. Sem push.
 ```
+  O que foi feito: **Alembic configurado** em `backend/` (usa asyncpg, porque o `psycopg2` está bloqueado pelo Windows nesta máquina; `DATABASE_URL` só pela variável de ambiente) com a revisão `0001` (ponto de partida, não altera o banco) e a `0002`, que cria `item_pesos` (`id_sku`, `reference_code`, `nome`, `peso_kg`, `fonte`, `confianca`, `atualizado_em`, `atualizado_por` e mais `unidades_vendidas`, para ordenar a fila). Rotas protegidas por login: `GET /api/item-pesos/resumo`, `GET /api/item-pesos/fila-sem-peso`, `GET /api/item-pesos` (busca por nome, código ou referência), `PUT /api/item-pesos/{id_sku}` (qualquer operador logado edita; fica registrado quem alterou e quando) e `POST /api/item-pesos/skus-vistos` (SKU novo entra na fila sem peso). Tela "Pesos dos itens" no cabeçalho do app. Script `scripts/carregar_item_pesos.py`: mostra o resumo (com peso, sem peso, inválidos) antes de gravar e só grava com `--gravar` e a confirmação digitada; aceita `;` ou `,` e vírgula decimal; ignora linhas sem peso (`--incluir-sem-peso` as põe na fila); não sobrescreve pesos editados na tela.
+- [ ] **Aplicar a migration e fazer a carga inicial no Neon** (a carga só depois da sua confirmação do resumo):
+```
+# 1) Ver o SQL que será aplicado (não conecta no banco)
+cd backend
+python -m alembic upgrade head --sql
+
+# 2) Aplicar a migration no Neon (a string do banco só na sessão, nunca em arquivo)
+$env:DATABASE_URL = "<string do Neon>"
+python -m alembic upgrade head
+cd ..
+
+# 3) Carga inicial: primeiro só o resumo (não conecta no banco)
+python scripts/carregar_item_pesos.py --csv data/peso/<arquivo revisado>.csv
+
+# 4) Gravar (mostra a previsão e pede para digitar GRAVAR)
+python scripts/carregar_item_pesos.py --csv data/peso/<arquivo revisado>.csv --gravar
+Remove-Item Env:DATABASE_URL
+```
+- [ ] **Ligar a fila aos pedidos:** hoje os pedidos (upload de planilha) não trazem SKU; quando os pedidos tiverem itens (Etapa 7 e conectores da Etapa 15), chamar `POST /api/item-pesos/skus-vistos` a cada carga para os SKUs novos entrarem na fila "sem peso".
 - [ ] **Subetapa 3 — Peso por pedido, rota e veículo** *(rascunho do prompt)*
 ```
 Calcule o peso de cada pedido (quantidade x peso do item) e mostre-o de forma apenas informativa: "≈ X kg (estimado)" ou, quando algum item não tiver peso, "≥ X kg, faltam N itens". Mostre também o total das rotas selecionadas e o total por veículo, sempre com o selo "estimado" e o aviso de itens sem peso. NUNCA bloqueie nem mostre aviso em vermelho por capacidade do veículo, e não crie aviso de 90% da capacidade: quem decide o que o motorista leva é o operador. Sem push.

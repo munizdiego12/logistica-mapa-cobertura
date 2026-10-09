@@ -17,7 +17,7 @@ Base: `MEMORIA_PROJETO_roteirizacao.md` (31/08/2026) comparado com o repositóri
 
 | Etapa | Prioridade | Situação no código |
 |---|---|---|
-| **0. Banco permanente — restante** | Alta | Neon já concluído. Faltam o **backup automático (GitHub Actions)** — Etapa 3 do CHECKLIST — e o **Alembic** — Etapa 4 do CHECKLIST. Ver seção abaixo. |
+| **0. Banco permanente — restante** | Alta | Neon já concluído. Falta ativar o **backup automático (GitHub Actions)** — workflow criado, faltam os secrets e a primeira execução (Etapa 3 do CHECKLIST) — e o **Alembic** — Etapa 4 do CHECKLIST. Ver seção abaixo. |
 | 0b. Remover `correcoes_etapa1_auth.patch` | Baixa | O `requirements.txt` já foi regravado em UTF-8. Resta tirar o `.patch` da raiz. |
 | 3. Cadastro de motoristas e veículos | Alta | Não existe. `main.py` ainda usa frota gerada ("Motorista 01"). Falta tabela, CRUD, 2 tipos de veículo com custo fixo (R$130 / R$260). Cada tipo de veículo ganha o campo opcional "peso de referência (kg)" (pode ficar em branco; não é limite, é só um guia para o motor). |
 | 4. Lojas, hub no mapa, capacidade e janelas | Alta | Não existe. Hub ainda é texto livre. A capacidade por loja (peso e volume) passa a ser opcional. |
@@ -35,7 +35,7 @@ Base: `MEMORIA_PROJETO_roteirizacao.md` (31/08/2026) comparado com o repositóri
 
 ## Etapa 0 — Banco de dados permanente
 
-**Situação:** a parte do Neon está **concluída** (passos 1 a 5 abaixo). **Pendentes:** backup automático com GitHub Actions (passo 6, Etapa 3 do CHECKLIST) e Alembic (passo 7, Etapa 4 do CHECKLIST).
+**Situação:** a parte do Neon está **concluída** (passos 1 a 5 abaixo). **Pendentes:** ativar o backup automático com GitHub Actions (passo 6, Etapa 3 do CHECKLIST; workflow criado, faltam secrets e primeira execução) e Alembic (passo 7, Etapa 4 do CHECKLIST).
 
 **Problema:** o Postgres gratuito do Render expira (cerca de 30 dias) e depois é apagado.
 
@@ -55,7 +55,7 @@ Alternativas:
 3. ✅ Redeploy. O `create_all` e o `CREATE TABLE IF NOT EXISTS` recriam `operadores`, `geocode_cache` e `geocache`.
 4. ✅ Recadastrar o operador (Diego) via `/api/auth/register` com o código de convite.
 5. ✅ Repovoar a base de CEPs rodando `scripts/carregar_municipios.py` e `scripts/carregar_cnefe.py` (Etapa 2b) apontando para o novo banco. O cache também volta a crescer com o uso.
-6. ⏳ **Pendente.** Agendar um backup periódico automático (`pg_dump` via GitHub Actions) para o banco nunca mais virar um ponto único de falha.
+6. 🟨 **Workflow criado (09/10/2026), falta ativar.** `.github/workflows/backup.yml` faz `pg_dump` semanal (domingo 06:00 UTC) e manual, confere o dump, criptografa com `gpg` (AES256) e guarda só o `.dump.gpg` por 30 dias como artifact. Falta o Diego criar os secrets `DATABASE_URL` (string direta do Neon) e `BACKUP_PASSPHRASE` (32+ caracteres aleatórios), rodar o workflow uma vez à mão e testar a restauração (`docs/BACKUP.md`). Atenção: o repositório é público e artifacts podem ser baixados por qualquer logado no GitHub; só a senha protege o backup. O GitHub desativa agendamentos após 60 dias sem atividade.
 7. ✅ **Alembic configurado (09/10/2026)** em `backend/alembic.ini` e `backend/migrations/` (asyncpg; `DATABASE_URL` só pela variável de ambiente; revisão `0001` vazia e `0002` de `item_pesos`). As tabelas antigas (`operadores`, `geocode_cache`, `cep_prefixos`, `ibge_municipios`) continuam criadas pelo `init_db` e pelos scripts; falta a migration inicial delas (Etapa 4 do CHECKLIST). Tabela nova só entra por migration, nunca por `create_all`.
 
 **Validar:** ✅ `/api/auth/login` funciona em produção. ⏳ Ainda a confirmar: o cache persiste após reiniciar o Render, e o banco continua lá depois de 30 dias.

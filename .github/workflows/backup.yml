@@ -1,0 +1,210 @@
+# Backup semanal do banco no Neon: pg_dump -> verificação -> criptografia -> artifact.
+#
+# O repositório é PÚBLICO e os artifacts de repositório público podem ser baixados por qualquer pessoa logada
+# no GitHub. Por isso o dump NUNCA sai da máquina sem criptografia (AES256) e nada sensível vai para o log.
+# Passo a passo, restauração e troca da senha: docs/BACKUP.md
+#
+# Secrets necessários (Settings > Secrets and variables > Actions):
+#   DATABASE_URL       string de conexão DIRETA do Neon (não a do pooler), postgresql://usuario:senha@host/banco
+#   BACKUP_PASSPHRASE  senha longa e aleatória (32+ caracteres) usada para criptografar o dump
+name: Backup do Neon
+
+on:
+  schedule:
+    - cron: "0 6 * * 0" # domingo, 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backup-neon
+  cancel-in-progress: false
+
+env:
+  # O pg_dump deve ser da mesma versão principal do servidor Neon (PostgreSQL 18).
+  PG_BIN: /usr/lib/postgresql/18/bin
+
+jobs:
+  backup:
+    name: Backup criptografado do Neon
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash # bash -e -o pipefail
+    steps:
+      - name: Preparar nomes e pasta de trabalho
+        run: |
+          umask 077
+          DATA="$(date -u +%Y%m%d)"
+          DIR_BACKUP="${RUNNER_TEMP}/backup"
+          mkdir -p "${DIR_BACKUP}"
+          {
+            echo "DIR_BACKUP=${DIR_BACKUP}"
+            echo "ARQUIVO_DUMP=${DIR_BACKUP}/backup-neon-${DATA}.dump"
+            echo "ARQUIVO_GPG=backup-neon-${DATA}.dump.gpg"
+          } >> "${GITHUB_ENV}"
+
+      - name: Instalar o cliente PostgreSQL 18 (repositório oficial PGDG)
+        run: |
+          CHAVE=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl --fail --silent --show-error --location --output "${CHAVE}" https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          # Só confia na chave se a impressão digital for a oficial do PostgreSQL Debian Repository.
+          IMPRESSAO="$(gpg --show-keys --with-colons "${CHAVE}" | awk -F: '$1=="fpr"{print $10; exit}')"
+          if [ "${IMPRESSAO}" != "B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8" ]; then
+            echo "::error::A chave do repositório PGDG não confere com a impressão digital oficial."
+            exit 1
+          fi
+          . /etc/os-release
+          echo "deb [signed-by=${CHAVE}] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-18
+          # Chama o binário da versão 18 pelo caminho completo (o runner já traz outra versão do cliente).
+          "${PG_BIN}/pg_dump" --version
+          if ! "${PG_BIN}/pg_dump" --version | grep -q "(PostgreSQL) 18\."; then
+            echo "::error::O pg_dump instalado não é da versão 18."
+            exit 1
+          fi
+
+      - name: Gerar o dump (pg_dump, formato custom)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          umask 077
+          if [ -z "${DATABASE_URL}" ]; then
+            echo "::error::O secret DATABASE_URL não está configurado."
+            exit 1
+          fi
+          # A string de conexão chega por variável de ambiente e vira as variáveis PG* (PGHOST, PGPASSWORD...),
+          # então a senha nunca aparece na linha de comando do pg_dump. Mensagens de erro saem sem host/usuário/senha.
+          python3 - <<'PY'
+          import os
+          import subprocess
+          import sys
+          from urllib.parse import parse_qs, unquote, urlsplit
+
+          bruta = os.environ["DATABASE_URL"].strip()
+          try:
+              partes = urlsplit(bruta)
+              porta = partes.port
+          except ValueError:
+              partes, porta = None, None
+          if partes is None or partes.scheme not in ("postgres", "postgresql") or not partes.hostname or not partes.path.strip("/"):
+              print("::error::O secret DATABASE_URL não parece uma string do PostgreSQL (postgresql://usuario:senha@host/banco).")
+              sys.exit(1)
+
+          usuario = unquote(partes.username) if partes.username else ""
+          senha = unquote(partes.password) if partes.password else ""
+          for valor in {senha, usuario, partes.password or "", partes.username or ""}:
+              if valor:
+                  print(f"::add-mask::{valor}")
+
+          consulta = parse_qs(partes.query)
+          ambiente = {k: v for k, v in os.environ.items() if k != "DATABASE_URL"}
+          ambiente.update({
+              "PGHOST": partes.hostname,
+              "PGPORT": str(porta or 5432),
+              "PGDATABASE": unquote(partes.path.lstrip("/")),
+              "PGSSLMODE": consulta.get("sslmode", ["require"])[0],
+          })
+          if usuario:
+              ambiente["PGUSER"] = usuario
+          if senha:
+              ambiente["PGPASSWORD"] = senha
+          if "channel_binding" in consulta:
+              ambiente["PGCHANNELBINDING"] = consulta["channel_binding"][0]
+
+          comando = [
+              os.environ["PG_BIN"] + "/pg_dump", "--format=custom", "--no-owner", "--no-privileges",
+              "--file", os.environ["ARQUIVO_DUMP"],
+          ]
+          resultado = subprocess.run(comando, env=ambiente, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+          if resultado.returncode != 0:
+              mensagem = resultado.stderr or ""
+              for segredo in (senha, usuario, partes.hostname, partes.password or "", partes.username or ""):
+                  if segredo:
+                      mensagem = mensagem.replace(segredo, "***")
+              print(f"::error::O pg_dump falhou (código {resultado.returncode}).")
+              print(mensagem[:600])
+              sys.exit(1)
+          print("pg_dump concluído.")
+          PY
+
+      - name: Verificar o dump (tamanho e tabelas essenciais)
+        run: |
+          umask 077
+          TAMANHO="$(stat -c %s "${ARQUIVO_DUMP}")"
+          if [ "${TAMANHO}" -lt 102400 ]; then
+            echo "::error::O dump tem só ${TAMANHO} bytes (mínimo: 102400 = 100 KB): veio vazio ou incompleto."
+            exit 1
+          fi
+          LISTA="${DIR_BACKUP}/conteudo.lista"
+          if ! "${PG_BIN}/pg_restore" --list "${ARQUIVO_DUMP}" > "${LISTA}"; then
+            echo "::error::O pg_restore --list não conseguiu ler o dump."
+            exit 1
+          fi
+          for TABELA in operadores cep_prefixos; do
+            if ! grep -Eq "[[:space:]]TABLE[[:space:]]+public[[:space:]]+${TABELA}([[:space:]]|$)" "${LISTA}"; then
+              echo "::error::A tabela ${TABELA} não aparece no dump."
+              exit 1
+            fi
+          done
+          rm -f "${LISTA}"
+          echo "Dump verificado: ${TAMANHO} bytes; tabelas operadores e cep_prefixos presentes."
+
+      - name: Criptografar (gpg AES256) e apagar o dump em claro
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          umask 077
+          if [ -z "${BACKUP_PASSPHRASE}" ]; then
+            echo "::error::O secret BACKUP_PASSPHRASE não está configurado."
+            exit 1
+          fi
+          if [ "${#BACKUP_PASSPHRASE}" -lt 16 ]; then
+            echo "::error::A BACKUP_PASSPHRASE é curta demais (mínimo de 16 caracteres; use 32 ou mais, geradas ao acaso)."
+            exit 1
+          fi
+          GPG_SAIDA="${DIR_BACKUP}/${ARQUIVO_GPG}"
+          # A senha entra pela entrada padrão (printf é interno do bash): nunca vai para a linha de comando.
+          printf '%s' "${BACKUP_PASSPHRASE}" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
+            --symmetric --cipher-algo AES256 --s2k-mode 3 --s2k-digest-algo SHA512 --s2k-count 65011712 \
+            --output "${GPG_SAIDA}" "${ARQUIVO_DUMP}"
+          # Confere que o arquivo criptografado abre com a senha e é idêntico ao dump, ANTES de apagar o dump.
+          if ! printf '%s' "${BACKUP_PASSPHRASE}" | gpg --batch --pinentry-mode loopback --passphrase-fd 0 --decrypt "${GPG_SAIDA}" 2> /dev/null | cmp -s - "${ARQUIVO_DUMP}"; then
+            echo "::error::O arquivo criptografado não reproduz o dump original."
+            rm -f "${GPG_SAIDA}"
+            exit 1
+          fi
+          shred -u "${ARQUIVO_DUMP}" || rm -f "${ARQUIVO_DUMP}"
+          if [ -e "${ARQUIVO_DUMP}" ]; then
+            echo "::error::Não foi possível apagar o dump em claro."
+            exit 1
+          fi
+          # Só o .gpg pode sobrar na pasta que vai para o upload.
+          if [ -n "$(find "${DIR_BACKUP}" -type f ! -name '*.dump.gpg')" ]; then
+            echo "::error::Há arquivo que não é o .gpg na pasta do backup; abortando para não enviá-lo."
+            exit 1
+          fi
+          echo "Backup criptografado: $(stat -c %s "${GPG_SAIDA}") bytes; dump em claro apagado."
+
+      - name: Enviar o backup criptografado (artifact, 30 dias)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ env.ARQUIVO_GPG }}
+          path: ${{ env.DIR_BACKUP }}/${{ env.ARQUIVO_GPG }}
+          retention-days: 30
+          if-no-files-found: error
+          archive: false # sobe o .gpg como arquivo avulso (sem zip), com o nome backup-neon-AAAAMMDD.dump.gpg
+
+      - name: Limpar a pasta de trabalho
+        if: always()
+        run: |
+          if [ -n "${ARQUIVO_DUMP:-}" ] && [ -e "${ARQUIVO_DUMP}" ]; then
+            shred -u "${ARQUIVO_DUMP}" || rm -f "${ARQUIVO_DUMP}"
+          fi
+          if [ -n "${DIR_BACKUP:-}" ]; then
+            rm -rf "${DIR_BACKUP}"
+          fi

@@ -10,14 +10,14 @@ Base: `MEMORIA_PROJETO_roteirizacao.md` (31/08/2026) comparado com o repositóri
 | 2. CEP/raio sem fallback sintético | **Feita** | Commit `21c28ad`: BrasilAPI v2 + ViaCEP, CEPs com erro sinalizados em vez de substituídos. |
 | **2b. Base nacional de CEP via CNEFE** | **Feita** (concluída) | 27 UFs, ~24,6 mil prefixos, ~4 MB no Neon (`cep_prefixos`); `ibge_municipios` (5.571); cobertura por prefixo com Total/Parcial, legenda, fonte e XLSX com aba "Cobertura e fonte", validada no site (Av. Paulista 4.057 prefixos, Av. Atlântica 463, Florianópolis 76). Faixas manuais e fallback removidos (fase 4). Ver seção Etapa 2b. **Pendências:** importar o XLSX na transportadora antes do primeiro uso real; confirmar o termo de uso do CNEFE. |
 | Extras | Feitos | Paleta da tela de login; `geocache.db` removido do git. |
-| 0. Banco permanente (Neon) — parte concluída | **Feita** (parcial) | Banco migrado para o Neon; operador recadastrado; login em produção funcionando (backend no Render com `psycopg2` corrigido, commit `a3ab502`). **Backup automático concluído e validado (13/10/2026).** **Pendente:** Alembic (migration inicial das tabelas antigas; ver Etapa 0). |
+| 0. Banco permanente (Neon) — parte concluída | **Feita** (parcial) | Banco migrado para o Neon; operador recadastrado; login em produção funcionando (backend no Render com `psycopg2` corrigido, commit `a3ab502`). **Backup automático concluído e validado (13/10/2026).** **Alembic e rotas protegidas prontos no código (13/10/2026), falta aplicar a revisão `0003` no Neon e validar no site (ver Etapa 0).** |
 | 0b. `requirements.txt` em UTF-8 | **Feita** (parcial) | Regravado em UTF-8 e `sqlalchemy>=2.0,<2.1` fixado no commit `a3ab502`. Falta remover `correcoes_etapa1_auth.patch` da raiz. |
 
 ## O que falta
 
 | Etapa | Prioridade | Situação no código |
 |---|---|---|
-| **0. Banco permanente — restante** | Alta | Neon já concluído. O **backup automático (GitHub Actions)** está **concluído e validado** (Etapa 3 do CHECKLIST). Falta o **Alembic** — Etapa 4 do CHECKLIST. Ver seção abaixo. |
+| **0. Banco permanente — restante** | Alta | Neon já concluído. O **backup automático (GitHub Actions)** está **concluído e validado** (Etapa 3 do CHECKLIST). O **Alembic (revisão `0003` das tabelas antigas) e as rotas protegidas** estão **prontos no código** (Etapa 4 do CHECKLIST); falta aplicar a `0003` no Neon e validar no site. Ver seção abaixo. |
 | 0b. Remover `correcoes_etapa1_auth.patch` | Baixa | O `requirements.txt` já foi regravado em UTF-8. Resta tirar o `.patch` da raiz. |
 | 3. Cadastro de motoristas e veículos | Alta | Não existe. `main.py` ainda usa frota gerada ("Motorista 01"). Falta tabela, CRUD, 2 tipos de veículo com custo fixo (R$130 / R$260). Cada tipo de veículo ganha o campo opcional "peso de referência (kg)" (pode ficar em branco; não é limite, é só um guia para o motor). |
 | 4. Lojas, hub no mapa, capacidade e janelas | Alta | Não existe. Hub ainda é texto livre. A capacidade por loja (peso e volume) passa a ser opcional. |
@@ -31,11 +31,11 @@ Base: `MEMORIA_PROJETO_roteirizacao.md` (31/08/2026) comparado com o repositóri
 | 11. Histórico | Média | Não existe. |
 | 12. Romaneio com novas colunas | Baixa | Não feito. |
 | Layout (mapa grande, painel retrátil de pedidos) | A decidir | Em aberto. |
-| Proteger as rotas de negócio com o token | Média | O frontend já envia o token, mas os endpoints (`/upload`, `/otimizar`, `/cobertura-ceps`) provavelmente ainda estão abertos. Conferir. |
+| Proteger as rotas de negócio com o token | Feita no código (13/10/2026) | `/upload`, `/otimizar`, `/otimizar/status`, `/cobertura-ceps`, `/exportar-tabela-frete-xlsx`, `/modelo-xlsx` e `/modais` exigem login; só `login` e `register` (com código de convite) ficam abertos. O frontend baixa o XLSX com o token e trata o 401 voltando ao login. Falta validar no site depois do deploy. |
 
 ## Etapa 0 — Banco de dados permanente
 
-**Situação:** a parte do Neon está **concluída** (passos 1 a 5 abaixo). Backup automático **concluído e validado** (passo 6, Etapa 3 do CHECKLIST). **Pendente:** Alembic (passo 7, Etapa 4 do CHECKLIST).
+**Situação:** a parte do Neon está **concluída** (passos 1 a 5 abaixo). Backup automático **concluído e validado** (passo 6, Etapa 3 do CHECKLIST). **Pendente:** aplicar a `0003` no Neon e validar no site (passo 7, Etapa 4 do CHECKLIST).
 
 **Problema:** o Postgres gratuito do Render expira (cerca de 30 dias) e depois é apagado.
 
@@ -56,7 +56,9 @@ Alternativas:
 4. ✅ Recadastrar o operador (Diego) via `/api/auth/register` com o código de convite.
 5. ✅ Repovoar a base de CEPs rodando `scripts/carregar_municipios.py` e `scripts/carregar_cnefe.py` (Etapa 2b) apontando para o novo banco. O cache também volta a crescer com o uso.
 6. ✅ **Backup automático concluído e validado (13/10/2026).** `.github/workflows/backup.yml` faz `pg_dump` semanal (domingo 06:00 UTC) e manual, confere o dump, criptografa com `gpg` (AES256) e guarda só o `.dump.gpg` por 30 dias como artifact. Evidência: a execução #1 no GitHub rodou; o artifact `.gpg` foi baixado e descriptografado com a senha do backup e é um dump PostgreSQL válido (~774 KB, cabeçalho `PGDMP`). **A restauração completa em um banco novo ainda não foi testada** (passo a passo em `docs/BACKUP.md`). Atenção: o repositório é público e artifacts podem ser baixados por qualquer logado no GitHub; só a senha protege o backup. O GitHub desativa agendamentos após 60 dias sem atividade.
-7. ✅ **Alembic configurado (09/10/2026)** em `backend/alembic.ini` e `backend/migrations/` (asyncpg; `DATABASE_URL` só pela variável de ambiente; revisão `0001` vazia e `0002` de `item_pesos`). As tabelas antigas (`operadores`, `geocode_cache`, `cep_prefixos`, `ibge_municipios`) continuam criadas pelo `init_db` e pelos scripts; falta a migration inicial delas (Etapa 4 do CHECKLIST). Tabela nova só entra por migration, nunca por `create_all`.
+7. ✅ **Alembic configurado (09/10/2026)** em `backend/alembic.ini` e `backend/migrations/` (asyncpg; `DATABASE_URL` só pela variável de ambiente; revisão `0001` vazia e `0002` de `item_pesos`) e, em **13/10/2026**, a revisão **`0003`** descreve as tabelas antigas (`operadores`, `geocode_cache`, `cep_prefixos`, `ibge_municipios`) com `CREATE ... IF NOT EXISTS`: no Neon, onde já existem com dados, não faz nada. O `init_db` continua como está. **Falta aplicar no Neon** (`current` → `upgrade head --sql` → `upgrade head` → `current`; comandos em `docs/MIGRATIONS.md`). Não existe tabela `geocache` (o nome da nota do passo 3 vem do arquivo de teste `geocache.db`; a tabela é `geocode_cache`). Tabela nova só entra por migration, nunca por `create_all`.
+
+   **Rotas protegidas (13/10/2026):** toda rota `/api` exige login (JWT), exceto `/api/auth/login` e `/api/auth/register`. Não existe rota de saúde; `/docs`, `/redoc` e `/openapi.json` ficam abertas. No frontend, o modelo XLSX baixa com o token e qualquer 401 volta ao login com "Sua sessão expirou. Entre novamente.". Testes: 228 no backend, 6 no frontend (`npm test`), build ok. Publicar frontend e backend juntos.
 
 **Validar:** ✅ `/api/auth/login` funciona em produção. ⏳ Ainda a confirmar: o cache persiste após reiniciar o Render, e o banco continua lá depois de 30 dias.
 
@@ -124,8 +126,8 @@ Alternativas:
 
 ## Ordem sugerida a partir de agora
 
-1. Etapa 0 restante (Alembic; o backup automático já está feito) e 0b (remover o `.patch`).
-2. Proteger rotas de negócio com o token.
+1. Etapa 0 restante (aplicar a `0003` do Alembic no Neon; o backup automático já está feito) e 0b (remover o `.patch`).
+2. ~~Proteger rotas de negócio com o token~~ (feito no código em 13/10/2026; falta validar no site).
 3. Etapas 3 e 4 (motoristas, lojas): base de dados para tudo o resto.
 4. Etapas 6 e 5 (seleção de pedidos, depois conectores quando o schema do BigQuery chegar).
 5. Peso dos pedidos (subetapas 2 e 3), **depois** do backup e do Alembic com rotas protegidas (itens 1 e 2): o peso é só informativo (o solver só usa a referência do veículo como guia).

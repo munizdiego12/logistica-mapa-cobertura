@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import { ShieldCheck, AlertCircle, Loader2 } from 'lucide-react';
 import api from '../services/api';
 
-export default function Login({ onLoginSuccess }) {
+export default function Login({ onLoginSuccess, aviso = '' }) {
   const [isRegistering, setIsRegistering] = useState(false);
   const [nome, setNome] = useState('');
   const [email, setEmail] = useState('');
@@ -70,6 +70,13 @@ export default function Login({ onLoginSuccess }) {
           <div className="mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-xs flex items-start gap-2">
             <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
             <span>{erro}</span>
+          </div>
+        )}
+
+        {aviso && !erro && !sucesso && (
+          <div className="mb-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>{aviso}</span>
           </div>
         )}
 

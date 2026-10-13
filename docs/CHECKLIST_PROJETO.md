@@ -105,8 +105,17 @@ Execute a fase 4: remova as faixas manuais que o CNEFE já cobre, e coloque "Fon
 
 ---
 
-## ⬜ Etapa 4 — Migrations e rotas protegidas
-*(Parcial em 09/10/2026: o Alembic já está configurado em `backend/` com a revisão `0001` vazia e a `0002` de `item_pesos`; pendentes: a migration inicial das tabelas antigas e proteger as rotas de negócio com o token.)*
+## 🟨 Etapa 4 — Migrations e rotas protegidas
+*(Pronta no código em 13/10/2026, commit local sem push; falta aplicar a revisão `0003` no Neon e validar no site. Comandos: `docs/MIGRATIONS.md`.)*
+- [x] **Parte 1 — Alembic nas tabelas antigas:** revisão `0003_tabelas_antigas` com `CREATE ... IF NOT EXISTS` para `operadores`, `geocode_cache`, `cep_prefixos` e `ibge_municipios` (sem `DROP`, `TRUNCATE` nem `DELETE`; no Neon não altera nada). `docs/MIGRATIONS.md` explica criar migration, aplicar, `--sql`, `current`/`stamp` e aplicar no Neon pela variável `DATABASE_URL`. Não existe tabela `geocache` (era o arquivo de teste `geocache.db`).
+- [x] **Parte 2 — Rotas protegidas por login (JWT):** `/api/upload`, `/api/otimizar`, `/api/otimizar/status/{id}`, `/api/cobertura-ceps`, `/api/exportar-tabela-frete-xlsx`, `/api/modelo-xlsx` e `/api/modais`; `/api/item-pesos/*` e `/api/auth/me` já eram protegidas. Abertas só `/api/auth/login` e `/api/auth/register` (que continua exigindo o código de convite). Não existe rota de saúde; `/docs`, `/redoc` e `/openapi.json` (automáticas do FastAPI) continuam abertas.
+- [x] **Frontend:** o modelo XLSX agora baixa com o token (antes era `window.open`, sem token); qualquer resposta 401 limpa a sessão e volta ao login com o aviso "Sua sessão expirou. Entre novamente.". `npm test` (6 testes do tratamento do 401, com o `node --test` do Node) e `npm run build` passam.
+- [x] **Testes:** `test_rotas_protegidas.py` (para cada rota: sem token 401, token inválido 401, token válido passa; token vencido, operador inativo e inexistente; login e cadastro abertos; toda rota `/api` exige login) e `test_migracao_tabelas_antigas.py` (idempotente, nada apagado, igual ao esquema do app). Suíte do backend: 228 passam.
+- [ ] **Aplicar a `0003` no Neon** (você roda; ver `docs/MIGRATIONS.md`): `current` → `upgrade head --sql` (revisar) → `upgrade head` → `current` (deve mostrar `0003`). Backup antes.
+- [ ] **Validar no site** depois do deploy: login, cálculo de cobertura, upload, roteirização, baixar o modelo XLSX e exportar a tabela XLSX; e, com a sessão vencida, o retorno ao login com o aviso.
+- [ ] Enquanto o frontend novo não estiver no ar, um frontend antigo abrindo o modelo XLSX por link receberá 401 (a rota agora exige login): publicar o frontend e o backend juntos.
+
+Prompt original (para referência):
 ```
 1) Configure Alembic no backend com migration inicial refletindo os models atuais (operadores, ceps_reais etc.), sem apagar dados existentes. Documente os comandos.
 2) Proteja com o token JWT (get_current_operador) todos os endpoints de negócio: /api/upload, /api/otimizar, /api/otimizar/status, /api/cobertura-ceps, /api/exportar-tabela-frete-xlsx e /api/modelo-xlsx. Deixe abertos só login e register. Confirme que o frontend já envia o token e trate 401 deslogando o usuário.

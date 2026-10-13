@@ -281,7 +281,7 @@ async def _buscar_cobertura(lat: float, lon: float, raio_km: float):
         )
     return cobertura.montar_cobertura(prefixos, raio_km)
 
-@app.post("/api/cobertura-ceps")
+@app.post("/api/cobertura-ceps", dependencies=[Depends(obter_operador_atual)])
 async def gerar_cobertura_ceps_instantanea(req: RaioCepRequest):
     async with httpx.AsyncClient() as client:
         lat, lon, cidade, uf, clean_cep, bairro, status_hub = await geocode_async(
@@ -336,7 +336,7 @@ class ExportarXlsxRequest(BaseModel):
     hub: Dict[str, Any]
     pontos_cobertos: List[Dict[str, Any]]
 
-@app.post("/api/exportar-tabela-frete-xlsx")
+@app.post("/api/exportar-tabela-frete-xlsx", dependencies=[Depends(obter_operador_atual)])
 def exportar_tabela_frete_xlsx(req: ExportarXlsxRequest):
     wb = openpyxl.Workbook()
     
@@ -616,11 +616,11 @@ class OtimizarRequest(BaseModel):
     custo_hora: Optional[float] = 25.00
     pedidos: List[Dict[str, Any]]
 
-@app.get("/api/modais")
+@app.get("/api/modais", dependencies=[Depends(obter_operador_atual)])
 def get_modais():
     return MODAIS_PADRAO_DEFAULT
 
-@app.post("/api/upload")
+@app.post("/api/upload", dependencies=[Depends(obter_operador_atual)])
 async def upload_planilha(file: UploadFile = File(...)):
     try:
         contents = await file.read()
@@ -881,7 +881,7 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest"):
         job["erro"] = f"Erro interno no algoritmo de roteirização: {str(e)}"
 
 
-@app.post("/api/otimizar")
+@app.post("/api/otimizar", dependencies=[Depends(obter_operador_atual)])
 async def iniciar_otimizacao(req: "OtimizarRequest"):
     """Inicia a roteirização em segundo plano e devolve um job_id na hora."""
     job_id = _novo_job()
@@ -889,7 +889,7 @@ async def iniciar_otimizacao(req: "OtimizarRequest"):
     return {"job_id": job_id}
 
 
-@app.get("/api/otimizar/status/{job_id}")
+@app.get("/api/otimizar/status/{job_id}", dependencies=[Depends(obter_operador_atual)])
 def status_otimizacao(job_id: str):
     job = JOBS.get(job_id)
     if not job:
@@ -906,7 +906,7 @@ def status_otimizacao(job_id: str):
         resposta["erro"] = job["erro"]
     return resposta
 
-@app.get("/api/modelo-xlsx")
+@app.get("/api/modelo-xlsx", dependencies=[Depends(obter_operador_atual)])
 def download_modelo_xlsx():
     wb = openpyxl.Workbook()
     ws = wb.active

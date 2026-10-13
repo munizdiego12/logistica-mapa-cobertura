@@ -29,7 +29,10 @@ def cliente(monkeypatch):
 
     monkeypatch.setattr(main, "geocode_async", geocode_falso)
     monkeypatch.setattr(main.database, "buscar_ibge_municipio", ibge_falso)
-    return TestClient(main.app)
+    # A rota exige login (Etapa 4); aqui o assunto é a cobertura, então há um operador logado de mentira.
+    main.app.dependency_overrides[main.obter_operador_atual] = lambda: object()
+    yield TestClient(main.app)
+    main.app.dependency_overrides.pop(main.obter_operador_atual, None)
 
 
 def _simular_banco(monkeypatch, prefixos):

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import {
   Truck, DollarSign, Navigation, Package, Upload,
@@ -12,6 +12,8 @@ import MapaLeaflet from './components/MapaLeaflet';
 import Login from './components/Login';
 import PesosItens from './components/PesosItens';
 import { API_BASE } from './config';
+import { instalarTratamento401, MENSAGEM_SESSAO_EXPIRADA } from './services/sessao';
+import { baixarBlob } from './services/download';
 
 // Instância dedicada que anexa automaticamente o token do operador logado
 // (Etapa 1 — Autenticação) em toda chamada ao backend, para que qualquer
@@ -37,11 +39,26 @@ export default function App() {
     }
   });
 
+  const [avisoLogin, setAvisoLogin] = useState('');
+
   const handleLogout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('operador');
     setOperador(null);
   };
+
+  // Qualquer resposta 401 (sessão vencida ou inválida) devolve o operador à tela de login, com um aviso curto.
+  const sessaoExpiradaRef = useRef(null);
+  useEffect(() => {
+    sessaoExpiradaRef.current = () => {
+      handleLogout();
+      setAvisoLogin(MENSAGEM_SESSAO_EXPIRADA);
+    };
+  });
+  useEffect(() => {
+    const id = instalarTratamento401(apiAuth, () => sessaoExpiradaRef.current());
+    return () => apiAuth.interceptors.response.eject(id);
+  }, []);
 
   const [loading, setLoading] = useState(false);
   const [mostrarPesos, setMostrarPesos] = useState(false);
@@ -260,8 +277,14 @@ export default function App() {
     downloadAnchor.remove();
   };
 
-  const baixarModeloXLSX = () => {
-    window.open(`${API_BASE}/modelo-xlsx`, '_blank');
+  const baixarModeloXLSX = async () => {
+    try {
+      const resposta = await apiAuth.get('/modelo-xlsx', { responseType: 'blob' });
+      baixarBlob(resposta.data, 'modelo_pedidos_zubale.xlsx');
+    } catch (err) {
+      if (err?.response?.status === 401) return; // já voltou para o login, com o aviso
+      alert('Não foi possível baixar o modelo agora. Tente novamente.');
+    }
   };
 
   // 1. Exportação em CSV Simples
@@ -341,14 +364,9 @@ export default function App() {
       const dataAtual = new Date().toISOString().slice(0, 10);
       const nomeArquivo = `tabela_frete_completa_${nomeHubLimpo}${numHubLimpo}_${dataAtual}.xlsx`;
 
-      const url = window.URL.createObjectURL(new Blob([response.data]));
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', nomeArquivo);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
+      baixarBlob(new Blob([response.data]), nomeArquivo);
     } catch (err) {
+      if (err?.response?.status === 401) return; // já voltou para o login, com o aviso
       alert('Erro ao gerar planilha Excel completa.');
     }
   };
@@ -389,7 +407,7 @@ export default function App() {
   // Etapa 1 — Autenticação: sem operador logado, não renderiza o app,
   // mostra a tela de login/cadastro (já com fundo de tela cheia).
   if (!operador) {
-    return <Login onLoginSuccess={setOperador} />;
+    return <Login aviso={avisoLogin} onLoginSuccess={(op) => { setAvisoLogin(''); setOperador(op); }} />;
   }
 
   return (

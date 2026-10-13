@@ -95,13 +95,12 @@ Execute a fase 4: remova as faixas manuais que o CNEFE já cobre, e coloque "Fon
 
 ---
 
-## 🟨 Etapa 3 — Backup automático (GitHub Actions)
-*(Workflow criado em 09/10/2026, commit local sem push; falta criar os secrets e rodar uma vez à mão. Passo a passo, restauração e troca da senha: `docs/BACKUP.md`.)*
-- [x] Workflow `.github/workflows/backup.yml`: roda todo domingo 06:00 UTC e manualmente; `pg_dump` 18 (repositório oficial PGDG) com `--format=custom --no-owner --no-privileges`; confere tamanho (mínimo 100 KB) e as tabelas `operadores` e `cep_prefixos` com `pg_restore --list`; criptografa com `gpg` (AES256), confere que o arquivo abre, apaga o dump em claro e guarda só `backup-neon-AAAAMMDD.dump.gpg` por 30 dias. Permissões mínimas (`contents: read`), action fixada por commit, nada sensível no log. Testado localmente com `pg_dump` falso e `gpg` de verdade (48 verificações); **não foi rodado no GitHub nem contra o Neon**.
-- [ ] No GitHub: Settings → Secrets and variables → Actions → criar o secret `DATABASE_URL` com a string **direta** (não a do pooler) do Neon.
-- [ ] Criar o secret `BACKUP_PASSPHRASE`: senha longa e aleatória (32 caracteres ou mais), guardada também num gerenciador de senhas. **O repositório é público e os artifacts podem ser baixados por qualquer pessoa logada no GitHub: a força dessa senha é a única proteção do backup.**
-- [ ] Rodar o workflow uma vez à mão (aba Actions → Backup do Neon → Run workflow) e conferir o artifact.
-- [ ] Testar a restauração em uma branch do Neon (`docs/BACKUP.md`).
+## ✅ Etapa 3 — Backup automático (GitHub Actions)
+*(Concluída e validada em 13/10/2026. Passo a passo, restauração e troca da senha: `docs/BACKUP.md`.)*
+- [x] Workflow `.github/workflows/backup.yml` (commit `4497471`): roda todo domingo 06:00 UTC e manualmente; `pg_dump` 18 com `--format=custom --no-owner --no-privileges`; confere tamanho (mínimo 100 KB) e as tabelas `operadores` e `cep_prefixos`; criptografa com `gpg` (AES256), apaga o dump em claro e guarda só `backup-neon-AAAAMMDD.dump.gpg` por 30 dias.
+- [x] Secrets `DATABASE_URL` (string direta do Neon) e `BACKUP_PASSPHRASE` criados no GitHub.
+- [x] **Validado no GitHub:** a execução #1 rodou; o artifact `.gpg` foi baixado e descriptografado com a senha do backup; o resultado é um dump PostgreSQL válido (~774 KB, cabeçalho `PGDMP`).
+- [ ] **Não testado ainda:** a restauração completa em um banco novo (`pg_restore` numa branch do Neon, conforme `docs/BACKUP.md`). Recomendado fazer uma vez; backup que nunca foi restaurado não é garantia.
 - [ ] Lembrar: o GitHub desativa workflows agendados após 60 dias sem atividade no repositório; conferir a aba Actions de tempos em tempos.
 
 ---
@@ -164,7 +163,7 @@ Implemente a lista de pedidos com checkbox, filtrada pela loja selecionada e por
 - [x] **Pesquisa na internet encerrada (decisão do Diego, 08/10/2026):** rendeu pouco (**4 pesos de confiança média, 36 de baixa, 26 não achados e 34 não pesquisados**). O limite de buscas **não será aumentado** e os 34 **não serão continuados**.
 - [ ] **Pedir os pesos à fonte real:** cadastro de itens do Atacadão ou da operação (planilha com `id_sku`/código de referência e peso líquido e bruto) ou pesagem. O `data/peso/item_pesos_inicial.csv`, já ordenado por unidades vendidas, serve de lista de conferência.
 - [ ] **Conferir à mão os SKUs mais vendidos** (de cima para baixo; 248 SKUs levam a 80% dos pedidos completos e 426 a 90%), com o que o Atacadão/operação mandar e, como complemento, os 4 pesos de confiança média e a revisão dos 36 de baixa da pesquisa.
-- [x] **Subetapa 2 — Tabela `item_pesos`, tela de manutenção e fila "sem peso"** *(pronta no código em 09/10/2026, commit local sem push; falta aplicar no Neon, ver os passos abaixo; o backup automático da Etapa 3 deste checklist já tem o workflow criado, mas falta criar os secrets e rodá-lo: recomendado antes de gravar dados conferidos à mão)*
+- [x] **Subetapa 2 — Tabela `item_pesos`, tela de manutenção e fila "sem peso"** *(pronta no código em 09/10/2026, commit local sem push; falta aplicar no Neon, ver os passos abaixo; o backup automático da Etapa 3 deste checklist está concluído e validado (13/10/2026), então já é seguro gravar dados conferidos à mão)*
 ```
 Crie a tabela item_pesos no Neon via Alembic (id_sku, reference_code, nome, peso_kg, fonte, confianca, atualizado_em, atualizado_por; qualquer operador logado edita e o sistema registra quem alterou e quando), com carga a partir do CSV revisado (script com upsert, DATABASE_URL só pela variável de ambiente). Crie a tela de manutenção protegida por token: listar/editar o peso de um SKU e uma fila "sem peso" ordenada pelas unidades vendidas. SKUs novos que aparecerem nos pedidos entram na fila. Sem push.
 ```

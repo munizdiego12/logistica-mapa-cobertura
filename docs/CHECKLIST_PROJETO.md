@@ -105,15 +105,15 @@ Execute a fase 4: remova as faixas manuais que o CNEFE já cobre, e coloque "Fon
 
 ---
 
-## 🟨 Etapa 4 — Migrations e rotas protegidas
-*(Pronta no código em 13/10/2026, commit local sem push; falta aplicar a revisão `0003` no Neon e validar no site. Comandos: `docs/MIGRATIONS.md`.)*
+## ✅ Etapa 4 — Migrations e rotas protegidas
+*(Concluída e validada em produção em 13/10/2026. Comandos: `docs/MIGRATIONS.md`.)*
 - [x] **Parte 1 — Alembic nas tabelas antigas:** revisão `0003_tabelas_antigas` com `CREATE ... IF NOT EXISTS` para `operadores`, `geocode_cache`, `cep_prefixos` e `ibge_municipios` (sem `DROP`, `TRUNCATE` nem `DELETE`; no Neon não altera nada). `docs/MIGRATIONS.md` explica criar migration, aplicar, `--sql`, `current`/`stamp` e aplicar no Neon pela variável `DATABASE_URL`. Não existe tabela `geocache` (era o arquivo de teste `geocache.db`).
 - [x] **Parte 2 — Rotas protegidas por login (JWT):** `/api/upload`, `/api/otimizar`, `/api/otimizar/status/{id}`, `/api/cobertura-ceps`, `/api/exportar-tabela-frete-xlsx`, `/api/modelo-xlsx` e `/api/modais`; `/api/item-pesos/*` e `/api/auth/me` já eram protegidas. Abertas só `/api/auth/login` e `/api/auth/register` (que continua exigindo o código de convite). Não existe rota de saúde; `/docs`, `/redoc` e `/openapi.json` (automáticas do FastAPI) continuam abertas.
 - [x] **Frontend:** o modelo XLSX agora baixa com o token (antes era `window.open`, sem token); qualquer resposta 401 limpa a sessão e volta ao login com o aviso "Sua sessão expirou. Entre novamente.". `npm test` (6 testes do tratamento do 401, com o `node --test` do Node) e `npm run build` passam.
 - [x] **Testes:** `test_rotas_protegidas.py` (para cada rota: sem token 401, token inválido 401, token válido passa; token vencido, operador inativo e inexistente; login e cadastro abertos; toda rota `/api` exige login) e `test_migracao_tabelas_antigas.py` (idempotente, nada apagado, igual ao esquema do app). Suíte do backend: 228 passam.
-- [ ] **Aplicar a `0003` no Neon** (você roda; ver `docs/MIGRATIONS.md`): `current` → `upgrade head --sql` (revisar) → `upgrade head` → `current` (deve mostrar `0003`). Backup antes.
-- [ ] **Validar no site** depois do deploy: login, cálculo de cobertura, upload, roteirização, baixar o modelo XLSX e exportar a tabela XLSX; e, com a sessão vencida, o retorno ao login com o aviso.
-- [ ] Enquanto o frontend novo não estiver no ar, um frontend antigo abrindo o modelo XLSX por link receberá 401 (a rota agora exige login): publicar o frontend e o backend juntos.
+- [x] **`0003` aplicada no Neon:** `alembic current` = `0003` (a `0002`, que cria `item_pesos`, veio junto).
+- [x] **Validado no site:** `/api/modelo-xlsx` sem login devolve 401 (rotas de negócio protegidas) e a tela "Pesos dos itens" carrega.
+- [ ] Conferir quando houver oportunidade (não foi citado na validação): o fluxo completo logado (cobertura, upload, roteirização, baixar o modelo e exportar o XLSX) e, com a sessão vencida, o retorno ao login com o aviso.
 
 Prompt original (para referência):
 ```
@@ -172,12 +172,13 @@ Implemente a lista de pedidos com checkbox, filtrada pela loja selecionada e por
 - [x] **Pesquisa na internet encerrada (decisão do Diego, 08/10/2026):** rendeu pouco (**4 pesos de confiança média, 36 de baixa, 26 não achados e 34 não pesquisados**). O limite de buscas **não será aumentado** e os 34 **não serão continuados**.
 - [ ] **Pedir os pesos à fonte real:** cadastro de itens do Atacadão ou da operação (planilha com `id_sku`/código de referência e peso líquido e bruto) ou pesagem. O `data/peso/item_pesos_inicial.csv`, já ordenado por unidades vendidas, serve de lista de conferência.
 - [ ] **Conferir à mão os SKUs mais vendidos** (de cima para baixo; 248 SKUs levam a 80% dos pedidos completos e 426 a 90%), com o que o Atacadão/operação mandar e, como complemento, os 4 pesos de confiança média e a revisão dos 36 de baixa da pesquisa.
-- [x] **Subetapa 2 — Tabela `item_pesos`, tela de manutenção e fila "sem peso"** *(pronta no código em 09/10/2026, commit local sem push; falta aplicar no Neon, ver os passos abaixo; o backup automático da Etapa 3 deste checklist está concluído e validado (13/10/2026), então já é seguro gravar dados conferidos à mão)*
+- [x] **Subetapa 2 — Tabela `item_pesos`, tela de manutenção e fila "sem peso"** *(pronta no código em 09/10/2026; migration aplicada no Neon em 13/10/2026 (a tela carrega); falta só a carga inicial dos pesos, ver os passos abaixo; o backup automático da Etapa 3 deste checklist está concluído e validado (13/10/2026), então já é seguro gravar dados conferidos à mão)*
 ```
 Crie a tabela item_pesos no Neon via Alembic (id_sku, reference_code, nome, peso_kg, fonte, confianca, atualizado_em, atualizado_por; qualquer operador logado edita e o sistema registra quem alterou e quando), com carga a partir do CSV revisado (script com upsert, DATABASE_URL só pela variável de ambiente). Crie a tela de manutenção protegida por token: listar/editar o peso de um SKU e uma fila "sem peso" ordenada pelas unidades vendidas. SKUs novos que aparecerem nos pedidos entram na fila. Sem push.
 ```
   O que foi feito: **Alembic configurado** em `backend/` (usa asyncpg, porque o `psycopg2` está bloqueado pelo Windows nesta máquina; `DATABASE_URL` só pela variável de ambiente) com a revisão `0001` (ponto de partida, não altera o banco) e a `0002`, que cria `item_pesos` (`id_sku`, `reference_code`, `nome`, `peso_kg`, `fonte`, `confianca`, `atualizado_em`, `atualizado_por` e mais `unidades_vendidas`, para ordenar a fila). Rotas protegidas por login: `GET /api/item-pesos/resumo`, `GET /api/item-pesos/fila-sem-peso`, `GET /api/item-pesos` (busca por nome, código ou referência), `PUT /api/item-pesos/{id_sku}` (qualquer operador logado edita; fica registrado quem alterou e quando) e `POST /api/item-pesos/skus-vistos` (SKU novo entra na fila sem peso). Tela "Pesos dos itens" no cabeçalho do app. Script `scripts/carregar_item_pesos.py`: mostra o resumo (com peso, sem peso, inválidos) antes de gravar e só grava com `--gravar` e a confirmação digitada; aceita `;` ou `,` e vírgula decimal; ignora linhas sem peso (`--incluir-sem-peso` as põe na fila); não sobrescreve pesos editados na tela.
-- [ ] **Aplicar a migration e fazer a carga inicial no Neon** (a carga só depois da sua confirmação do resumo):
+- [x] **Migration aplicada no Neon** (13/10/2026, junto com a `0003`; a tabela `item_pesos` existe e a tela carrega).
+- [ ] **Fazer a carga inicial no Neon** (só depois da sua confirmação do resumo; os passos 1 e 2 abaixo já foram feitos):
 ```
 # 1) Ver o SQL que será aplicado (não conecta no banco)
 cd backend

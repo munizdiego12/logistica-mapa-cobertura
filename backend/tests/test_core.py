@@ -1,5 +1,5 @@
 from backend.logistica.validation import sanitizar_cep
-from backend.logistica.costs import formatar_tempo, calculate_route_costs
+from backend.logistica.costs import formatar_tempo, calcular_custo_rota
 from backend.logistica.routing import calcular_distancia_euclidiana
 
 def test_sanitizar_cep():
@@ -18,23 +18,23 @@ def test_calcular_distancia_euclidiana():
     p2 = (-23.5505, -46.6333)
     assert calcular_distancia_euclidiana(p1, p2) == 0.0
 
-def test_calculate_route_costs_parametros_dinamicos():
-    rota = [{"lat": -23.56, "lon": -46.64}]
-    hub = [-23.5505, -46.6333]
-    # Custo padrão
-    res_padrao = calculate_route_costs(rota, hub, preco_gasolina=5.00, custo_hora=20.00)
-    # Gasolina mais cara
-    res_gasolina_cara = calculate_route_costs(rota, hub, preco_gasolina=10.00, custo_hora=20.00)
-    # Hora do motorista mais cara
-    res_hora_cara = calculate_route_costs(rota, hub, preco_gasolina=5.00, custo_hora=40.00)
+def test_custo_da_rota_e_o_valor_fixo_do_tipo_de_veiculo():
+    # Carro de passeio R$ 130 e Fiorino/Utilitário R$ 260 por rota, qualquer que seja o tamanho da rota.
+    assert calcular_custo_rota(4, 130.0) == {"custo_total": 130.0, "custo_por_pedido": 32.5}
+    assert calcular_custo_rota(10, 260.0) == {"custo_total": 260.0, "custo_por_pedido": 26.0}
+    assert calcular_custo_rota(1, 130.0)["custo_total"] == calcular_custo_rota(40, 130.0)["custo_total"] == 130.0
 
-    assert res_gasolina_cara["custo_combustivel"] > res_padrao["custo_combustivel"]
-    assert res_gasolina_cara["custo_total"] > res_padrao["custo_total"]
-    assert res_hora_cara["custo_mao_obra"] > res_padrao["custo_mao_obra"]
-    assert res_hora_cara["custo_combustivel"] == res_padrao["custo_combustivel"]
 
-def test_calculate_route_costs_rota_vazia():
-    res = calculate_route_costs([], [-23.5505, -46.6333])
-    assert res["custo_total"] == 0.0
-    assert res["km_total"] == 0.0
-    assert res["tempo_formatado"] == "0 min"
+def test_custo_da_rota_nao_depende_de_combustivel_nem_de_hora_do_motorista():
+    import inspect
+    assert list(inspect.signature(calcular_custo_rota).parameters) == ["qtd_pedidos", "custo_rota"]
+
+
+def test_custo_da_rota_sem_pedidos_ou_sem_valor_e_zero():
+    assert calcular_custo_rota(0, 130.0) == {"custo_total": 0.0, "custo_por_pedido": 0.0}
+    assert calcular_custo_rota(3, None) == {"custo_total": 0.0, "custo_por_pedido": 0.0}
+    assert calcular_custo_rota(3, 0) == {"custo_total": 0.0, "custo_por_pedido": 0.0}
+
+
+def test_custo_da_rota_arredonda_o_valor_por_pedido():
+    assert calcular_custo_rota(3, 130.0)["custo_por_pedido"] == 43.33

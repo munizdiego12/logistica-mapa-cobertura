@@ -25,6 +25,11 @@ class FakeConn:
         self.chamadas.append(("fetchrow", sql, args))
         return self._proxima()
 
+    async def fetchval(self, sql, *args):
+        self.eventos.append("fetchval")
+        self.chamadas.append(("fetchval", sql, args))
+        return self._proxima()
+
     async def executemany(self, sql, linhas):
         self.eventos.append("executemany")
         self.chamadas.append(("executemany", sql, list(linhas)))

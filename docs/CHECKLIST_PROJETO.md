@@ -122,7 +122,14 @@ Prompt original (para referência):
 3) Escreva testes para isso e rode-os.
 ```
 
-## ⬜ Etapa 5 — Motoristas e veículos
+## 🟨 Etapa 5 — Motoristas e veículos
+*(**Pronta no código (13/10/2026), falta aplicar a migration `0004` no Neon e validar no site.** Tabelas `tipos_veiculo` (nome, `custo_rota`, `peso_referencia_kg` opcional, ativo, quem alterou e quando; já nasce com "Carro de passeio" R$ 130 e "Fiorino/Utilitário" R$ 260) e `motoristas` (nome, tipo de veículo, ativo, quem alterou e quando), criadas pela revisão `0004` (idempotente, sem `DROP`/`TRUNCATE`/`DELETE`; `alembic upgrade head --sql` conferido, **não aplicada**). Rotas protegidas por login: `GET/PUT /api/tipos-veiculo` e `GET/POST/PUT /api/motoristas` (qualquer operador logado edita; motorista **não é apagado**, é desativado com `ativo = false`). Tela "Motoristas e veículos" (botão no cabeçalho): listar, criar, editar, ativar/desativar motoristas e editar o custo e o peso de referência de cada tipo. **Custo da rota = valor fixo do tipo de veículo, por rota/viagem**; combustível (R$/L) e custo-hora saíram da tela e do cálculo (`costs.py` reescrito: `calcular_custo_rota`). A frota gerada ("Motorista 01") saiu: `POST /api/otimizar` usa os motoristas ativos do cadastro e, sem nenhum, responde 422 com "Não há motoristas cadastrados. Cadastre pelo menos um motorista...". O peso de referência só é guardado e editado: **não é limite e nunca bloqueia nem avisa**; o motor ainda não o usa (Etapa do OR-Tools). O teto de pedidos por viagem do agrupamento atual continua no painel "Capacidades Máximas por Modal" (2 tipos). Testes: 301 no backend passam, `npm test` e build ok; nada depende do `psycopg2`.)*
+- [x] **Código, testes e build** (commit local, sem push).
+- [ ] **Aplicar a migration `0004` no Neon** (você roda; backup antes; ver `docs/MIGRATIONS.md`): `alembic current` (deve mostrar `0003`) → `upgrade head --sql` (revisar) → `upgrade head` → `current` (deve mostrar `0004`). Ela já cadastra os dois tipos de veículo.
+- [ ] **Validar no site depois do deploy:** abrir "Motoristas", cadastrar um motorista, editar, desativar e reativar; editar custo e peso de referência; gerar rotas e conferir que o custo da rota é R$ 130 (carro) ou R$ 260 (Fiorino/Utilitário); com todos desativados, a mensagem pedindo o cadastro.
+- [ ] **Publicar frontend e backend juntos:** o frontend novo não envia mais a frota nem combustível/hora; o backend novo ignora esses campos de um frontend antigo, mas sem motoristas cadastrados não gera rotas.
+
+Prompt original (para referência):
 ```
 Implemente o cadastro de motoristas e veículos:
 - Tabela motoristas (nome, tipo_veiculo, ativo) via Alembic. Tipos: "Carro de passeio" (R$130 por rota) e "Fiorino/Utilitário" (R$260 por rota), em uma tabela ou enum de configuração.

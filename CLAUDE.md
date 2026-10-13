@@ -24,7 +24,7 @@ Contexto detalhado: `docs/MEMORIA_PROJETO_roteirizacao.md` (regras e decisões) 
 
 ## Regras de negócio principais
 
-- **Veículos:** só Carro de passeio (R$130/rota) e Fiorino/Utilitário (R$260/rota). Custo fixo por tipo; sem combustível/hora-motorista. Sem caminhão/moto por ora. Cada tipo de veículo tem um campo opcional "peso de referência (kg)" (pode ficar em branco = "sem referência"): não é limite, é só um guia para o motor.
+- **Veículos:** só Carro de passeio (R$130/rota) e Fiorino/Utilitário (R$260/rota). Custo fixo por tipo (tabela `tipos_veiculo`, editável na tela "Motoristas e veículos"; vale por rota/viagem); sem combustível/hora-motorista (saíram da tela e do cálculo). Sem caminhão/moto por ora. Cada tipo de veículo tem um campo opcional "peso de referência (kg)" (pode ficar em branco = "sem referência"): não é limite, é só um guia para o motor.
 - **Motoristas:** cadastro próprio (nome + tipo de veículo), até 3 turnos/dia (manhã, tarde, noite).
 - **Capacidade:** a capacidade por loja (peso e volume) é **opcional**; não é regra do sistema.
 - **O peso dos pedidos é apenas informativo (decisão de produto, 08/10/2026):** o sistema mostra o peso de cada pedido e o total como "≈ X kg (estimado)", ou "≥ X kg, faltam N itens" quando houver itens sem peso, sempre com o selo "estimado", e **NUNCA bloqueia nem avisa em vermelho por capacidade de veículo** (não existe aviso de 90% da capacidade nem trava por peso). Quem decide o que o motorista leva é o operador. As telas mostram o peso de cada pedido, o total das rotas selecionadas e o total por veículo.
@@ -50,7 +50,7 @@ Ordem atual (a partir de agora):
 
 1. **Etapa 0** — backup automático e Alembic concluídos; resta a **0b** — remover `correcoes_etapa1_auth.patch` da raiz.
 2. Rotas de negócio protegidas com o token (**concluído e validado no site em 13/10/2026**: toda rota `/api` exige login, menos `login` e `register`).
-3. **Etapa 3** — Cadastro de motoristas e veículos; **Etapa 4** — Lojas, hub no mapa, capacidade e janelas.
+3. **Etapa 3** — Cadastro de motoristas e veículos (**pronto no código em 13/10/2026**: tabelas `tipos_veiculo` e `motoristas` pela revisão `0004`, rotas `/api/tipos-veiculo` e `/api/motoristas` protegidas, tela "Motoristas e veículos", motorista desativado em vez de apagado, frota gerada trocada pelos motoristas ativos; **falta aplicar a `0004` no Neon e validar no site**); **Etapa 4** — Lojas, hub no mapa, capacidade e janelas.
 4. **Etapa 6** — Seleção de pedidos por loja/data; depois **Etapa 5** — Conectores Sheets/BigQuery (aguardam schema).
 5. **Peso dos pedidos** (subetapas 2 e 3: tabela `item_pesos`, tela de manutenção, peso por pedido/rota/veículo), (apenas informativo; o motor só usa o peso de referência do veículo como guia).
 6. **Etapa 7** — VRP com OR-Tools, junto com **Etapa 8** — Controle de duplicidade.

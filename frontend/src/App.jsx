@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import {
   Truck, DollarSign, Navigation, Package, Upload,
   MapPin, Sliders, ArrowUpRight, Play, Loader2,
-  ShieldCheck, Activity, Plus, Trash2, Users, AlertCircle,
+  ShieldCheck, Activity, Trash2, Users, AlertCircle,
   CheckSquare, Square, Download, FileSpreadsheet, FileDown,
   Settings, ChevronDown, ChevronUp, Layers, Compass, Table as TableIcon, 
   AlertTriangle, Scale
@@ -11,6 +11,7 @@ import {
 import MapaLeaflet from './components/MapaLeaflet';
 import Login from './components/Login';
 import PesosItens from './components/PesosItens';
+import Motoristas from './components/Motoristas';
 import { API_BASE } from './config';
 import { instalarTratamento401, MENSAGEM_SESSAO_EXPIRADA } from './services/sessao';
 import { baixarBlob } from './services/download';
@@ -62,6 +63,7 @@ export default function App() {
 
   const [loading, setLoading] = useState(false);
   const [mostrarPesos, setMostrarPesos] = useState(false);
+  const [mostrarMotoristas, setMostrarMotoristas] = useState(false);
   const [loadingCeps, setLoadingCeps] = useState(false);
   const [dadosCoberturaCeps, setDadosCoberturaCeps] = useState(null);
   const [progresso, setProgresso] = useState(null); // { etapa, atual, total } | null
@@ -69,20 +71,27 @@ export default function App() {
   // Painel de Configuração de Capacidades Variáveis por Loja
   const [mostrarConfigModais, setMostrarConfigModais] = useState(false);
   const [modais, setModais] = useState({
-    'Moto': { capacidade: 3, consumo_kml: 30.0 },
-    'Carro de Passeio': { capacidade: 5, consumo_kml: 11.5 },
-    'Fiorino / Utilitário': { capacidade: 12, consumo_kml: 9.0 },
-    'VUC / Caminhão 3/4': { capacidade: 30, consumo_kml: 6.5 }
+    'Carro de passeio': { capacidade: 5 },
+    'Fiorino/Utilitário': { capacidade: 12 }
   });
 
-  const [precoGasolina, setPrecoGasolina] = useState(5.80);
-  const [custoHora, setCustoHora] = useState(25.00);
+  // Frota: os motoristas ativos e os tipos de veículo vêm do cadastro (tela "Motoristas e veículos").
+  const [motoristas, setMotoristas] = useState([]);
+  const [tiposVeiculo, setTiposVeiculo] = useState([]);
+  const [frotaCarregada, setFrotaCarregada] = useState(false);
 
-  // Frota configurável
-  const [frota, setFrota] = useState([
-    { id: 1, motorista: 'Motorista 01', modal: 'Carro de Passeio' },
-    { id: 2, motorista: 'Motorista 02', modal: 'Fiorino / Utilitário' }
-  ]);
+  // Sem o cadastro a roteirização avisa o operador na hora de gerar as rotas.
+  const carregarFrota = useCallback(() => Promise.all([
+    apiAuth.get('/motoristas', { params: { incluir_inativos: false } }),
+    apiAuth.get('/tipos-veiculo')
+  ]).then(([respMotoristas, respTipos]) => {
+    setMotoristas(respMotoristas.data);
+    setTiposVeiculo(respTipos.data);
+  }).catch(() => {}).finally(() => setFrotaCarregada(true)), []);
+
+  useEffect(() => {
+    if (operador) carregarFrota();
+  }, [operador, carregarFrota]);
 
   // Hub Operacional
   const [origem, setOrigem] = useState({
@@ -101,10 +110,7 @@ export default function App() {
   const pedidosAtivos = loteSelecionado ? loteSelecionado.pedidos : [];
 
   // Capacidade por Viagem Simultânea
-  const capacidadeSimultaneaFrota = frota.reduce((acc, f) => {
-    const cap = modais[f.modal]?.capacidade || 0;
-    return acc + cap;
-  }, 0);
+  const capacidadeSimultaneaFrota = capacityCheck(modais, motoristas);
 
   // Alterar capacidade variável de um modal específico
   const atualizarCapacidadeModal = (nomeModal, novaCapacidade) => {
@@ -116,24 +122,6 @@ export default function App() {
         capacidade: valor
       }
     }));
-  };
-
-  const adicionarMotorista = () => {
-    const nextId = frota.length > 0 ? Math.max(...frota.map(m => m.id)) + 1 : 1;
-    const nomePadrao = `Motorista ${String(nextId).padStart(2, '0')}`;
-    setFrota([...frota, { id: nextId, motorista: nomePadrao, modal: 'Carro de Passeio' }]);
-  };
-
-  const removerMotorista = (id) => {
-    if (frota.length === 1) {
-      alert('É necessário manter ao menos 1 motorista cadastrado na frota.');
-      return;
-    }
-    setFrota(frota.filter(m => m.id !== id));
-  };
-
-  const atualizarModalMotorista = (id, novoModal) => {
-    setFrota(frota.map(m => m.id === id ? { ...m, modal: novoModal } : m));
   };
 
   const handleFileUpload = async (e) => {
@@ -208,6 +196,12 @@ export default function App() {
       return;
     }
 
+    if (frotaCarregada && motoristas.length === 0) {
+      alert('Não há motoristas cadastrados. Cadastre pelo menos um motorista em "Motoristas e veículos" antes de gerar as rotas.');
+      setMostrarMotoristas(true);
+      return;
+    }
+
     setLoading(true);
     setProgresso({ etapa: 'Iniciando...', atual: 0, total: pedidosAtivos.length });
 
@@ -218,10 +212,7 @@ export default function App() {
         origem_num: origem.numero,
         origem_bairro: origem.bairro,
         origem_cep: origem.cep,
-        frota: frota,
         modais_config: modais,
-        preco_gasolina: Number(precoGasolina),
-        custo_hora: Number(custoHora),
         pedidos: pedidosAtivos
       });
 
@@ -251,7 +242,9 @@ export default function App() {
         }, 1200);
       });
     } catch (err) {
-      alert(err?.message || 'Não foi possível gerar as rotas. Verifique os endereços informados e tente de novo.');
+      if (err?.response?.status === 401) return; // já voltou para o login, com o aviso
+      const detalhe = err?.response?.data?.detail;
+      alert((typeof detalhe === 'string' && detalhe) || err?.message || 'Não foi possível gerar as rotas. Verifique os endereços informados e tente de novo.');
     } finally {
       setLoading(false);
       setProgresso(null);
@@ -448,6 +441,13 @@ export default function App() {
           </div>
           <div className="flex items-center gap-2 pl-3 border-l border-slate-800">
             <button
+              onClick={() => setMostrarMotoristas(true)}
+              className="flex items-center gap-1 text-[10px] font-semibold text-blue-300 hover:text-blue-200 bg-blue-500/10 border border-blue-500/20 px-2 py-1 rounded transition-colors"
+              title="Cadastrar motoristas e ajustar o custo dos veículos"
+            >
+              <Users className="w-3 h-3" /> Motoristas
+            </button>
+            <button
               onClick={() => setMostrarPesos(true)}
               className="flex items-center gap-1 text-[10px] font-semibold text-blue-300 hover:text-blue-200 bg-blue-500/10 border border-blue-500/20 px-2 py-1 rounded transition-colors"
               title="Conferir e editar o peso dos itens"
@@ -464,6 +464,10 @@ export default function App() {
           </div>
         </div>
       </header>
+
+      {mostrarMotoristas && (
+        <Motoristas api={apiAuth} onFechar={() => setMostrarMotoristas(false)} onMudou={carregarFrota} />
+      )}
 
       {mostrarPesos && (
         <PesosItens api={apiAuth} onFechar={() => setMostrarPesos(false)} onSessaoExpirada={handleLogout} />
@@ -687,89 +691,69 @@ export default function App() {
             )}
           </div>
 
-          {/* 4. Frota Multimodal & Monitor de Viagens */}
+          {/* 4. Frota: motoristas ativos do cadastro */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                <Users className="w-3.5 h-3.5 text-blue-400" /> Frota Alocada ({frota.length})
+                <Users className="w-3.5 h-3.5 text-blue-400" /> Motoristas Ativos ({motoristas.length})
               </span>
               <button
-                onClick={adicionarMotorista}
+                onClick={() => setMostrarMotoristas(true)}
                 className="flex items-center gap-1 text-[11px] text-blue-400 hover:text-blue-300 font-semibold px-2 py-1 rounded bg-blue-500/10 border border-blue-500/20 transition-colors"
               >
-                <Plus className="w-3 h-3" /> Adicionar
+                <Settings className="w-3 h-3" /> Gerenciar
               </button>
             </div>
 
-            <div className="p-2.5 rounded-lg bg-slate-950/60 border border-slate-800 text-[11px] space-y-1.5">
-              <div className="flex items-center justify-between">
-                <span className="text-slate-400">Capacidade por Saída Simultânea:</span>
-                <span className="font-mono font-bold text-slate-200">
-                  {capacidadeSimultaneaFrota} pedidos / onda
-                </span>
+            {frotaCarregada && motoristas.length === 0 ? (
+              <div className="p-2.5 rounded-lg bg-amber-950/30 border border-amber-500/30 text-[11px] text-amber-300 flex items-start gap-2">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                <span>Não há motoristas cadastrados. Cadastre pelo menos um em "Gerenciar" para poder gerar as rotas.</span>
               </div>
-              {pedidosAtivos.length > capacityCheck(modais, frota) && (
-                <div className="flex items-center gap-1.5 text-blue-400 text-[10px] pt-1 border-t border-slate-800/80">
-                  <Layers className="w-3.5 h-3.5 shrink-0" />
-                  <span>Demanda maior que a frota: o sistema gerará <b>múltiplas viagens/ondas</b> por motorista.</span>
-                </div>
-              )}
-            </div>
-
-            <div className="space-y-2 max-h-36 overflow-y-auto pr-1">
-              {frota.map((item) => (
-                <div key={item.id} className="flex items-center gap-2 bg-slate-900/90 border border-slate-800/80 p-2 rounded-lg">
-                  <div className="flex-1">
-                    <span className="text-[11px] font-medium text-slate-300 block">{item.motorista}</span>
-                    <select
-                      value={item.modal}
-                      onChange={(e) => atualizarModalMotorista(item.id, e.target.value)}
-                      className="w-full text-[11px] bg-slate-950 border border-slate-800 focus:border-blue-500/80 rounded px-2 py-1 mt-1 text-slate-200 focus:outline-none"
-                    >
-                      {Object.keys(modais).map((m) => (
-                        <option key={m} value={m} className="bg-slate-900 text-slate-100">
-                          {m} (Máx: {modais[m]?.capacidade} un)
-                        </option>
-                      ))}
-                    </select>
+            ) : (
+              <>
+                <div className="p-2.5 rounded-lg bg-slate-950/60 border border-slate-800 text-[11px] space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Capacidade por Saída Simultânea:</span>
+                    <span className="font-mono font-bold text-slate-200">
+                      {capacidadeSimultaneaFrota} pedidos / onda
+                    </span>
                   </div>
-                  <button
-                    onClick={() => removerMotorista(item.id)}
-                    className="p-1.5 text-slate-500 hover:text-rose-400 transition-colors"
-                    title="Remover Motorista"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  {pedidosAtivos.length > capacidadeSimultaneaFrota && capacidadeSimultaneaFrota > 0 && (
+                    <div className="flex items-center gap-1.5 text-blue-400 text-[10px] pt-1 border-t border-slate-800/80">
+                      <Layers className="w-3.5 h-3.5 shrink-0" />
+                      <span>Demanda maior que a frota: o sistema gerará <b>múltiplas viagens/ondas</b> por motorista.</span>
+                    </div>
+                  )}
                 </div>
-              ))}
-            </div>
+
+                <div className="space-y-2 max-h-36 overflow-y-auto pr-1">
+                  {motoristas.map((item) => (
+                    <div key={item.id} className="flex items-center justify-between gap-2 bg-slate-900/90 border border-slate-800/80 p-2 rounded-lg">
+                      <span className="text-[11px] font-medium text-slate-300 truncate">{item.nome}</span>
+                      <span className="text-[10px] text-slate-400 shrink-0">{item.tipo_veiculo}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
 
-          {/* 5. Parâmetros Financeiros */}
+          {/* 5. Custo por rota (valor fixo do tipo de veículo, ajustado em "Motoristas") */}
           <div className="space-y-3">
             <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-              <Sliders className="w-3.5 h-3.5 text-blue-400" /> Parâmetros Financeiros
+              <Sliders className="w-3.5 h-3.5 text-blue-400" /> Custo por Rota
             </span>
-
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="text-[10px] text-slate-400 block mb-1">Combustível (R$/L)</label>
-                <input
-                  type="number" step="0.1"
-                  value={precoGasolina}
-                  onChange={(e) => setPrecoGasolina(e.target.value)}
-                  className="w-full text-xs bg-slate-900/90 border border-slate-800 focus:border-blue-500/80 rounded-lg px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:outline-none transition-colors"
-                />
-              </div>
-              <div>
-                <label className="text-[10px] text-slate-400 block mb-1">Motorista (R$/h)</label>
-                <input
-                  type="number" step="1.0"
-                  value={custoHora}
-                  onChange={(e) => setCustoHora(e.target.value)}
-                  className="w-full text-xs bg-slate-900/90 border border-slate-800 focus:border-blue-500/80 rounded-lg px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:outline-none transition-colors"
-                />
-              </div>
+            <div className="space-y-1.5">
+              {tiposVeiculo.map((t) => (
+                <div key={t.id} className="flex items-center justify-between text-[11px] bg-slate-900/90 border border-slate-800/80 px-2.5 py-2 rounded-lg">
+                  <span className="text-slate-300">{t.nome}</span>
+                  <span className="font-mono font-bold text-emerald-400">
+                    {Number(t.custo_rota).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                  </span>
+                </div>
+              ))}
+              <p className="text-[10px] text-slate-500">Valor fixo por rota, conforme o tipo de veículo do motorista.</p>
             </div>
           </div>
 
@@ -825,7 +809,7 @@ export default function App() {
               </div>
               <div className="flex items-baseline gap-2">
                 <span className="text-2xl font-black text-white font-mono">
-                  {resultado ? resultado.kpis.total_rotas_viagens : frota.length}
+                  {resultado ? resultado.kpis.total_rotas_viagens : motoristas.length}
                 </span>
                 <span className="text-xs text-slate-500">
                   {resultado ? `(${resultado.kpis.total_veiculos} veículos)` : 'rotas'}
@@ -1008,6 +992,6 @@ export default function App() {
   );
 }
 
-function capacityCheck(modais, frota) {
-  return frota.reduce((acc, f) => acc + (modais[f.modal]?.capacidade || 0), 0);
+function capacityCheck(modais, motoristas) {
+  return motoristas.reduce((acc, m) => acc + (modais[m.tipo_veiculo]?.capacidade || 0), 0);
 }

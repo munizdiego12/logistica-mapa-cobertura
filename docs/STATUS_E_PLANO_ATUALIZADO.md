@@ -19,7 +19,7 @@ Base: `MEMORIA_PROJETO_roteirizacao.md` (31/08/2026) comparado com o repositóri
 |---|---|---|
 | **0. Banco permanente — restante** | Alta | Neon já concluído. O **backup automático (GitHub Actions)** está **concluído e validado** (Etapa 3 do CHECKLIST). O **Alembic (revisão `0003` aplicada no Neon, `alembic current` = `0003`) e as rotas protegidas** estão **concluídos e validados** (Etapa 4 do CHECKLIST). A Etapa 0 está completa. Ver seção abaixo. |
 | 0b. Remover `correcoes_etapa1_auth.patch` | Baixa | O `requirements.txt` já foi regravado em UTF-8. Resta tirar o `.patch` da raiz. |
-| 3. Cadastro de motoristas e veículos | Alta | Não existe. `main.py` ainda usa frota gerada ("Motorista 01"). Falta tabela, CRUD, 2 tipos de veículo com custo fixo (R$130 / R$260). Cada tipo de veículo ganha o campo opcional "peso de referência (kg)" (pode ficar em branco; não é limite, é só um guia para o motor). |
+| 3. Cadastro de motoristas e veículos | **Pronto no código (13/10/2026)** | Tabelas `tipos_veiculo` (custo fixo R$130 / R$260 e peso de referência opcional, que não é limite) e `motoristas` (desativa em vez de apagar) pela revisão `0004`, rotas protegidas, tela "Motoristas e veículos"; o custo da rota é o valor fixo do tipo (combustível e custo-hora saíram) e a frota gerada ("Motorista 01") foi trocada pelos motoristas ativos. **Falta aplicar a `0004` no Neon e validar no site.** Ver CHECKLIST (Etapa 5). |
 | 4. Lojas, hub no mapa, capacidade e janelas | Alta | Não existe. Hub ainda é texto livre. A capacidade por loja (peso e volume) passa a ser opcional. |
 | 5. Origem dos pedidos (Sheets/BigQuery) | Alta | Só CSV/XLSX. Conectores pendentes do schema do BigQuery. |
 | 6. Seleção de pedidos por loja/data (checkbox) | Alta | Não existe. |
@@ -130,7 +130,7 @@ Alternativas:
 
 1. ~~Etapa 0 restante~~ (backup e Alembic concluídos); falta só a 0b (remover o `.patch`).
 2. ~~Proteger rotas de negócio com o token~~ (feito e validado no site em 13/10/2026).
-3. Etapas 3 e 4 (motoristas, lojas): base de dados para tudo o resto.
+3. Etapas 3 e 4 (motoristas, lojas): base de dados para tudo o resto. Motoristas e veículos: pronto no código, falta aplicar a `0004` e validar no site (13/10/2026); falta lojas.
 4. Etapas 6 e 5 (seleção de pedidos, depois conectores quando o schema do BigQuery chegar).
 5. Peso dos pedidos (subetapas 2 e 3), **depois** do backup e do Alembic com rotas protegidas (itens 1 e 2): o peso é só informativo (o solver só usa a referência do veículo como guia).
 6. Etapa 7 (OR-Tools), com 8 (duplicidade).

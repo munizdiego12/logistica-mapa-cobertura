@@ -9,6 +9,7 @@ Revisões atuais:
 | `0001` | Ponto de partida, não altera o banco. |
 | `0002` | Cria `item_pesos` (pesos dos itens, com quem alterou e quando). |
 | `0003` | Descreve as tabelas antigas (`operadores`, `geocode_cache`, `cep_prefixos`, `ibge_municipios`) em SQL idempotente (`CREATE ... IF NOT EXISTS`): num banco novo cria tudo; no Neon, onde já existem com dados, **não faz nada** (não apaga, não recria, não altera dados). O `downgrade` não apaga nada de propósito. |
+| `0004` | Cria `tipos_veiculo` (já com "Carro de passeio" R$ 130 e "Fiorino/Utilitário" R$ 260, `ON CONFLICT DO NOTHING`: não desfaz o que um operador editou) e `motoristas` (desativa em vez de apagar). Idempotente; o `downgrade` não apaga nada. |
 
 Não existe tabela `geocache`: esse nome aparece em notas antigas por causa do arquivo de teste `geocache.db`. O cache de geocodificação é a tabela `geocode_cache`.
 
@@ -42,7 +43,7 @@ cd backend
 $env:DATABASE_URL = "<string direta do Neon>"
 python -m alembic current
 python -m alembic upgrade head
-python -m alembic current          # deve mostrar 0003 (head)
+python -m alembic current          # deve mostrar o head (hoje 0004)
 Remove-Item Env:DATABASE_URL
 cd ..
 ```

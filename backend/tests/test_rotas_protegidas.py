@@ -22,6 +22,12 @@ ROTAS = [
     ("post", "/api/otimizar", {"json": {}}, 422),
     ("get", "/api/otimizar/status/inexistente", {}, 404),
     ("get", "/api/modelo-xlsx", {}, 200),
+    # Etapa 5: com token válido a rota passa da autenticação (aqui sem banco de verdade, então responde 503 claro)
+    ("get", "/api/tipos-veiculo", {}, 503),
+    ("put", "/api/tipos-veiculo/1", {"json": {"custo_rota": 130}}, 503),
+    ("get", "/api/motoristas", {}, 503),
+    ("post", "/api/motoristas", {"json": {"nome": "João", "tipo_veiculo": "Carro de passeio"}}, 503),
+    ("put", "/api/motoristas/1", {"json": {"nome": "João", "tipo_veiculo": "Carro de passeio", "ativo": False}}, 503),
 ]
 
 
@@ -41,6 +47,14 @@ def banco():
     main.app.dependency_overrides[get_db] = _get_db
     yield Sessao
     main.app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def sem_pool_de_banco(monkeypatch):
+    async def sem_pool():
+        return None
+
+    monkeypatch.setattr(main.database, "get_pool", sem_pool)
 
 
 @pytest.fixture

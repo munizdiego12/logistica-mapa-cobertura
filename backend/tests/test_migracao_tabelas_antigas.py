@@ -83,4 +83,6 @@ def test_alembic_gera_o_sql_completo_sem_conectar_e_sem_apagar():
     for tabela in ("operadores", "geocode_cache", "cep_prefixos", "ibge_municipios"):
         assert f"CREATE TABLE IF NOT EXISTS {tabela}" in sql
     assert "CREATE TABLE item_pesos" in sql
+    assert "CREATE TABLE IF NOT EXISTS tipos_veiculo" in sql and "CREATE TABLE IF NOT EXISTS motoristas" in sql
+    assert "ON CONFLICT (nome) DO NOTHING" in sql
     assert not re.search(r"\b(DROP|TRUNCATE|DELETE)\b", sql, re.IGNORECASE)

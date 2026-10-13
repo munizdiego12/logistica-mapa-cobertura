@@ -16,7 +16,7 @@ Contexto detalhado: `docs/MEMORIA_PROJETO_roteirizacao.md` (regras e decisões) 
 
 - **Frontend:** React (Vite) + Tailwind + React-Leaflet, hospedado na Vercel.
 - **Backend:** FastAPI (Python), hospedado no Render (plano free). `backend/main.py` é o ponto de entrada.
-- **Banco:** PostgreSQL (SQLAlchemy) no Neon (gratuito; o do Render expirava). **Tabelas novas entram só por migration do Alembic** (`backend/alembic.ini`, `backend/migrations/`; rode de dentro de `backend/` com `python -m alembic upgrade head`; nunca `create_all` para tabela nova). O Alembic e os scripts de carga novos usam **asyncpg**, porque o `psycopg2` pode estar bloqueado pelo Windows (política de Controle de Aplicativo): não tente contornar o bloqueio. `DATABASE_URL` só pela variável de ambiente, nunca em arquivo. Pendentes da Etapa 0: backup automático (GitHub Actions) e a migration inicial das tabelas antigas.
+- **Banco:** PostgreSQL (SQLAlchemy) no Neon (gratuito; o do Render expirava). **Tabelas novas entram só por migration do Alembic** (`backend/alembic.ini`, `backend/migrations/`; rode de dentro de `backend/` com `python -m alembic upgrade head`; nunca `create_all` para tabela nova). O Alembic e os scripts de carga novos usam **asyncpg**, porque o `psycopg2` pode estar bloqueado pelo Windows (política de Controle de Aplicativo): não tente contornar o bloqueio. `DATABASE_URL` só pela variável de ambiente, nunca em arquivo. **Backup automático concluído e validado** (`.github/workflows/backup.yml`, semanal, criptografado com `gpg`, artifact de 30 dias; ver `docs/BACKUP.md`; a restauração completa em banco novo ainda não foi testada). Pendente da Etapa 0: a migration inicial das tabelas antigas.
 - **Roteamento viário:** OSRM. **Solver VRP:** OR-Tools, síncrono dentro do FastAPI.
 - **Geocodificação:** BrasilAPI v2 (primária) + ViaCEP (validação cruzada) + Nominatim, com cache em Postgres.
 - **Auth:** JWT + bcrypt; registro exige `codigo_convite` (`OPERATOR_INVITE_CODE`). Env vars: `DATABASE_URL`, `JWT_SECRET_KEY`, `OPERATOR_INVITE_CODE`; frontend: `VITE_API_URL`.
@@ -48,7 +48,7 @@ Feitas: **1** Autenticação; **2** CEP/raio sem fallback sintético; **2b** Bas
 
 Ordem atual (a partir de agora):
 
-1. **Etapa 0 (restante)** — backup automático (GitHub Actions) e Alembic; **0b** — remover `correcoes_etapa1_auth.patch` da raiz.
+1. **Etapa 0 (restante)** — Alembic (o backup automático já está concluído); **0b** — remover `correcoes_etapa1_auth.patch` da raiz.
 2. Proteger rotas de negócio (`/upload`, `/otimizar`, `/cobertura-ceps`) com o token.
 3. **Etapa 3** — Cadastro de motoristas e veículos; **Etapa 4** — Lojas, hub no mapa, capacidade e janelas.
 4. **Etapa 6** — Seleção de pedidos por loja/data; depois **Etapa 5** — Conectores Sheets/BigQuery (aguardam schema).

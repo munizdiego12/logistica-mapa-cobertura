@@ -18,6 +18,7 @@ import { baixarBlob } from './services/download';
 import {
   rotuloDoTipo, validarValorRota, primeiroErroDeValores, montarValoresPorRota, dicaValorBase, rotuloDaOrigem, corDaOrigem
 } from './services/valorRota';
+import { EVENTO_TEMA, lerTema, corDaRotaNoTema } from './services/temaMapa';
 
 // Instância dedicada que anexa automaticamente o token do operador logado
 // (Etapa 1 — Autenticação) em toda chamada ao backend, para que qualquer
@@ -67,6 +68,13 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [mostrarPesos, setMostrarPesos] = useState(false);
   const [mostrarMotoristas, setMostrarMotoristas] = useState(false);
+  // Tema do mapa, para a bolinha de cada rota na tabela ter a mesma cor que a rota tem no mapa.
+  const [temaMapa, setTemaMapa] = useState(() => lerTema());
+  useEffect(() => {
+    const aoTrocar = (e) => setTemaMapa(e.detail);
+    window.addEventListener(EVENTO_TEMA, aoTrocar);
+    return () => window.removeEventListener(EVENTO_TEMA, aoTrocar);
+  }, []);
   const [loadingCeps, setLoadingCeps] = useState(false);
   const [dadosCoberturaCeps, setDadosCoberturaCeps] = useState(null);
   const [progresso, setProgresso] = useState(null); // { etapa, atual, total } | null
@@ -972,7 +980,7 @@ export default function App() {
                     {resultado.rotas.map((r) => (
                       <tr key={r.id} className="hover:bg-slate-800/30 transition-colors">
                         <td className="p-3.5 font-sans font-bold flex items-center gap-2">
-                          <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: r.cor }}></span>
+                          <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: corDaRotaNoTema(r.cor, temaMapa) }}></span>
                           <span className="text-white">{r.motorista}</span>
                         </td>
                         <td className="p-3.5 text-slate-300 font-sans">

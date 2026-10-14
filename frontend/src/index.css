@@ -30,8 +30,13 @@ body {
   filter: sepia(1) hue-rotate(186deg) saturate(1.6) brightness(0.7) contrast(1.8);
 }
 
+/*
+ * Claro: as camadas são as MESMAS da Esri do tema Escuro (base e rótulos em cinza escuro), onde as ruas são mais
+ * claras que o terreno. O filtro inverte, deixa o terreno branco e as ruas em azul (pequenas em azul-celeste, médias
+ * em azul, grandes em azul-escuro) e os rótulos em preto. Cores medidas no mapa renderizado (ver RUAS_APROXIMADAS).
+ */
 .mapa-claro .leaflet-tile-pane {
-  filter: sepia(0.5) hue-rotate(185deg) saturate(1.6);
+  filter: invert(1) brightness(0.72) contrast(8) brightness(1.8) sepia(1) hue-rotate(182deg) saturate(6);
 }
 
 /* Atribuição e botões de zoom combinando com cada tema (a atribuição continua visível e com link). */

@@ -4,7 +4,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { rotuloDaOrigem } from '../services/valorRota';
 import {
-  TEMAS, ROTULO_TEMA, CAMADAS, ATRIBUICAO_ESRI, PALETAS, lerTema, salvarTema, corDoTexto, corDaRotaNoTema
+  TEMAS, ROTULO_TEMA, CAMADAS, ATRIBUICAO_ESRI, PALETAS, EVENTO_TEMA, lerTema, salvarTema, corDoTexto, corDaRotaNoTema
 } from '../services/temaMapa';
 
 // Correção dos caminhos padrão dos ícones do Leaflet
@@ -155,6 +155,7 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
   const escolherTema = (novo) => {
     setTema(novo);
     salvarTema(novo);
+    window.dispatchEvent(new CustomEvent(EVENTO_TEMA, { detail: novo }));
   };
   const hubLat = origem ? Number(origem.lat) : NaN;
   const hubLon = origem ? Number(origem.lon) : NaN;

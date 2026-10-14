@@ -1,11 +1,11 @@
-// Fonte única da URL do backend, usada tanto pelo App.jsx quanto pelo
-// services/api.js (usado pela tela de Login). Evita que as duas partes do
-// frontend apontem para endereços diferentes.
+// Fonte única da URL do backend, usada pelo App.jsx e pelo services/api.js (tela de Login): login, cadastro e as
+// demais chamadas partem desta mesma URL base, então nunca apontam para endereços diferentes.
 //
-// Prioridade: variável de ambiente VITE_API_URL (se configurada na Vercel)
-// > URL de produção do Render (fallback padrão).
-export const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://routeflow-backend-v5ji.onrender.com';
+// Prioridade: variável de ambiente VITE_API_URL (se definida, na Vercel ou num .env local)
+// > URL de produção do Render (padrão). Regras de limpeza do valor em services/urlBase.js.
+import { resolverUrlBase } from './services/urlBase';
 
-// Mantido por compatibilidade com o App.jsx, que já usa as rotas com o
-// prefixo /api embutido na constante (ex: `${API_BASE}/upload`).
+export const API_BASE_URL = resolverUrlBase(import.meta.env.VITE_API_URL);
+
+// Mesma base com o prefixo /api embutido, para as chamadas do App.jsx (ex.: `${API_BASE}/upload`).
 export const API_BASE = `${API_BASE_URL}/api`;

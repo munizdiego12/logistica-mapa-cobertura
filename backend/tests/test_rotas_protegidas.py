@@ -131,3 +131,11 @@ def test_login_e_cadastro_continuam_abertos(banco, cliente, monkeypatch):
     corpo = {"nome": "João", "email": "joao@zubale.com", "senha": "senha-forte-2"}
     assert cliente.post("/api/auth/register", json={**corpo, "codigo_convite": "errado"}).status_code == 403
     assert cliente.post("/api/auth/register", json={**corpo, "codigo_convite": "convite-teste"}).status_code == 200
+
+
+def test_engine_do_banco_testa_a_conexao_antes_de_usar_e_recicla_as_antigas():
+    """Neon derruba conexão ociosa: sem pre_ping e recycle curto, o login dava 500 na primeira consulta depois de parado."""
+    import database
+    assert database.ENGINE_KWARGS == {"pool_pre_ping": True, "pool_recycle": 280}
+    assert database.engine.pool._pre_ping is True
+    assert database.engine.pool._recycle == 280

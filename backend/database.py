@@ -56,7 +56,14 @@ url_sqlalchemy = _url_sqlalchemy(URL_NORMALIZADA) if URL_NORMALIZADA else "sqlit
 
 connect_args = {"check_same_thread": False} if url_sqlalchemy.startswith("sqlite") else {}
 
-engine = create_engine(url_sqlalchemy, connect_args=connect_args)
+# O Neon derruba conexões ociosas (e suspende o banco depois de alguns minutos sem uso): sem estes dois ajustes, a
+# primeira consulta depois de um tempo parado (ex.: o login) pegava uma conexão já morta e dava erro 500
+# ("SSL connection has been closed unexpectedly").
+#  - pool_pre_ping: testa a conexão antes de usá-la e, se estiver morta, abre outra no lugar;
+#  - pool_recycle: não reaproveita conexão com mais de 280 s, antes de o Neon derrubá-la.
+ENGINE_KWARGS = {"pool_pre_ping": True, "pool_recycle": 280}
+
+engine = create_engine(url_sqlalchemy, connect_args=connect_args, **ENGINE_KWARGS)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 

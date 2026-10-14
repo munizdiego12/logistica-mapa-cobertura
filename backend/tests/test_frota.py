@@ -285,9 +285,10 @@ def test_otimizar_usa_os_motoristas_ativos_e_ignora_frota_e_custos_do_cliente(ap
     conn.respostas = [[{"id": 5, "nome": "Ana", "tipo_veiculo": "Fiorino/Utilitário", "custo_rota": Decimal("260.00"), "peso_referencia_kg": None}]]
     capturado = {}
 
-    async def falso(job_id, req, frota_usar):
+    async def falso(job_id, req, frota_usar, valores_informados=None):
         capturado["frota"] = frota_usar
         capturado["req"] = req
+        capturado["valores"] = valores_informados
 
     monkeypatch.setattr(main, "_processar_otimizacao", falso)
     corpo = {"origem_rua": "Av Paulista", "origem_num": "1", "pedidos": [{"id": 1}],
@@ -382,3 +383,150 @@ def test_migration_0004_peso_de_referencia_pode_ficar_em_branco_mas_nao_ser_nega
         conn.execute("UPDATE tipos_veiculo SET custo_rota = -1 WHERE id = 1")
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute("INSERT INTO motoristas (nome, tipo_veiculo) VALUES ('   ', 'Carro de passeio')")
+
+
+# ----------------------------------------------------------------------------------------------------------
+# Valor por rota informado na roteirização (o valor cadastrado vira o "valor base")
+# ----------------------------------------------------------------------------------------------------------
+def test_valor_informado_aceita_virgula_decimal_e_vazio_usa_o_base():
+    assert frota.interpretar_valor_informado("130,50") == Decimal("130.50")
+    assert frota.interpretar_valor_informado("R$ 1.234,56") == Decimal("1234.56")
+    assert frota.interpretar_valor_informado(300) == Decimal("300.00")
+    for vazio in (None, "", "   "):
+        assert frota.interpretar_valor_informado(vazio) is None
+    assert frota.interpretar_valor_informado("0") == Decimal("0.00")  # zero digitado de propósito é aceito
+    assert frota.interpretar_valor_informado(0) == Decimal("0.00")
+
+
+@pytest.mark.parametrize("entrada", [-1, "-5", "abc", "R$", True, 1e12])
+def test_valor_informado_negativo_ou_texto_e_recusado_com_mensagem_do_operador(entrada):
+    with pytest.raises(ValueError) as erro:
+        frota.interpretar_valor_informado(entrada, "Fiorino/Utilitário")
+    texto = str(erro.value)
+    assert "valor por rota" in texto and "Fiorino/Utilitário" in texto
+    assert not re.search(r"sql|tabela|banco|api|json|token|null|decimal|invalid|exception", texto, re.IGNORECASE)
+
+
+def test_valores_informados_por_tipo_sao_independentes():
+    assert frota.interpretar_valores_informados(None) == {}
+    assert frota.interpretar_valores_informados({}) == {}
+    assert frota.interpretar_valores_informados({"Carro de passeio": "", "Fiorino/Utilitário": "300,5"}) == {"fiorino/utilitário": Decimal("300.50")}
+    assert frota.interpretar_valores_informados({"Carro de passeio": None, "Fiorino/Utilitário": 0}) == {"fiorino/utilitário": Decimal("0.00")}
+
+
+def test_otimizar_repassa_os_valores_informados_e_ignora_os_vazios(api, monkeypatch):
+    cliente, conn = api
+    conn.respostas = [[{"id": 5, "nome": "Ana", "tipo_veiculo": "Fiorino/Utilitário", "custo_rota": Decimal("260.00"), "peso_referencia_kg": None}]]
+    capturado = {}
+
+    async def falso(job_id, req, frota_usar, valores_informados=None):
+        capturado["valores"] = valores_informados
+
+    monkeypatch.setattr(main, "_processar_otimizacao", falso)
+    corpo = {"origem_rua": "Av Paulista", "origem_num": "1", "pedidos": [{"id": 1}],
+             "valores_por_rota": {"Carro de passeio": "", "Fiorino/Utilitário": "300,50"}}
+    assert cliente.post("/api/otimizar", json=corpo).status_code == 200
+    assert capturado["valores"] == {"fiorino/utilitário": Decimal("300.50")}
+
+
+def test_otimizar_sem_o_campo_nao_informa_nada(api, monkeypatch):
+    cliente, conn = api
+    conn.respostas = [[{"id": 5, "nome": "Ana", "tipo_veiculo": "Carro de passeio", "custo_rota": Decimal("130.00"), "peso_referencia_kg": None}]]
+    capturado = {}
+
+    async def falso(job_id, req, frota_usar, valores_informados=None):
+        capturado["valores"] = valores_informados
+
+    monkeypatch.setattr(main, "_processar_otimizacao", falso)
+    assert cliente.post("/api/otimizar", json={"origem_rua": "A", "origem_num": "1", "pedidos": [{"id": 1}]}).status_code == 200
+    assert capturado["valores"] == {}
+
+
+@pytest.mark.parametrize("valores, trecho", [
+    ({"Carro de passeio": "-10"}, "não pode ser negativo"),
+    ({"Fiorino/Utilitário": -0.01}, "não pode ser negativo"),
+    ({"Fiorino/Utilitário": "abc"}, "precisa ser um valor em reais"),
+    ({"Carro de passeio": "130", "Fiorino/Utilitário": "muito"}, "Fiorino/Utilitário"),
+])
+def test_otimizar_com_valor_negativo_ou_texto_devolve_422_e_nao_cria_o_calculo(api, monkeypatch, valores, trecho):
+    cliente, conn = api
+    criados = []
+    monkeypatch.setattr(main, "_processar_otimizacao", lambda *a, **k: criados.append(a))
+    r = cliente.post("/api/otimizar", json={"origem_rua": "A", "origem_num": "1", "pedidos": [{"id": 1}], "valores_por_rota": valores})
+    assert r.status_code == 422 and trecho in r.json()["detail"]
+    assert criados == [] and conn.chamadas == []
+
+
+def _roteirizar(monkeypatch, valores_informados, capacidades=(2, 10)):
+    """Roteirização completa (geocodificação e OSRM simulados) com 1 carro e 1 utilitário; devolve o resultado."""
+    pedidos = [{"id": i, "Endereco": f"Rua {i}", "Numero": str(i), "Bairro": "Centro", "CEP": "01310100", "Volume": 1} for i in range(1, 9)]
+
+    async def geocode_falso(client, *a, **k):
+        return -23.5505, -46.6333, "São Paulo", "SP", "01310100", "Bela Vista", "VALIDO"
+
+    async def lote_falso(lista):
+        return {main._chave_cache(p["Endereco"], numero=p["Numero"], bairro=p["Bairro"], cep=p["CEP"], cidade="", uf=""):
+                (-23.55 - i * 0.001, -46.63, "São Paulo", "SP", "01310100", "Bela Vista", "VALIDO") for i, p in enumerate(lista)}
+
+    async def osrm_falso(client, pontos):
+        return 12.0, 30, []
+
+    monkeypatch.setattr(main, "geocode_async", geocode_falso)
+    monkeypatch.setattr(main, "geocodificar_lote", lote_falso)
+    monkeypatch.setattr(main, "get_osrm_route_async", osrm_falso)
+    req = main.OtimizarRequest(origem_rua="Av Paulista", origem_num="1", pedidos=pedidos,
+                               modais_config={"Carro de passeio": {"capacidade": capacidades[0]}, "Fiorino/Utilitário": {"capacidade": capacidades[1]}})
+    frota_usar = [main.MotoristaItem(id=1, motorista="João", modal="Carro de passeio", custo_rota=130.0),
+                  main.MotoristaItem(id=2, motorista="Ana", modal="Fiorino/Utilitário", custo_rota=260.0)]
+    main.JOBS["t"] = {"status": "em_andamento", "etapa": "", "atual": 0, "total": 1, "resultado": None, "erro": None}
+    _rodar(main._processar_otimizacao("t", req, frota_usar, frota.interpretar_valores_informados(valores_informados)))
+    job = main.JOBS.pop("t")
+    assert job["status"] == "concluido", job["erro"]
+    return job["resultado"]
+
+
+def test_campo_vazio_usa_o_valor_base_e_a_origem_e_padrao(monkeypatch):
+    resultado = _roteirizar(monkeypatch, {"Carro de passeio": "", "Fiorino/Utilitário": ""})
+    for rota in resultado["rotas"]:
+        assert rota["valor_rota"] == (130.0 if rota["modal"] == "Carro de passeio" else 260.0)
+        assert rota["custo_total"] == rota["valor_rota"] and rota["origem_valor"] == "padrão"
+    assert {v["origem"] for v in resultado["kpis"]["valores_por_tipo"]} == {"padrão"}
+
+
+def test_valor_informado_vale_para_todas_as_rotas_do_tipo_e_so_dele(monkeypatch):
+    resultado = _roteirizar(monkeypatch, {"Carro de passeio": "", "Fiorino/Utilitário": "300,50"})
+    rotas = resultado["rotas"]
+    utilitario = [r for r in rotas if r["modal"] == "Fiorino/Utilitário"]
+    passeio = [r for r in rotas if r["modal"] == "Carro de passeio"]
+    assert utilitario and passeio
+    for rota in utilitario:  # informar só o utilitário...
+        assert rota["valor_rota"] == rota["custo_total"] == 300.5 and rota["origem_valor"] == "informado"
+        assert rota["custo_por_pedido"] == round(300.5 / rota["qtd_pedidos"], 2)
+    for rota in passeio:  # ...mantém o passeio no valor base
+        assert rota["valor_rota"] == rota["custo_total"] == 130.0 and rota["origem_valor"] == "padrão"
+    assert resultado["kpis"]["custo_total"] == round(sum(r["custo_total"] for r in rotas), 2)
+
+
+def test_valor_informado_para_varias_rotas_do_mesmo_tipo(monkeypatch):
+    resultado = _roteirizar(monkeypatch, {"Carro de passeio": "99"}, capacidades=(3, 3))
+    passeio = [r for r in resultado["rotas"] if r["modal"] == "Carro de passeio"]
+    assert len(passeio) >= 2  # 8 pedidos com 3 por viagem: o carro faz mais de uma viagem
+    assert all(r["valor_rota"] == r["custo_total"] == 99.0 and r["origem_valor"] == "informado" for r in passeio)
+
+
+def test_valor_zero_digitado_de_proposito_vale_e_a_origem_e_informado(monkeypatch):
+    resultado = _roteirizar(monkeypatch, {"Fiorino/Utilitário": "0"})
+    for rota in resultado["rotas"]:
+        if rota["modal"] == "Fiorino/Utilitário":
+            assert rota["valor_rota"] == 0.0 and rota["custo_total"] == 0.0 and rota["origem_valor"] == "informado"
+        else:
+            assert rota["custo_total"] == 130.0 and rota["origem_valor"] == "padrão"
+
+
+def test_resumo_mostra_valor_usado_e_origem_por_tipo(monkeypatch):
+    resultado = _roteirizar(monkeypatch, {"Fiorino/Utilitário": "300,5"})
+    resumo = {v["tipo"]: v for v in resultado["kpis"]["valores_por_tipo"]}
+    assert resumo["Fiorino/Utilitário"]["valor"] == 300.5 and resumo["Fiorino/Utilitário"]["origem"] == "informado"
+    assert resumo["Carro de passeio"]["valor"] == 130.0 and resumo["Carro de passeio"]["origem"] == "padrão"
+    contagem = {t: sum(1 for r in resultado["rotas"] if r["modal"] == t) for t in resumo}
+    assert {t: v["rotas"] for t, v in resumo.items()} == contagem

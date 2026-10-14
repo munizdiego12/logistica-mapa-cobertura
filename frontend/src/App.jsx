@@ -15,6 +15,9 @@ import Motoristas from './components/Motoristas';
 import { API_BASE } from './config';
 import { instalarTratamento401, MENSAGEM_SESSAO_EXPIRADA } from './services/sessao';
 import { baixarBlob } from './services/download';
+import {
+  rotuloDoTipo, validarValorRota, primeiroErroDeValores, montarValoresPorRota, dicaValorBase, rotuloDaOrigem
+} from './services/valorRota';
 
 // Instância dedicada que anexa automaticamente o token do operador logado
 // (Etapa 1 — Autenticação) em toda chamada ao backend, para que qualquer
@@ -79,6 +82,8 @@ export default function App() {
   const [motoristas, setMotoristas] = useState([]);
   const [tiposVeiculo, setTiposVeiculo] = useState([]);
   const [frotaCarregada, setFrotaCarregada] = useState(false);
+  // Valor por rota digitado na roteirização, por tipo de veículo (vazio = vale o valor base do cadastro).
+  const [valoresPorRota, setValoresPorRota] = useState({});
 
   // Sem o cadastro a roteirização avisa o operador na hora de gerar as rotas.
   const carregarFrota = useCallback(() => Promise.all([
@@ -196,6 +201,12 @@ export default function App() {
       return;
     }
 
+    const erroValores = primeiroErroDeValores(valoresPorRota);
+    if (erroValores) {
+      alert(erroValores);
+      return;
+    }
+
     if (frotaCarregada && motoristas.length === 0) {
       alert('Não há motoristas cadastrados. Cadastre pelo menos um motorista em "Motoristas e veículos" antes de gerar as rotas.');
       setMostrarMotoristas(true);
@@ -213,6 +224,7 @@ export default function App() {
         origem_bairro: origem.bairro,
         origem_cep: origem.cep,
         modais_config: modais,
+        valores_por_rota: montarValoresPorRota(valoresPorRota),
         pedidos: pedidosAtivos
       });
 
@@ -443,7 +455,7 @@ export default function App() {
             <button
               onClick={() => setMostrarMotoristas(true)}
               className="flex items-center gap-1 text-[10px] font-semibold text-blue-300 hover:text-blue-200 bg-blue-500/10 border border-blue-500/20 px-2 py-1 rounded transition-colors"
-              title="Cadastrar motoristas e ajustar o custo dos veículos"
+              title="Cadastrar motoristas e ajustar o valor base dos veículos"
             >
               <Users className="w-3 h-3" /> Motoristas
             </button>
@@ -739,21 +751,37 @@ export default function App() {
             )}
           </div>
 
-          {/* 5. Custo por rota (valor fixo do tipo de veículo, ajustado em "Motoristas") */}
+          {/* 5. Valor por rota (opcional): vazio = vale o valor base do tipo, cadastrado em "Motoristas" */}
           <div className="space-y-3">
             <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-              <Sliders className="w-3.5 h-3.5 text-blue-400" /> Custo por Rota
+              <Sliders className="w-3.5 h-3.5 text-blue-400" /> Valor por Rota
             </span>
-            <div className="space-y-1.5">
-              {tiposVeiculo.map((t) => (
-                <div key={t.id} className="flex items-center justify-between text-[11px] bg-slate-900/90 border border-slate-800/80 px-2.5 py-2 rounded-lg">
-                  <span className="text-slate-300">{t.nome}</span>
-                  <span className="font-mono font-bold text-emerald-400">
-                    {Number(t.custo_rota).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                  </span>
-                </div>
-              ))}
-              <p className="text-[10px] text-slate-500">Valor fixo por rota, conforme o tipo de veículo do motorista.</p>
+            <div className="space-y-2">
+              {tiposVeiculo.map((t) => {
+                const texto = valoresPorRota[t.nome] ?? '';
+                const { ok, mensagem } = validarValorRota(texto);
+                return (
+                  <div key={t.id}>
+                    <label className="text-[10px] text-slate-400 block mb-1" htmlFor={`valor-rota-${t.id}`}>
+                      Valor por rota, {rotuloDoTipo(t.nome)}
+                    </label>
+                    <input
+                      id={`valor-rota-${t.id}`}
+                      type="text"
+                      inputMode="decimal"
+                      value={texto}
+                      onChange={(e) => setValoresPorRota((atuais) => ({ ...atuais, [t.nome]: e.target.value }))}
+                      placeholder={dicaValorBase(t.custo_rota)}
+                      aria-invalid={!ok}
+                      className={`w-full text-xs bg-slate-900/90 border rounded-lg px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:outline-none transition-colors ${ok ? 'border-slate-800 focus:border-blue-500/80' : 'border-amber-500/60 focus:border-amber-400'}`}
+                    />
+                    {!ok && <p className="text-[10px] text-amber-300 mt-1">{mensagem}</p>}
+                  </div>
+                );
+              })}
+              <p className="text-[10px] text-slate-500">
+                Opcional. Vale para todas as rotas do tipo nesta execução; vazio usa o valor base.
+              </p>
             </div>
           </div>
 
@@ -841,6 +869,16 @@ export default function App() {
                   <p className="text-[10px] text-slate-500 font-mono mt-0.5">
                     R$ {resultado.kpis.custo_medio_pedido.toFixed(2)} / entrega
                   </p>
+                )}
+                {resultado?.kpis?.valores_por_tipo?.length > 0 && (
+                  <div className="mt-1.5 space-y-0.5">
+                    {resultado.kpis.valores_por_tipo.map((v) => (
+                      <p key={v.tipo} className="text-[10px] text-slate-400">
+                        Valor por rota, {rotuloDoTipo(v.tipo)}: <span className="font-mono text-slate-200">R$ {Number(v.valor).toFixed(2)}</span>{' '}
+                        <span className={v.origem === 'informado' ? 'text-blue-300' : 'text-slate-500'}>({rotuloDaOrigem(v.origem)})</span>
+                      </p>
+                    ))}
+                  </div>
                 )}
               </div>
             </div>
@@ -966,7 +1004,12 @@ export default function App() {
                           </div>
                         </td>
                         <td className="p-3.5 text-slate-400">{r.tempo_formatado}</td>
-                        <td className="p-3.5 font-semibold text-emerald-400">R$ {r.custo_total.toFixed(2)}</td>
+                        <td className="p-3.5 font-semibold text-emerald-400">
+                          R$ {r.custo_total.toFixed(2)}
+                          <span className={`block text-[10px] font-normal ${r.origem_valor === 'informado' ? 'text-blue-300' : 'text-slate-500'}`}>
+                            valor {rotuloDaOrigem(r.origem_valor)}
+                          </span>
+                        </td>
                         <td className="p-3.5 text-slate-300">R$ {r.custo_por_pedido.toFixed(2)}</td>
                         <td className="p-3.5 text-right font-sans">
                           <a

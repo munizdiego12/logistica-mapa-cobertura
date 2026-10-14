@@ -423,6 +423,12 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
                       <span className="text-slate-500">Custo Total da Rota:</span>
                       <span className="font-bold text-emerald-600">R$ {Number(rota.custo_total).toFixed(2)}</span>
                     </div>
+                    {rota.origem_valor && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-500">Valor por rota:</span>
+                        <span className="font-semibold text-slate-700">{rota.origem_valor === 'informado' ? 'informado' : 'padrão'}</span>
+                      </div>
+                    )}
                     <div className="flex justify-between items-center">
                       <span className="text-slate-500">Custo Médio / Pedido:</span>
                       <span className="font-semibold text-slate-700">R$ {Number(rota.custo_por_pedido).toFixed(2)}</span>

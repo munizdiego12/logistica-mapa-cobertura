@@ -46,7 +46,7 @@ app.add_middleware(
 async def _on_startup():
     await database.init_db()
 
-# Teto de pedidos por viagem de cada tipo de veículo (agrupamento atual; o custo da rota vem do cadastro de tipos).
+# Teto de pedidos por viagem de cada tipo de veículo (agrupamento atual; o valor base da rota vem do cadastro de tipos).
 MODAIS_PADRAO_DEFAULT = {
     'Carro de passeio': {'capacidade': 5},
     'Fiorino/Utilitário': {'capacidade': 12},
@@ -598,11 +598,11 @@ def montar_rotas_por_capacidade_real(origem_lat, origem_lon, pedidos, frota, mod
     return [(vagas[k][0], grupos[k]) for k in range(n_vagas) if grupos[k]]
 
 class MotoristaItem(BaseModel):
-    """Motorista ativo do cadastro, com o custo fixo por rota do tipo de veículo dele."""
+    """Motorista ativo do cadastro, com o valor base por rota do tipo de veículo dele."""
     id: int
     motorista: str
     modal: str  # nome do tipo de veículo
-    custo_rota: float = 0.0
+    custo_rota: float = 0.0  # valor base do tipo de veículo
 
 class ModalConfigItem(BaseModel):
     capacidade: int
@@ -613,6 +613,9 @@ class OtimizarRequest(BaseModel):
     origem_bairro: Optional[str] = ""
     origem_cep: Optional[str] = ""
     modais_config: Optional[Dict[str, ModalConfigItem]] = None
+    # Valor por rota informado pelo operador, por tipo de veículo ({"Carro de passeio": "130,50"}). Ausente ou vazio:
+    # vale o valor base do tipo. Vale para todas as rotas daquele tipo nesta execução.
+    valores_por_rota: Optional[Dict[str, Optional[Union[float, str]]]] = None
     pedidos: List[Dict[str, Any]]
 
 @app.get("/api/modais", dependencies=[Depends(obter_operador_atual)])
@@ -706,7 +709,7 @@ def _novo_job() -> str:
     return job_id
 
 
-async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar: List[MotoristaItem]):
+async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar: List[MotoristaItem], valores_informados: Optional[Dict[str, Any]] = None):
     job = JOBS[job_id]
     try:
         modais_usar = {}
@@ -796,6 +799,7 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar:
         for mot_info, _ in viagens_planejadas:
             total_viagens_por_motorista[mot_info.id] += 1
 
+        valores_informados = valores_informados or {}
         rotas_resultado = []
         km_total_geral = 0.0
         custo_total_geral = 0.0
@@ -826,8 +830,10 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar:
                 # Defina o limite que considera "espalhado demais" (ex: 15 km)
                 alerta_amplitude = amplitude_km > 15.0
 
-                # Custo da rota = valor fixo do tipo de veículo do motorista (sem combustível nem hora do motorista).
-                custos = calcular_custo_rota(len(pts_rota), mot_info.custo_rota)
+                # Valor da rota = o informado pelo operador para o tipo de veículo, ou o valor base do tipo
+                # (sem combustível nem hora do motorista).
+                informado = valores_informados.get(mot_info.modal.strip().lower())
+                custos = calcular_custo_rota(len(pts_rota), mot_info.custo_rota, None if informado is None else float(informado))
                 custo_rota = custos["custo_total"]
                 km_total_geral += dist_km
                 custo_total_geral += custo_rota
@@ -842,11 +848,18 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar:
                     "qtd_pedidos": len(pts_rota), "km_total": dist_km,
                     "tempo_formatado": f"{tempo_min // 60}h {tempo_min % 60}m" if tempo_min >= 60 else f"{tempo_min} min",
                     "custo_total": custos["custo_total"], "custo_por_pedido": custos["custo_por_pedido"],
+                    "valor_rota": custos["valor_rota"], "origem_valor": custos["origem_valor"],
                     "geometria": geometria, "paradas": pts_rota, "link_maps": link_maps
                 })
 
                 job["atual"] = c_idx + 1
                 job["etapa"] = f"Calculando rotas ({c_idx + 1}/{len(viagens_planejadas)})..."
+
+        # Resumo do valor por rota usado em cada tipo de veículo desta execução (e de onde veio).
+        valores_por_tipo = {}
+        for rota in rotas_resultado:
+            item = valores_por_tipo.setdefault(rota["modal"], {"tipo": rota["modal"], "valor": rota["valor_rota"], "origem": rota["origem_valor"], "rotas": 0})
+            item["rotas"] += 1
 
         total_p = len(pedidos_geo)
         kpis = {
@@ -854,6 +867,7 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar:
             "total_rotas_viagens": len(rotas_resultado), "km_total": round(km_total_geral, 2),
             "custo_total": round(custo_total_geral, 2),
             "custo_medio_pedido": round(custo_total_geral / max(total_p, 1), 2),
+            "valores_por_tipo": list(valores_por_tipo.values()),
             "total_pedidos_sem_geocodificacao": len(pedidos_sem_geocodificacao),
         }
 
@@ -876,12 +890,16 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar:
 @app.post("/api/otimizar", dependencies=[Depends(obter_operador_atual)])
 async def iniciar_otimizacao(req: "OtimizarRequest"):
     """Inicia a roteirização em segundo plano e devolve um job_id na hora."""
+    try:
+        valores_informados = frota.interpretar_valores_informados(req.valores_por_rota)
+    except ValueError as erro:
+        raise HTTPException(status_code=422, detail=str(erro))
     motoristas = await _com_conexao_frota(frota.frota_ativa)
     if not motoristas:
         raise HTTPException(status_code=422, detail=frota.MSG_SEM_MOTORISTAS)
     frota_usar = [MotoristaItem(id=m["id"], motorista=m["nome"], modal=m["tipo_veiculo"], custo_rota=m["custo_rota"]) for m in motoristas]
     job_id = _novo_job()
-    asyncio.create_task(_processar_otimizacao(job_id, req, frota_usar))
+    asyncio.create_task(_processar_otimizacao(job_id, req, frota_usar, valores_informados))
     return {"job_id": job_id}
 
 
@@ -1050,7 +1068,7 @@ async def registrar_skus_vistos(dados: SkusVistosRequest, operador: Operador = D
 
 
 # ---------------------------------------------------------------------------------------------
-# Frota: tipos de veículo (custo por rota e peso de referência) e motoristas (Etapa 5)
+# Frota: tipos de veículo (valor base por rota e peso de referência) e motoristas (Etapa 5)
 # ---------------------------------------------------------------------------------------------
 MSG_FROTA_INDISPONIVEL = (
     "O cadastro de motoristas não está disponível agora. Tente novamente em instantes; "
@@ -1098,7 +1116,7 @@ async def listar_tipos_veiculo(operador: Operador = Depends(obter_operador_atual
 
 @app.put("/api/tipos-veiculo/{id_tipo}")
 async def atualizar_tipo_veiculo(id_tipo: int, dados: AtualizarTipoVeiculoRequest, operador: Operador = Depends(obter_operador_atual)):
-    """Qualquer operador logado edita o custo por rota e o peso de referência; fica registrado quem alterou e quando."""
+    """Qualquer operador logado edita o valor base por rota e o peso de referência; fica registrado quem alterou e quando."""
     tipo = await _com_conexao_frota(
         lambda c: frota.atualizar_tipo_veiculo(c, id_tipo, dados.custo_rota, dados.peso_referencia_kg, _rotulo_do_operador(operador))
     )

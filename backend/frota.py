@@ -1,5 +1,5 @@
 """
-Frota (Etapa 5): tipos de veículo (custo fixo por rota e peso de referência opcional) e cadastro de motoristas.
+Frota (Etapa 5): tipos de veículo (valor base por rota e peso de referência opcional) e cadastro de motoristas.
 
 As tabelas são criadas SÓ pelo Alembic (migrations/versions/0004_tipos_veiculo_motoristas.py). As funções de banco
 recebem uma conexão asyncpg (`conn`), como item_pesos.py. Motorista nunca é apagado: é desativado (ativo = false).
@@ -53,18 +53,53 @@ def _numero(valor) -> Decimal:
 
 
 def interpretar_custo_rota(valor) -> Decimal:
-    """Custo fixo por rota, em reais (zero é permitido; negativo, vazio ou texto, não)."""
+    """Valor base por rota do tipo de veículo, em reais (zero é permitido; negativo, vazio ou texto, não)."""
     if valor is None or (isinstance(valor, str) and not valor.strip()):
-        raise ValueError("Informe o custo da rota, por exemplo 130 ou 130,50.")
+        raise ValueError("Informe o valor base da rota, por exemplo 130 ou 130,50.")
     try:
         numero = _numero(valor)
     except ValueError:
-        raise ValueError("O custo da rota precisa ser um valor em reais, por exemplo 130 ou 130,50.") from None
+        raise ValueError("O valor base da rota precisa ser um valor em reais, por exemplo 130 ou 130,50.") from None
     if numero < 0:
-        raise ValueError("O custo da rota não pode ser negativo.")
+        raise ValueError("O valor base da rota não pode ser negativo.")
     if numero > CUSTO_MAXIMO_ROTA:
-        raise ValueError("O custo da rota está alto demais. Confira o valor digitado.")
+        raise ValueError("O valor base da rota está alto demais. Confira o valor digitado.")
     return numero.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def interpretar_valor_informado(valor, nome_tipo: str = "") -> Optional[Decimal]:
+    """
+    Valor por rota digitado pelo operador na roteirização. Vazio/None = não informou (devolve None: vale o valor
+    base). Zero é aceito (foi digitado de propósito). Negativo ou texto: erro com mensagem em linguagem do operador.
+    """
+    if valor is None or (isinstance(valor, str) and not valor.strip()):
+        return None
+    onde = f" de {nome_tipo}" if nome_tipo else ""
+    try:
+        numero = _numero(valor)
+    except ValueError:
+        raise ValueError(
+            f"O valor por rota{onde} precisa ser um valor em reais, por exemplo 130 ou 130,50 "
+            "(ou deixe em branco para usar o valor base)."
+        ) from None
+    if numero < 0:
+        raise ValueError(f"O valor por rota{onde} não pode ser negativo (ou deixe em branco para usar o valor base).")
+    if numero > CUSTO_MAXIMO_ROTA:
+        raise ValueError(f"O valor por rota{onde} está alto demais. Confira o valor digitado.")
+    return numero.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def interpretar_valores_informados(valores) -> dict:
+    """
+    {"Carro de passeio": "130,50", "Fiorino/Utilitário": ""} -> {"carro de passeio": Decimal("130.50")}.
+    Tipos com o campo ausente ou vazio ficam de fora (usam o valor base). A chave sai em minúsculas.
+    """
+    resultado = {}
+    for nome, valor in (valores or {}).items():
+        numero = interpretar_valor_informado(valor, str(nome).strip())
+        if numero is not None:
+            resultado[str(nome).strip().lower()] = numero
+    return resultado
 
 
 def interpretar_peso_referencia(valor) -> Optional[Decimal]:
@@ -111,7 +146,7 @@ async def listar_tipos_veiculo(conn) -> list:
 
 
 async def atualizar_tipo_veiculo(conn, id_tipo: int, custo_rota, peso_referencia_kg, rotulo_operador: str) -> Optional[dict]:
-    """Edita o custo por rota e o peso de referência (vazio = sem referência). None se o tipo não existe."""
+    """Edita o valor base por rota e o peso de referência (vazio = sem referência). None se o tipo não existe."""
     custo = interpretar_custo_rota(custo_rota)
     peso = interpretar_peso_referencia(peso_referencia_kg)
     linha = await conn.fetchrow(
@@ -160,7 +195,7 @@ async def atualizar_motorista(conn, id_motorista: int, nome, tipo_veiculo, ativo
 
 
 async def frota_ativa(conn) -> list:
-    """Motoristas ativos com o custo fixo e o peso de referência do tipo de veículo (para a roteirização)."""
+    """Motoristas ativos com o valor base e o peso de referência do tipo de veículo (para a roteirização)."""
     linhas = await conn.fetch(
         "SELECT m.id, m.nome, m.tipo_veiculo, t.custo_rota, t.peso_referencia_kg "
         "FROM motoristas m JOIN tipos_veiculo t ON t.nome = m.tipo_veiculo "

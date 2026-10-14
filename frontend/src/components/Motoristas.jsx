@@ -1,4 +1,4 @@
-// Cadastro de motoristas e tipos de veículo (custo por rota e peso de referência).
+// Cadastro de motoristas e tipos de veículo (valor base por rota e peso de referência).
 // Qualquer operador logado edita; o sistema guarda quem alterou e quando. Motorista não é apagado: é desativado.
 // O peso de referência é só um guia para o montador de rotas: não é limite e nunca bloqueia nem avisa nada.
 import { useEffect, useState } from 'react';
@@ -38,7 +38,7 @@ function LinhaTipo({ tipo, onSalvar }) {
 
   const salvar = async () => {
     if (!EH_NUMERO.test(custo.trim())) {
-      setErro('Digite o custo da rota em reais, por exemplo 130 ou 130,50.');
+      setErro('Digite o valor base da rota em reais, por exemplo 130 ou 130,50.');
       return;
     }
     if (peso.trim() !== '' && (!EH_NUMERO.test(peso.trim()) || Number(peso.trim().replace(',', '.')) <= 0)) {
@@ -57,16 +57,17 @@ function LinhaTipo({ tipo, onSalvar }) {
       <p className="text-sm font-semibold text-slate-100">{tipo.nome}</p>
       <div className="flex flex-wrap items-end gap-3">
         <label className="text-[11px] text-slate-400 space-y-1">
-          <span className="block">Custo por rota (R$)</span>
+          <span className="block">Valor base por rota (R$)</span>
           <input
             type="text"
             inputMode="decimal"
             value={custo}
             onChange={(e) => setCusto(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && mudou) salvar(); }}
-            aria-label={`Custo por rota de ${tipo.nome}`}
+            aria-label={`Valor base por rota de ${tipo.nome}`}
             className="w-28 px-2 py-1 rounded bg-slate-950 border border-slate-700 text-slate-100 text-sm font-mono focus:outline-none focus:border-blue-500"
           />
+          <span className="block text-[10px] text-slate-500">Usado quando o campo de valor fica vazio na roteirização</span>
         </label>
         <label className="text-[11px] text-slate-400 space-y-1">
           <span className="block">Peso de referência (kg)</span>
@@ -263,7 +264,7 @@ export default function Motoristas({ api, onFechar, onMudou }) {
         <div className="px-5 py-4 space-y-5">
           <p className="text-[11px] text-slate-400 leading-snug">
             Os motoristas ativos são os que entram nas rotas. Qualquer operador pode editar; fica registrado quem alterou e quando.
-            O custo da rota é o valor fixo do tipo de veículo. O peso de referência é opcional e é só um guia para montar as rotas:
+            O valor base por rota é o de cada tipo de veículo e vale quando o operador não informa outro valor na roteirização. O peso de referência é opcional e é só um guia para montar as rotas:
             não é um limite e o sistema nunca bloqueia nem avisa por causa dele.
           </p>
 

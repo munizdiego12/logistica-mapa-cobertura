@@ -21,3 +21,38 @@ body {
   border-radius: 0.75rem;
   background-color: #0b0f19;
 }
+
+/*
+ * Tema do mapa (Escuro / Claro). As bases da Esri vêm em cinza; o tom azul vem destes filtros, aplicados só nos
+ * blocos do mapa (os marcadores, rotas e círculos ficam de fora). Valores conferidos em services/temaMapa.js.
+ */
+.mapa-escuro .leaflet-tile-pane {
+  filter: sepia(1) hue-rotate(186deg) saturate(1.6) brightness(0.7) contrast(1.8);
+}
+
+.mapa-claro .leaflet-tile-pane {
+  filter: sepia(0.5) hue-rotate(185deg) saturate(1.6);
+}
+
+/* Atribuição e botões de zoom combinando com cada tema (a atribuição continua visível e com link). */
+.mapa-escuro .leaflet-control-attribution {
+  background: rgba(11, 26, 51, 0.82);
+  color: #cbd5e1;
+}
+.mapa-escuro .leaflet-control-attribution a {
+  color: #93c5fd;
+}
+.mapa-escuro .leaflet-bar a,
+.mapa-escuro .leaflet-bar a:hover {
+  background-color: #0f2447;
+  color: #e2e8f0;
+  border-bottom-color: #1e3a6b;
+}
+
+.mapa-claro .leaflet-control-attribution {
+  background: rgba(255, 255, 255, 0.85);
+  color: #334155;
+}
+.mapa-claro .leaflet-control-attribution a {
+  color: #1d4ed8;
+}

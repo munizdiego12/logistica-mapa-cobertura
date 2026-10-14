@@ -86,6 +86,8 @@ async def get_pool():
                 min_size=1,
                 max_size=5,
                 command_timeout=10,
+                # Fecha conexões ociosas por 240 s, antes de o Neon derrubá-las (o padrão do asyncpg é 300 s).
+                max_inactive_connection_lifetime=240,
             )
         except Exception as e:
             print(f"[database] Falha ao conectar no Postgres via asyncpg, seguindo sem persistência: {e}")

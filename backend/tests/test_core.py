@@ -38,7 +38,7 @@ def test_valor_zero_informado_de_proposito_vale_e_e_diferente_de_nao_informar():
 
 def test_custo_da_rota_nao_depende_de_combustivel_nem_de_hora_do_motorista():
     import inspect
-    assert list(inspect.signature(calcular_custo_rota).parameters) == ["qtd_pedidos", "valor_base", "valor_informado"]
+    assert list(inspect.signature(calcular_custo_rota).parameters) == ["qtd_pedidos", "valor_base", "valor_informado", "valor_motorista"]
 
 
 def test_custo_da_rota_sem_pedidos_ou_sem_valor_e_zero():
@@ -49,3 +49,23 @@ def test_custo_da_rota_sem_pedidos_ou_sem_valor_e_zero():
 
 def test_custo_da_rota_arredonda_o_valor_por_pedido():
     assert calcular_custo_rota(3, 130.0)["custo_por_pedido"] == 43.33
+
+
+def test_valor_proprio_do_motorista_vale_no_lugar_do_valor_base():
+    res = calcular_custo_rota(4, 130.0, None, 150.0)
+    assert res == {"custo_total": 150.0, "custo_por_pedido": 37.5, "valor_rota": 150.0, "origem_valor": "motorista"}
+
+
+def test_prioridade_informado_depois_motorista_depois_base():
+    assert calcular_custo_rota(2, 130.0, 300.0, 150.0)["origem_valor"] == "informado"
+    assert calcular_custo_rota(2, 130.0, 300.0, 150.0)["valor_rota"] == 300.0
+    assert calcular_custo_rota(2, 130.0, None, 150.0)["origem_valor"] == "motorista"
+    assert calcular_custo_rota(2, 130.0, None, None)["origem_valor"] == "padrão"
+    assert calcular_custo_rota(2, 130.0, None, None)["valor_rota"] == 130.0
+
+
+def test_zero_do_motorista_vale_e_zero_informado_ganha_do_motorista():
+    zero_motorista = calcular_custo_rota(2, 130.0, None, 0.0)
+    assert zero_motorista["custo_total"] == 0.0 and zero_motorista["origem_valor"] == "motorista"
+    zero_informado = calcular_custo_rota(2, 130.0, 0.0, 150.0)
+    assert zero_informado["custo_total"] == 0.0 and zero_informado["origem_valor"] == "informado"

@@ -29,8 +29,8 @@ def _tipo(id=1, nome="Carro de passeio", custo="130.00", peso=None):
             "ativo": True, "atualizado_em": AGORA, "atualizado_por": "cadastro inicial (migration)"}
 
 
-def _motorista(id=1, nome="João Silva", tipo="Carro de passeio", ativo=True):
-    return {"id": id, "nome": nome, "tipo_veiculo": tipo, "ativo": ativo, "atualizado_em": AGORA, "atualizado_por": "Maria Souza (maria@zubale.com)"}
+def _motorista(id=1, nome="João Silva", tipo="Carro de passeio", ativo=True, valor=None):
+    return {"id": id, "nome": nome, "tipo_veiculo": tipo, "valor_rota": None if valor is None else Decimal(valor), "ativo": ativo, "atualizado_em": AGORA, "atualizado_por": "Maria Souza (maria@zubale.com)"}
 
 
 @pytest.fixture
@@ -169,7 +169,7 @@ def test_criar_motorista(api):
     assert r.status_code == 201 and r.json()["id"] == 7 and r.json()["ativo"] is True
     insercao = conn.chamadas[1]
     assert "INSERT INTO motoristas" in insercao[1]
-    assert insercao[2] == ("Carlos Lima", "Carro de passeio", "Maria Souza (maria@zubale.com)")
+    assert insercao[2] == ("Carlos Lima", "Carro de passeio", None, "Maria Souza (maria@zubale.com)")  # sem valor próprio
 
 
 @pytest.mark.parametrize("corpo, trecho", [
@@ -257,12 +257,12 @@ def test_erro_inesperado_do_banco_nao_vaza_detalhe_tecnico(api):
 # Frota ativa e roteirização
 # ----------------------------------------------------------------------------------------------------------
 def test_frota_ativa_traz_custo_e_peso_de_referencia_do_tipo():
-    conn = FakeConn([[{"id": 1, "nome": "João", "tipo_veiculo": "Carro de passeio", "custo_rota": Decimal("130.00"), "peso_referencia_kg": None},
-                      {"id": 2, "nome": "Ana", "tipo_veiculo": "Fiorino/Utilitário", "custo_rota": Decimal("260.00"), "peso_referencia_kg": Decimal("400.000")}]])
+    conn = FakeConn([[{"id": 1, "nome": "João", "tipo_veiculo": "Carro de passeio", "valor_rota": None, "custo_rota": Decimal("130.00"), "peso_referencia_kg": None},
+                      {"id": 2, "nome": "Ana", "tipo_veiculo": "Fiorino/Utilitário", "valor_rota": Decimal("280.50"), "custo_rota": Decimal("260.00"), "peso_referencia_kg": Decimal("400.000")}]])
     resultado = _rodar(frota.frota_ativa(conn))
     assert resultado == [
-        {"id": 1, "nome": "João", "tipo_veiculo": "Carro de passeio", "custo_rota": 130.0, "peso_referencia_kg": None},
-        {"id": 2, "nome": "Ana", "tipo_veiculo": "Fiorino/Utilitário", "custo_rota": 260.0, "peso_referencia_kg": 400.0},
+        {"id": 1, "nome": "João", "tipo_veiculo": "Carro de passeio", "custo_rota": 130.0, "valor_rota": None, "peso_referencia_kg": None},
+        {"id": 2, "nome": "Ana", "tipo_veiculo": "Fiorino/Utilitário", "custo_rota": 260.0, "valor_rota": 280.5, "peso_referencia_kg": 400.0},
     ]
     assert "WHERE m.ativo" in conn.chamadas[0][1]
 
@@ -457,7 +457,7 @@ def test_otimizar_com_valor_negativo_ou_texto_devolve_422_e_nao_cria_o_calculo(a
     assert criados == [] and conn.chamadas == []
 
 
-def _roteirizar(monkeypatch, valores_informados, capacidades=(2, 10)):
+def _roteirizar(monkeypatch, valores_informados, capacidades=(2, 10), valores_motorista=(None, None)):
     """Roteirização completa (geocodificação e OSRM simulados) com 1 carro e 1 utilitário; devolve o resultado."""
     pedidos = [{"id": i, "Endereco": f"Rua {i}", "Numero": str(i), "Bairro": "Centro", "CEP": "01310100", "Volume": 1} for i in range(1, 9)]
 
@@ -476,8 +476,8 @@ def _roteirizar(monkeypatch, valores_informados, capacidades=(2, 10)):
     monkeypatch.setattr(main, "get_osrm_route_async", osrm_falso)
     req = main.OtimizarRequest(origem_rua="Av Paulista", origem_num="1", pedidos=pedidos,
                                modais_config={"Carro de passeio": {"capacidade": capacidades[0]}, "Fiorino/Utilitário": {"capacidade": capacidades[1]}})
-    frota_usar = [main.MotoristaItem(id=1, motorista="João", modal="Carro de passeio", custo_rota=130.0),
-                  main.MotoristaItem(id=2, motorista="Ana", modal="Fiorino/Utilitário", custo_rota=260.0)]
+    frota_usar = [main.MotoristaItem(id=1, motorista="João", modal="Carro de passeio", custo_rota=130.0, valor_motorista=valores_motorista[0]),
+                  main.MotoristaItem(id=2, motorista="Ana", modal="Fiorino/Utilitário", custo_rota=260.0, valor_motorista=valores_motorista[1])]
     main.JOBS["t"] = {"status": "em_andamento", "etapa": "", "atual": 0, "total": 1, "resultado": None, "erro": None}
     _rodar(main._processar_otimizacao("t", req, frota_usar, frota.interpretar_valores_informados(valores_informados)))
     job = main.JOBS.pop("t")
@@ -530,3 +530,182 @@ def test_resumo_mostra_valor_usado_e_origem_por_tipo(monkeypatch):
     assert resumo["Carro de passeio"]["valor"] == 130.0 and resumo["Carro de passeio"]["origem"] == "padrão"
     contagem = {t: sum(1 for r in resultado["rotas"] if r["modal"] == t) for t in resumo}
     assert {t: v["rotas"] for t, v in resumo.items()} == contagem
+
+
+# ----------------------------------------------------------------------------------------------------------
+# Valor próprio por rota do motorista (migration 0005)
+# ----------------------------------------------------------------------------------------------------------
+def test_valor_proprio_aceita_virgula_e_vazio_e_recusa_negativo_ou_texto():
+    assert frota.interpretar_valor_proprio("150,5") == Decimal("150.50")
+    assert frota.interpretar_valor_proprio("R$ 1.234,56") == Decimal("1234.56")
+    assert frota.interpretar_valor_proprio(0) == Decimal("0.00")  # zero cadastrado de propósito
+    for vazio in (None, "", "  "):
+        assert frota.interpretar_valor_proprio(vazio) is None
+    for ruim in (-1, "-5", "abc", "R$", True, 1e12):
+        with pytest.raises(ValueError) as erro:
+            frota.interpretar_valor_proprio(ruim)
+        assert "valor próprio por rota" in str(erro.value)
+        assert not re.search(r"sql|tabela|banco|api|json|token|null|decimal|invalid", str(erro.value), re.IGNORECASE)
+
+
+def test_listar_motoristas_devolve_o_valor_proprio(api):
+    cliente, conn = api
+    conn.respostas = [[_motorista(1, valor="150.50"), _motorista(2, "Ana")]]
+    r = cliente.get("/api/motoristas")
+    assert [m["valor_rota"] for m in r.json()] == [150.5, None]
+
+
+def test_criar_motorista_com_valor_proprio_em_virgula_decimal(api):
+    cliente, conn = api
+    conn.respostas = ["Carro de passeio", _motorista(7, "Carlos Lima", valor="150.50")]
+    r = cliente.post("/api/motoristas", json={"nome": "Carlos Lima", "tipo_veiculo": "Carro de passeio", "valor_rota": "150,5"})
+    assert r.status_code == 201 and r.json()["valor_rota"] == 150.5
+    assert conn.chamadas[1][2] == ("Carlos Lima", "Carro de passeio", Decimal("150.50"), "Maria Souza (maria@zubale.com)")
+    assert "valor_rota" in conn.chamadas[1][1] and "INSERT INTO motoristas" in conn.chamadas[1][1]
+
+
+@pytest.mark.parametrize("valor, trecho", [(-10, "não pode ser negativo"), ("-0,01", "não pode ser negativo"), ("abc", "precisa ser um valor em reais")])
+def test_criar_ou_editar_motorista_com_valor_proprio_negativo_ou_texto_da_422(api, valor, trecho):
+    cliente, conn = api
+    r = cliente.post("/api/motoristas", json={"nome": "Carlos", "tipo_veiculo": "Carro de passeio", "valor_rota": valor})
+    assert r.status_code == 422 and trecho in r.json()["detail"]
+    r = cliente.put("/api/motoristas/1", json={"nome": "Carlos", "tipo_veiculo": "Carro de passeio", "ativo": True, "valor_rota": valor})
+    assert r.status_code == 422 and trecho in r.json()["detail"]
+    assert conn.chamadas == []  # nada foi gravado
+
+
+def test_editar_valor_proprio_registra_quem_alterou_e_quando(api):
+    cliente, conn = api
+    conn.respostas = ["Carro de passeio", _motorista(1, valor="175.00")]
+    r = cliente.put("/api/motoristas/1", json={"nome": "João Silva", "tipo_veiculo": "Carro de passeio", "ativo": True, "valor_rota": "175"})
+    assert r.status_code == 200 and r.json()["valor_rota"] == 175.0
+    sql, args = conn.chamadas[1][1], conn.chamadas[1][2]
+    assert "valor_rota = $6" in sql and "atualizado_em = NOW()" in sql and "atualizado_por = $5" in sql
+    assert args == (1, "João Silva", "Carro de passeio", True, "Maria Souza (maria@zubale.com)", Decimal("175.00"))
+
+
+def test_valor_proprio_em_branco_apaga_e_volta_a_usar_o_valor_base(api):
+    cliente, conn = api
+    for vazio in ("", None, "  "):
+        conn.respostas = ["Carro de passeio", _motorista(1)]
+        cliente.put("/api/motoristas/1", json={"nome": "João", "tipo_veiculo": "Carro de passeio", "ativo": True, "valor_rota": vazio})
+        assert "valor_rota = $6" in conn.chamadas[-1][1] and conn.chamadas[-1][2][-1] is None
+
+
+def test_editar_sem_mandar_o_campo_mantem_o_valor_proprio(api):
+    cliente, conn = api
+    conn.respostas = ["Carro de passeio", _motorista(1, ativo=False, valor="150.00")]
+    r = cliente.put("/api/motoristas/1", json={"nome": "João Silva", "tipo_veiculo": "Carro de passeio", "ativo": False})
+    assert r.status_code == 200 and r.json()["valor_rota"] == 150.0
+    assert "valor_rota =" not in conn.chamadas[1][1]  # o UPDATE não toca na coluna
+
+
+def test_otimizar_leva_o_valor_proprio_do_motorista_para_o_calculo(api, monkeypatch):
+    cliente, conn = api
+    conn.respostas = [[{"id": 1, "nome": "João", "tipo_veiculo": "Carro de passeio", "valor_rota": Decimal("150.00"), "custo_rota": Decimal("130.00"), "peso_referencia_kg": None},
+                       {"id": 2, "nome": "Ana", "tipo_veiculo": "Fiorino/Utilitário", "valor_rota": None, "custo_rota": Decimal("260.00"), "peso_referencia_kg": None}]]
+    capturado = {}
+
+    async def falso(job_id, req, frota_usar, valores_informados=None):
+        capturado["frota"] = frota_usar
+
+    monkeypatch.setattr(main, "_processar_otimizacao", falso)
+    assert cliente.post("/api/otimizar", json={"origem_rua": "A", "origem_num": "1", "pedidos": [{"id": 1}]}).status_code == 200
+    assert [(m.motorista, m.custo_rota, m.valor_motorista) for m in capturado["frota"]] == [("João", 130.0, 150.0), ("Ana", 260.0, None)]
+
+
+def test_motorista_sem_valor_proprio_usa_o_valor_base(monkeypatch):
+    resultado = _roteirizar(monkeypatch, {}, valores_motorista=(None, None))
+    for rota in resultado["rotas"]:
+        assert rota["valor_rota"] == (130.0 if rota["modal"] == "Carro de passeio" else 260.0) and rota["origem_valor"] == "padrão"
+
+
+def test_motorista_com_valor_proprio_usa_o_dele(monkeypatch):
+    resultado = _roteirizar(monkeypatch, {}, valores_motorista=(150.0, None))
+    for rota in resultado["rotas"]:
+        if rota["modal"] == "Carro de passeio":
+            assert rota["valor_rota"] == rota["custo_total"] == 150.0 and rota["origem_valor"] == "motorista"
+        else:
+            assert rota["valor_rota"] == rota["custo_total"] == 260.0 and rota["origem_valor"] == "padrão"
+
+
+def test_valor_digitado_na_roteirizacao_ganha_do_valor_do_motorista(monkeypatch):
+    resultado = _roteirizar(monkeypatch, {"Carro de passeio": "99,90"}, valores_motorista=(150.0, 280.0))
+    for rota in resultado["rotas"]:
+        if rota["modal"] == "Carro de passeio":  # informado ganha do valor próprio do motorista
+            assert rota["valor_rota"] == rota["custo_total"] == 99.9 and rota["origem_valor"] == "informado"
+        else:  # o utilitário não foi informado: vale o valor próprio do motorista dele
+            assert rota["valor_rota"] == rota["custo_total"] == 280.0 and rota["origem_valor"] == "motorista"
+
+
+def test_tipos_independentes_com_as_tres_origens(monkeypatch):
+    resultado = _roteirizar(monkeypatch, {"Fiorino/Utilitário": "300"}, valores_motorista=(150.0, None))
+    por_tipo = {r["modal"]: r for r in resultado["rotas"]}
+    assert (por_tipo["Carro de passeio"]["valor_rota"], por_tipo["Carro de passeio"]["origem_valor"]) == (150.0, "motorista")
+    assert (por_tipo["Fiorino/Utilitário"]["valor_rota"], por_tipo["Fiorino/Utilitário"]["origem_valor"]) == (300.0, "informado")
+    resumo = {(v["tipo"], v["valor"], v["origem"]) for v in resultado["kpis"]["valores_por_tipo"]}
+    assert resumo == {("Carro de passeio", 150.0, "motorista"), ("Fiorino/Utilitário", 300.0, "informado")}
+
+
+def test_valor_proprio_zero_vale_e_nao_cai_no_valor_base(monkeypatch):
+    resultado = _roteirizar(monkeypatch, {}, valores_motorista=(0.0, None))
+    carro = [r for r in resultado["rotas"] if r["modal"] == "Carro de passeio"]
+    assert carro and all(r["custo_total"] == 0.0 and r["origem_valor"] == "motorista" for r in carro)
+
+
+# ----------------------------------------------------------------------------------------------------------
+# Migration 0005
+# ----------------------------------------------------------------------------------------------------------
+ARQUIVO_0005 = BACKEND / "migrations" / "versions" / "0005_motoristas_valor_rota.py"
+
+
+def _carregar_0005():
+    spec = importlib.util.spec_from_file_location("migracao_0005", ARQUIVO_0005)
+    modulo = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(modulo)
+    return modulo
+
+
+def _aplicar_0005_no_sqlite(conn):
+    """O SQLite não tem ADD COLUMN IF NOT EXISTS: confere a coluna antes (o resto do SQL é o mesmo, com o CHECK)."""
+    for comando in _carregar_0005().COMANDOS:
+        colunas = {l[1] for l in conn.execute("PRAGMA table_info(motoristas)")}
+        if "valor_rota" in colunas and "ADD COLUMN IF NOT EXISTS" in comando:
+            continue
+        conn.execute(comando.replace("ADD COLUMN IF NOT EXISTS", "ADD COLUMN"))
+
+
+def test_migration_0005_so_acrescenta_a_coluna_sem_apagar_nada():
+    modulo = _carregar_0005()
+    assert modulo.down_revision == "0004" and modulo.revision == "0005"
+    for comando in modulo.COMANDOS:
+        assert not re.search(r"\b(DROP|TRUNCATE|DELETE|UPDATE|INSERT)\b", comando, re.IGNORECASE), comando
+        assert "ADD COLUMN IF NOT EXISTS valor_rota NUMERIC(10, 2)" in comando
+        assert "CHECK (valor_rota IS NULL OR valor_rota >= 0)" in comando
+    # a 0004 não foi editada: continua sem a coluna
+    assert "valor_rota" not in ARQUIVO_MIGRACAO.read_text(encoding="utf-8")
+
+
+def test_migration_0005_roda_duas_vezes_e_preserva_os_motoristas():
+    conn = sqlite3.connect(":memory:")
+    _sqlite_com_a_migracao(conn)  # a 0004
+    conn.execute("INSERT INTO motoristas (nome, tipo_veiculo) VALUES ('João', 'Carro de passeio')")
+    _aplicar_0005_no_sqlite(conn)
+    assert conn.execute("SELECT nome, valor_rota FROM motoristas").fetchall() == [("João", None)]  # sem valor próprio
+    conn.execute("UPDATE motoristas SET valor_rota = 150.5")
+    _aplicar_0005_no_sqlite(conn)  # segunda vez, como num banco já migrado
+    assert conn.execute("SELECT nome, valor_rota FROM motoristas").fetchall() == [("João", 150.5)]
+    assert sum(1 for l in conn.execute("PRAGMA table_info(motoristas)") if l[1] == "valor_rota") == 1
+
+
+def test_migration_0005_valor_vazio_ou_zero_pode_mas_negativo_nao():
+    conn = sqlite3.connect(":memory:")
+    _sqlite_com_a_migracao(conn)
+    _aplicar_0005_no_sqlite(conn)
+    conn.execute("INSERT INTO motoristas (nome, tipo_veiculo, valor_rota) VALUES ('A', 'Carro de passeio', NULL)")
+    conn.execute("INSERT INTO motoristas (nome, tipo_veiculo, valor_rota) VALUES ('B', 'Carro de passeio', 0)")
+    conn.execute("INSERT INTO motoristas (nome, tipo_veiculo, valor_rota) VALUES ('C', 'Carro de passeio', 150.50)")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("INSERT INTO motoristas (nome, tipo_veiculo, valor_rota) VALUES ('D', 'Carro de passeio', -1)")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("UPDATE motoristas SET valor_rota = -0.01 WHERE nome = 'A'")

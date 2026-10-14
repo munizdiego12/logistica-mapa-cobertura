@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  rotuloDoTipo, validarValorRota, primeiroErroDeValores, montarValoresPorRota, dicaValorBase, rotuloDaOrigem,
+  rotuloDoTipo, validarValorRota, primeiroErroDeValores, montarValoresPorRota, dicaValorBase, rotuloDaOrigem, corDaOrigem, formatarReais,
 } from './valorRota.js';
 
 test('campo vazio é válido e fica fora do que vai para o servidor (vale o valor base)', () => {
@@ -49,8 +49,31 @@ test('dica do campo mostra o valor base como "padrão R$ ..."', () => {
   assert.equal(dicaValorBase(undefined), 'valor base');
 });
 
-test('a origem exibida é "informado" ou "padrão"', () => {
-  assert.equal(rotuloDaOrigem('informado'), 'informado');
+test('a origem exibida: informado nesta roteirização, valor do motorista ou padrão', () => {
+  assert.equal(rotuloDaOrigem('informado'), 'informado nesta roteirização');
+  assert.equal(rotuloDaOrigem('motorista'), 'valor do motorista');
   assert.equal(rotuloDaOrigem('padrão'), 'padrão');
   assert.equal(rotuloDaOrigem(undefined), 'padrão');
+  assert.doesNotMatch(['informado', 'motorista', 'padrão'].map(rotuloDaOrigem).join(' '), /json|api|null|undefined/i);
+});
+
+test('cada origem tem uma cor e o padrão é o discreto', () => {
+  assert.notEqual(corDaOrigem('informado'), corDaOrigem('motorista'));
+  assert.notEqual(corDaOrigem('motorista'), corDaOrigem('padrão'));
+  assert.equal(corDaOrigem(undefined), corDaOrigem('padrão'));
+});
+
+test('valor em reais ao lado do campo, vazio quando não há valor', () => {
+  assert.match(formatarReais(130), /^R\$\s130,00$/);
+  assert.match(formatarReais('260.5'), /^R\$\s260,50$/);
+  assert.equal(formatarReais(null), '');
+  assert.equal(formatarReais(''), '');
+  assert.equal(formatarReais('abc'), '');
+});
+
+test('valor próprio do motorista: vazio usa o base, vírgula decimal vale, negativo e texto não', () => {
+  assert.equal(validarValorRota('').vazio, true);
+  assert.equal(validarValorRota('150,5').ok, true);
+  assert.equal(validarValorRota('-1').ok, false);
+  assert.equal(validarValorRota('abc').ok, false);
 });

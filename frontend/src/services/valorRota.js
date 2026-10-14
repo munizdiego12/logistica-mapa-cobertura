@@ -49,7 +49,26 @@ export function dicaValorBase(valorBase) {
   return `padrão ${numero.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`;
 }
 
-/** "informado" ou "padrão", como mostrado nas rotas e no resumo. */
+/**
+ * Origem do valor da rota, como mostrada nas rotas e no resumo: "informado nesta roteirização" (digitado na tela),
+ * "valor do motorista" (valor próprio do cadastro) ou "padrão" (valor base do tipo de veículo).
+ */
 export function rotuloDaOrigem(origem) {
-  return origem === 'informado' ? 'informado' : 'padrão';
+  if (origem === 'informado') return 'informado nesta roteirização';
+  if (origem === 'motorista') return 'valor do motorista';
+  return 'padrão';
+}
+
+/** Cor do rótulo da origem (classes do Tailwind), para destacar o que não é o padrão. */
+export function corDaOrigem(origem) {
+  if (origem === 'informado') return 'text-blue-300';
+  if (origem === 'motorista') return 'text-amber-300';
+  return 'text-slate-500';
+}
+
+/** Valor em reais para mostrar ao lado do campo (ex.: "R$ 130,00"); vazio se não for número. */
+export function formatarReais(valor) {
+  const numero = Number(valor);
+  if (valor === null || valor === undefined || valor === '' || !Number.isFinite(numero)) return '';
+  return numero.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }

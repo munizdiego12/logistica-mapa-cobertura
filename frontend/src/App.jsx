@@ -16,7 +16,7 @@ import { API_BASE } from './config';
 import { instalarTratamento401, MENSAGEM_SESSAO_EXPIRADA } from './services/sessao';
 import { baixarBlob } from './services/download';
 import {
-  rotuloDoTipo, validarValorRota, primeiroErroDeValores, montarValoresPorRota, dicaValorBase, rotuloDaOrigem
+  rotuloDoTipo, validarValorRota, primeiroErroDeValores, montarValoresPorRota, dicaValorBase, rotuloDaOrigem, corDaOrigem
 } from './services/valorRota';
 
 // Instância dedicada que anexa automaticamente o token do operador logado
@@ -743,7 +743,9 @@ export default function App() {
                   {motoristas.map((item) => (
                     <div key={item.id} className="flex items-center justify-between gap-2 bg-slate-900/90 border border-slate-800/80 p-2 rounded-lg">
                       <span className="text-[11px] font-medium text-slate-300 truncate">{item.nome}</span>
-                      <span className="text-[10px] text-slate-400 shrink-0">{item.tipo_veiculo}</span>
+                      <span className="text-[10px] text-slate-400 shrink-0">
+                        {item.tipo_veiculo}{item.valor_rota !== null && item.valor_rota !== undefined ? ' • valor próprio' : ''}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -780,7 +782,7 @@ export default function App() {
                 );
               })}
               <p className="text-[10px] text-slate-500">
-                Opcional. Vale para todas as rotas do tipo nesta execução; vazio usa o valor base.
+                Opcional. Vale para todas as rotas do tipo nesta execução; vazio usa o valor próprio do motorista (se tiver) ou o valor base.
               </p>
             </div>
           </div>
@@ -875,7 +877,8 @@ export default function App() {
                     {resultado.kpis.valores_por_tipo.map((v) => (
                       <p key={v.tipo} className="text-[10px] text-slate-400">
                         Valor por rota, {rotuloDoTipo(v.tipo)}: <span className="font-mono text-slate-200">R$ {Number(v.valor).toFixed(2)}</span>{' '}
-                        <span className={v.origem === 'informado' ? 'text-blue-300' : 'text-slate-500'}>({rotuloDaOrigem(v.origem)})</span>
+                        <span className={corDaOrigem(v.origem)}>({rotuloDaOrigem(v.origem)})</span>{' '}
+                        <span className="text-slate-500">{v.rotas} {v.rotas === 1 ? 'rota' : 'rotas'}</span>
                       </p>
                     ))}
                   </div>
@@ -1006,8 +1009,8 @@ export default function App() {
                         <td className="p-3.5 text-slate-400">{r.tempo_formatado}</td>
                         <td className="p-3.5 font-semibold text-emerald-400">
                           R$ {r.custo_total.toFixed(2)}
-                          <span className={`block text-[10px] font-normal ${r.origem_valor === 'informado' ? 'text-blue-300' : 'text-slate-500'}`}>
-                            valor {rotuloDaOrigem(r.origem_valor)}
+                          <span className={`block text-[10px] font-normal ${corDaOrigem(r.origem_valor)}`}>
+                            {rotuloDaOrigem(r.origem_valor)}
                           </span>
                         </td>
                         <td className="p-3.5 text-slate-300">R$ {r.custo_por_pedido.toFixed(2)}</td>

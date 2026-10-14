@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { MapContainer, TileLayer, Polyline, Marker, Popup, Circle, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import { rotuloDaOrigem } from '../services/valorRota';
 
 // Correção dos caminhos padrão dos ícones do Leaflet
 delete L.Icon.Default.prototype._getIconUrl;
@@ -426,7 +427,7 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
                     {rota.origem_valor && (
                       <div className="flex justify-between items-center">
                         <span className="text-slate-500">Valor por rota:</span>
-                        <span className="font-semibold text-slate-700">{rota.origem_valor === 'informado' ? 'informado' : 'padrão'}</span>
+                        <span className="font-semibold text-slate-700">{rotuloDaOrigem(rota.origem_valor)}</span>
                       </div>
                     )}
                     <div className="flex justify-between items-center">

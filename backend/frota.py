@@ -89,6 +89,27 @@ def interpretar_valor_informado(valor, nome_tipo: str = "") -> Optional[Decimal]
     return numero.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
+def interpretar_valor_proprio(valor) -> Optional[Decimal]:
+    """
+    Valor próprio por rota de um motorista (cadastro). Vazio/None = sem valor próprio (usa o valor base do tipo).
+    Zero é aceito (de propósito); negativo ou texto: erro com mensagem em linguagem do operador.
+    """
+    if valor is None or (isinstance(valor, str) and not valor.strip()):
+        return None
+    try:
+        numero = _numero(valor)
+    except ValueError:
+        raise ValueError(
+            "O valor próprio por rota precisa ser um valor em reais, por exemplo 130 ou 130,50 "
+            "(ou deixe em branco para usar o valor base)."
+        ) from None
+    if numero < 0:
+        raise ValueError("O valor próprio por rota não pode ser negativo (ou deixe em branco para usar o valor base).")
+    if numero > CUSTO_MAXIMO_ROTA:
+        raise ValueError("O valor próprio por rota está alto demais. Confira o valor digitado.")
+    return numero.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
 def interpretar_valores_informados(valores) -> dict:
     """
     {"Carro de passeio": "130,50", "Fiorino/Utilitário": ""} -> {"carro de passeio": Decimal("130.50")}.
@@ -130,7 +151,16 @@ def normalizar_nome_motorista(valor) -> str:
 # Banco (conexão asyncpg)
 # ----------------------------------------------------------------------------------------------------------
 _COLUNAS_TIPO = "id, nome, custo_rota, peso_referencia_kg, ativo, atualizado_em, atualizado_por"
-_COLUNAS_MOTORISTA = "id, nome, tipo_veiculo, ativo, atualizado_em, atualizado_por"
+_COLUNAS_MOTORISTA = "id, nome, tipo_veiculo, valor_rota, ativo, atualizado_em, atualizado_por"
+
+# "Não mexer no valor próprio": usado quando o pedido de edição não traz o campo valor_rota.
+MANTER = object()
+
+
+def _motorista_para_dict(linha) -> dict:
+    d = dict(linha)
+    d["valor_rota"] = None if d.get("valor_rota") is None else float(d["valor_rota"])
+    return d
 
 
 def _tipo_para_dict(linha) -> dict:
@@ -165,44 +195,57 @@ async def _nome_do_tipo(conn, nome_tipo) -> Optional[str]:
 async def listar_motoristas(conn, incluir_inativos: bool = True) -> list:
     onde = "" if incluir_inativos else "WHERE ativo"
     linhas = await conn.fetch(f"SELECT {_COLUNAS_MOTORISTA} FROM motoristas {onde} ORDER BY ativo DESC, lower(nome), id")
-    return [dict(l) for l in linhas]
+    return [_motorista_para_dict(l) for l in linhas]
 
 
-async def criar_motorista(conn, nome, tipo_veiculo, rotulo_operador: str) -> dict:
+async def criar_motorista(conn, nome, tipo_veiculo, rotulo_operador: str, valor_rota=None) -> dict:
     nome = normalizar_nome_motorista(nome)
+    valor = interpretar_valor_proprio(valor_rota)
     tipo = await _nome_do_tipo(conn, tipo_veiculo)
     if tipo is None:
         raise ValueError(MSG_TIPO_INEXISTENTE)
     linha = await conn.fetchrow(
-        f"INSERT INTO motoristas (nome, tipo_veiculo, ativo, atualizado_por) VALUES ($1, $2, TRUE, $3) RETURNING {_COLUNAS_MOTORISTA}",
-        nome, tipo, rotulo_operador,
+        f"INSERT INTO motoristas (nome, tipo_veiculo, valor_rota, ativo, atualizado_por) VALUES ($1, $2, $3, TRUE, $4) RETURNING {_COLUNAS_MOTORISTA}",
+        nome, tipo, valor, rotulo_operador,
     )
-    return dict(linha)
+    return _motorista_para_dict(linha)
 
 
-async def atualizar_motorista(conn, id_motorista: int, nome, tipo_veiculo, ativo: bool, rotulo_operador: str) -> Optional[dict]:
-    """Edita nome, tipo e situação (ativar/desativar). None se o motorista não existe. Nunca apaga."""
+async def atualizar_motorista(conn, id_motorista: int, nome, tipo_veiculo, ativo: bool, rotulo_operador: str, valor_rota=MANTER) -> Optional[dict]:
+    """
+    Edita nome, tipo, situação (ativar/desativar) e valor próprio por rota. None se o motorista não existe. Nunca apaga.
+    valor_rota: vazio/None apaga o valor próprio (volta a valer o valor base); ausente (MANTER) não mexe nele.
+    """
     nome = normalizar_nome_motorista(nome)
+    valor = None if valor_rota is MANTER else interpretar_valor_proprio(valor_rota)
     tipo = await _nome_do_tipo(conn, tipo_veiculo)
     if tipo is None:
         raise ValueError(MSG_TIPO_INEXISTENTE)
-    linha = await conn.fetchrow(
-        f"UPDATE motoristas SET nome = $2, tipo_veiculo = $3, ativo = $4, atualizado_em = NOW(), atualizado_por = $5 "
-        f"WHERE id = $1 RETURNING {_COLUNAS_MOTORISTA}",
-        id_motorista, nome, tipo, bool(ativo), rotulo_operador,
-    )
-    return None if linha is None else dict(linha)
+    if valor_rota is MANTER:
+        linha = await conn.fetchrow(
+            f"UPDATE motoristas SET nome = $2, tipo_veiculo = $3, ativo = $4, atualizado_em = NOW(), atualizado_por = $5 "
+            f"WHERE id = $1 RETURNING {_COLUNAS_MOTORISTA}",
+            id_motorista, nome, tipo, bool(ativo), rotulo_operador,
+        )
+    else:
+        linha = await conn.fetchrow(
+            f"UPDATE motoristas SET nome = $2, tipo_veiculo = $3, ativo = $4, valor_rota = $6, atualizado_em = NOW(), atualizado_por = $5 "
+            f"WHERE id = $1 RETURNING {_COLUNAS_MOTORISTA}",
+            id_motorista, nome, tipo, bool(ativo), rotulo_operador, valor,
+        )
+    return None if linha is None else _motorista_para_dict(linha)
 
 
 async def frota_ativa(conn) -> list:
-    """Motoristas ativos com o valor base e o peso de referência do tipo de veículo (para a roteirização)."""
+    """Motoristas ativos com o valor próprio (se houver), o valor base e o peso de referência do tipo de veículo."""
     linhas = await conn.fetch(
-        "SELECT m.id, m.nome, m.tipo_veiculo, t.custo_rota, t.peso_referencia_kg "
+        "SELECT m.id, m.nome, m.tipo_veiculo, m.valor_rota, t.custo_rota, t.peso_referencia_kg "
         "FROM motoristas m JOIN tipos_veiculo t ON t.nome = m.tipo_veiculo "
         "WHERE m.ativo ORDER BY m.id"
     )
     return [
         {"id": l["id"], "nome": l["nome"], "tipo_veiculo": l["tipo_veiculo"], "custo_rota": float(l["custo_rota"]),
+         "valor_rota": None if l.get("valor_rota") is None else float(l["valor_rota"]),
          "peso_referencia_kg": None if l["peso_referencia_kg"] is None else float(l["peso_referencia_kg"])}
         for l in linhas
     ]

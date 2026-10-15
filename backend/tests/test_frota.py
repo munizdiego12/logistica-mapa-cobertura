@@ -285,7 +285,7 @@ def test_otimizar_usa_os_motoristas_ativos_e_ignora_frota_e_custos_do_cliente(ap
     conn.respostas = [[{"id": 5, "nome": "Ana", "ativo": True, "tipo_veiculo": "Fiorino/Utilitário", "valor_rota": None, "custo_rota": Decimal("260.00"), "peso_referencia_kg": None}]]
     capturado = {}
 
-    async def falso(job_id, req, frota_usar, valores_informados=None):
+    async def falso(job_id, req, frota_usar, valores_informados=None, loja=None):
         capturado["frota"] = frota_usar
         capturado["req"] = req
         capturado["valores"] = valores_informados
@@ -419,7 +419,7 @@ def test_otimizar_repassa_os_valores_informados_e_ignora_os_vazios(api, monkeypa
     conn.respostas = [[{"id": 5, "nome": "Ana", "ativo": True, "tipo_veiculo": "Fiorino/Utilitário", "valor_rota": None, "custo_rota": Decimal("260.00"), "peso_referencia_kg": None}]]
     capturado = {}
 
-    async def falso(job_id, req, frota_usar, valores_informados=None):
+    async def falso(job_id, req, frota_usar, valores_informados=None, loja=None):
         capturado["valores"] = valores_informados
 
     monkeypatch.setattr(main, "_processar_otimizacao", falso)
@@ -434,7 +434,7 @@ def test_otimizar_sem_o_campo_nao_informa_nada(api, monkeypatch):
     conn.respostas = [[{"id": 5, "nome": "Ana", "ativo": True, "tipo_veiculo": "Carro de passeio", "valor_rota": None, "custo_rota": Decimal("130.00"), "peso_referencia_kg": None}]]
     capturado = {}
 
-    async def falso(job_id, req, frota_usar, valores_informados=None):
+    async def falso(job_id, req, frota_usar, valores_informados=None, loja=None):
         capturado["valores"] = valores_informados
 
     monkeypatch.setattr(main, "_processar_otimizacao", falso)
@@ -606,7 +606,7 @@ def test_otimizar_leva_o_valor_proprio_do_motorista_para_o_calculo(api, monkeypa
                        {"id": 2, "nome": "Ana", "ativo": True, "tipo_veiculo": "Fiorino/Utilitário", "valor_rota": None, "custo_rota": Decimal("260.00"), "peso_referencia_kg": None}]]
     capturado = {}
 
-    async def falso(job_id, req, frota_usar, valores_informados=None):
+    async def falso(job_id, req, frota_usar, valores_informados=None, loja=None):
         capturado["frota"] = frota_usar
 
     monkeypatch.setattr(main, "_processar_otimizacao", falso)

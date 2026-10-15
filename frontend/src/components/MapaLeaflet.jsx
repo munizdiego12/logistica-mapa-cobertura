@@ -1,8 +1,12 @@
 import React, { useEffect } from 'react';
-import { MapContainer, TileLayer, Polyline, Marker, Popup, Circle, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Polyline, Marker, Popup, Tooltip, Circle, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { CAMADAS, ATRIBUICAO_ESRI, ESTILO, corDoTexto } from '../services/estiloMapa';
+import { linhasDoHover } from '../services/lojas';
+
+const CENTRO_DO_BRASIL = [-14.2, -51.9];
+const RAIOS_FIXOS_KM = [3, 7, 12, 20, 30];
 
 // Correção dos caminhos padrão dos ícones do Leaflet
 delete L.Icon.Default.prototype._getIconUrl;
@@ -125,39 +129,61 @@ const hubIcon = L.divIcon({
   popupAnchor: [0, -19]
 });
 
-// Componente para reenquadrar o zoom da tela
-function AjustarZoom({ center, pontos }) {
+// Marcador de loja cadastrada (mapa permanente) e da loja escolhida como hub (borda verde)
+const ICONE_LOJA_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>';
+
+const lojaIcon = L.divIcon({
+  className: 'custom-loja-marker',
+  html: `
+    <div style="background-color:${ESTILO.loja.fundo};color:${ESTILO.loja.icone};width:24px;height:24px;border-radius:7px;display:flex;align-items:center;justify-content:center;border:2px solid ${ESTILO.loja.borda};box-shadow:0 3px 8px ${ESTILO.loja.sombra};cursor:pointer;">
+      ${ICONE_LOJA_SVG}
+    </div>
+  `,
+  iconSize: [24, 24],
+  iconAnchor: [12, 12],
+});
+
+const lojaHubIcon = L.divIcon({
+  className: 'custom-loja-hub-marker',
+  html: `
+    <div style="background-color:${ESTILO.hub.fundo};color:${ESTILO.hub.icone};width:38px;height:38px;border-radius:12px;display:flex;align-items:center;justify-content:center;border:3px solid ${ESTILO.hubEscolhido.borda};box-shadow:0 0 20px ${ESTILO.hubEscolhido.brilho};cursor:pointer;">
+      ${ICONE_LOJA_SVG.replace('width="14" height="14"', 'width="22" height="22"')}
+    </div>
+  `,
+  iconSize: [38, 38],
+  iconAnchor: [19, 19],
+});
+
+// Componente para reenquadrar o zoom da tela. A chave evita reenquadrar (e desfazer o zoom do operador) a cada render.
+function AjustarZoom({ center, pontos, zoomSemHub = 12 }) {
   const map = useMap();
+  const chave = JSON.stringify({ center, pontos, zoomSemHub });
   useEffect(() => {
     try {
       const pontosValidos = (pontos || []).filter(p => Array.isArray(p) && isCoordValid(p[0], p[1]));
       if (pontosValidos.length > 1) {
         map.fitBounds(pontosValidos, { padding: [55, 55], maxZoom: 15 });
       } else if (center && isCoordValid(center[0], center[1])) {
-        map.setView(center, 12);
+        map.setView(center, zoomSemHub);
       }
     } catch (e) {
       if (center && isCoordValid(center[0], center[1])) {
-        map.setView(center, 12);
+        map.setView(center, zoomSemHub);
       }
     }
-  }, [center, pontos, map]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chave, map]);
   return null;
 }
 
-export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
+export default function MapaLeaflet({ origem, rotas, dadosCeps = null, lojas = [], lojaSelecionadaId = null, onEscolherLoja = null, raioKm = 30 }) {
   const hubLat = origem ? Number(origem.lat) : NaN;
   const hubLon = origem ? Number(origem.lon) : NaN;
 
-  if (!isCoordValid(hubLat, hubLon)) {
-    return (
-      <div className="w-full h-[540px] rounded-xl flex items-center justify-center bg-slate-950/40 border border-slate-800 text-slate-400 text-xs">
-        Aguardando coordenadas da Loja Central...
-      </div>
-    );
-  }
-
-  const center = [hubLat, hubLon];
+  // Mapa permanente: sem hub escolhido mostra as lojas (ou o Brasil); com hub, centraliza nele.
+  const temHub = isCoordValid(hubLat, hubLon);
+  const lojasNoMapa = (Array.isArray(lojas) ? lojas : []).filter((l) => isCoordValid(Number(l.lat), Number(l.lng)));
+  const center = temHub ? [hubLat, hubLon] : CENTRO_DO_BRASIL;
   const rotasArray = Array.isArray(rotas) ? rotas : [];
   const temRotasAtivas = rotasArray.length > 0;
   const cidadesCobertas = (dadosCeps && Array.isArray(dadosCeps.pontos_cobertos)) ? dadosCeps.pontos_cobertos : [];
@@ -199,8 +225,10 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
   });
 
   // Lista de pontos para enquadramento do mapa
-  const todosPontosZoom = [center, ...todasParadasProcessadas.map(p => [p.latAjustada, p.lonAjustada])];
-  if (!temRotasAtivas) {
+  const todosPontosZoom = temHub
+    ? [center, ...todasParadasProcessadas.map(p => [p.latAjustada, p.lonAjustada])]
+    : lojasNoMapa.map((l) => [Number(l.lat), Number(l.lng)]);
+  if (temHub && !temRotasAtivas) {
     cidadesCobertas.forEach(c => {
       const cLat = Number(c.lat);
       const cLon = Number(c.lon);
@@ -254,17 +282,30 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
     }
   ];
 
+  // Raio escolhido no "Raio X km": círculo extra quando não é um dos raios fixos do mapa
+  const raioEscolhidoM = Number(raioKm) * 1000;
+  const zonasDoMapa = (temHub && Number.isFinite(raioEscolhidoM) && raioEscolhidoM > 0 && !RAIOS_FIXOS_KM.includes(Number(raioKm)))
+    ? [{
+      raio: raioEscolhidoM,
+      cor: ESTILO.zonas[30000],
+      titulo: `Raio escolhido (${Number(raioKm).toLocaleString('pt-BR')} km)`,
+      sla: 'Conforme o raio escolhido',
+      veiculoSugerido: 'Conforme a distância',
+      descricao: 'Raio escolhido no botão "Raio X km": a cobertura de CEPs é calculada até aqui.'
+    }, ...zonasCobertura].sort((a, b) => b.raio - a.raio)
+    : zonasCobertura;
+
   return (
     <div className="mapa-escuro w-full h-[540px] rounded-xl overflow-hidden border border-slate-800 shadow-inner relative z-0">
-      <MapContainer center={center} zoom={12} maxZoom={18} style={{ height: '100%', width: '100%', backgroundColor: ESTILO.fundoDoContainer }}>
+      <MapContainer center={center} zoom={temHub ? 12 : 4} maxZoom={18} style={{ height: '100%', width: '100%', backgroundColor: ESTILO.fundoDoContainer }}>
         {/* Esri em cinza escuro, sem chave de API; o tom azul-marinho vem do CSS (index.css, .mapa-escuro). */}
         <TileLayer attribution={ATRIBUICAO_ESRI} url={CAMADAS.base} maxNativeZoom={16} maxZoom={18} />
         <TileLayer url={CAMADAS.rotulos} maxNativeZoom={16} maxZoom={18} />
 
-        <AjustarZoom center={center} pontos={todosPontosZoom} />
+        <AjustarZoom center={center} pontos={todosPontosZoom} zoomSemHub={temHub ? 12 : 4} />
 
         {/* 1. Isolinhas Concêntricas de Raio com Popups Completos */}
-        {zonasCobertura.map((zona, idx) => (
+        {temHub && zonasDoMapa.map((zona, idx) => (
           <Circle
             key={idx}
             center={center}
@@ -272,9 +313,9 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
             pathOptions={{
               color: zona.cor,
               fillColor: zona.cor,
-              fillOpacity: zona.raio === 30000 ? ESTILO.zonaPreenchimento / 3 : ESTILO.zonaPreenchimento,
-              weight: zona.raio === 30000 ? 2 : 2.5,
-              dashArray: zona.raio === 30000 ? '8, 8' : '5, 5'
+              fillOpacity: zona.raio >= 30000 ? ESTILO.zonaPreenchimento / 3 : ESTILO.zonaPreenchimento,
+              weight: zona.raio >= 30000 ? 2 : 2.5,
+              dashArray: zona.raio >= 30000 ? '8, 8' : '5, 5'
             }}
           >
             <Popup>
@@ -310,6 +351,7 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
         ))}
 
         {/* 2. Marcador da Loja Central / Hub com Popup Completo */}
+        {temHub && lojaSelecionadaId === null && (
         <Marker position={center} icon={hubIcon} zIndexOffset={1000}>
           <Popup>
             <div className="text-slate-900 font-sans p-1 min-w-[210px]">
@@ -324,6 +366,30 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
             </div>
           </Popup>
         </Marker>
+        )}
+
+        {/* 2b. Lojas cadastradas (mapa permanente): hover com nome, endereço e UF; clique escolhe o hub (borda verde) */}
+        {lojasNoMapa.map((loja) => {
+          const escolhida = lojaSelecionadaId !== null && Number(loja.id) === Number(lojaSelecionadaId);
+          const linhas = linhasDoHover(loja);
+          return (
+            <Marker
+              key={`loja-${loja.id}`}
+              position={[Number(loja.lat), Number(loja.lng)]}
+              icon={escolhida ? lojaHubIcon : lojaIcon}
+              zIndexOffset={escolhida ? 1100 : 600}
+              eventHandlers={onEscolherLoja ? { click: () => onEscolherLoja(loja.id) } : undefined}
+            >
+              {linhas.length > 0 && (
+                <Tooltip direction="top" offset={[0, escolhida ? -20 : -14]}>
+                  <div className="text-[11px] leading-snug">
+                    {linhas.map((linha, i) => <div key={i} className={i === 0 ? 'font-bold' : ''}>{linha}</div>)}
+                  </div>
+                </Tooltip>
+              )}
+            </Marker>
+          );
+        })}
 
         {/* 3. Marcadores de Amostragem de CEP (Exibidos na consulta de raio) */}
         {!temRotasAtivas && cidadesCobertas.map((c, cIdx) => {

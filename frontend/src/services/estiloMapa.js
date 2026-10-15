@@ -26,6 +26,9 @@ export const ESTILO = {
   paradaBorda: '#ffffff', paradaSombra: 'rgba(0,0,0,0.6)',
   hub: { fundo: '#38bdf8', icone: '#0b1a33', borda: '#ffffff', brilho: 'rgba(56,189,248,0.65)' },
   pinCep: { fundo: '#10b981', borda: '#ffffff' },
+  // Lojas cadastradas (marcadores do mapa permanente) e a loja escolhida como hub (borda verde).
+  loja: { fundo: '#cbd5e1', icone: '#0b1a33', borda: '#0b1a33', sombra: 'rgba(0,0,0,0.55)' },
+  hubEscolhido: { borda: '#22c55e', brilho: 'rgba(34,197,94,0.7)' },
 };
 
 // ---------------------------------------------------------------- cores e contraste

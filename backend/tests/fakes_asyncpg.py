@@ -77,7 +77,7 @@ class FakePool:
 import importlib.util
 import re
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 from pathlib import Path
 
@@ -96,6 +96,7 @@ class ConexaoSqlite:
         self.db = sqlite3.connect(":memory:", isolation_level=None, check_same_thread=False)  # o TestClient roda a rota em outra thread
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA foreign_keys = ON")
+        self.db.create_function("btrim", 1, lambda s: s.strip() if isinstance(s, str) else s, deterministic=True)  # função do Postgres
         self.sqls = []
 
     @staticmethod
@@ -106,7 +107,9 @@ class ConexaoSqlite:
     def _args(args):
         convertidos = []
         for a in args:
-            if isinstance(a, (date, datetime)):
+            if isinstance(a, time):
+                a = a.isoformat(timespec="minutes")
+            elif isinstance(a, (date, datetime)):
                 a = a.isoformat()
             elif isinstance(a, Decimal):
                 a = float(a)
@@ -131,6 +134,9 @@ class ConexaoSqlite:
     async def execute(self, sql, *args):
         self._rodar(sql, args)
 
+    async def close(self):
+        pass
+
     def transaction(self):
         conn = self
 
@@ -149,9 +155,9 @@ class ConexaoSqlite:
 
 
 def criar_banco_sqlite():
-    """Cria o banco em memória aplicando as migrations 0004, 0005 e 0006 (SQL traduzido do Postgres para o SQLite)."""
+    """Cria o banco em memória aplicando as migrations 0004 a 0007 (SQL traduzido do Postgres para o SQLite)."""
     conn = ConexaoSqlite()
-    for arquivo in ("0004_tipos_veiculo_motoristas.py", "0005_motoristas_valor_rota.py", "0006_rotas_realizadas.py"):
+    for arquivo in ("0004_tipos_veiculo_motoristas.py", "0005_motoristas_valor_rota.py", "0006_rotas_realizadas.py", "0007_lojas.py"):
         for comando in _migracao(arquivo).COMANDOS:
             colunas = {l[1] for l in conn.db.execute("PRAGMA table_info(motoristas)")}
             if "ADD COLUMN IF NOT EXISTS valor_rota" in comando and "valor_rota" in colunas:

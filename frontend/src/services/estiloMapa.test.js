@@ -60,3 +60,17 @@ test('o contorno das rotas, a borda das paradas e o hub se destacam do mapa', ()
   assert.ok(contraste(ESTILO.hub.icone, ESTILO.hub.fundo) >= 4.5, 'ícone do hub');
   assert.ok(contraste(ESTILO.pinCep.fundo, FUNDO_APROXIMADO) >= 2.2, 'pin de CEP');
 });
+
+test('as lojas do mapa permanente e a borda verde do hub escolhido se destacam do mapa', () => {
+  assert.ok(contraste(ESTILO.loja.fundo, FUNDO_APROXIMADO) >= 3, 'marcador de loja');
+  assert.ok(contraste(ESTILO.loja.icone, ESTILO.loja.fundo) >= 4.5, 'ícone da loja');
+  assert.ok(contraste(ESTILO.hubEscolhido.borda, FUNDO_APROXIMADO) >= 3, 'borda verde do hub');
+  assert.match(ESTILO.hubEscolhido.borda, /^#22c55e$/i);
+});
+
+test('o mapa mostra as lojas com hover (nome, endereço e UF) e clique para escolher o hub, sem popup de loja', () => {
+  assert.match(MAPA, /Tooltip/);
+  assert.match(MAPA, /linhasDoHover/);
+  assert.match(MAPA, /onEscolherLoja/);
+  assert.doesNotMatch(MAPA, /filial/i);
+});

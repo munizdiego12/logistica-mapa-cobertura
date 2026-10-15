@@ -22,6 +22,7 @@ import database
 import cobertura
 import item_pesos
 import frota
+import lojas
 import rotas_realizadas
 from logistica.costs import calcular_custo_rota
 from database import get_db, Operador, init_db
@@ -256,9 +257,17 @@ def geocode_rapido(rua: str = "", numero: str = "", bairro: str = "", cep: str =
             return await geocode_async(client, rua, numero, bairro, cep, cidade, uf)
     return asyncio.run(_run())
 
+RAIO_MINIMO_KM = 1.0
+RAIO_MAXIMO_KM = 200.0
+MSG_RAIO_INVALIDO = "O raio precisa ficar entre 1 e 200 km."
+DISTANCIA_MAXIMA_CIDADE_DA_LOJA_KM = 10.0
+
+
 class RaioCepRequest(BaseModel):
-    origem_rua: str
-    origem_num: str
+    # Com loja_id o hub é a coordenada cadastrada da loja (sem geocodificar); sem ele ("Outro endereço") vale o endereço.
+    loja_id: Optional[int] = None
+    origem_rua: Optional[str] = ""
+    origem_num: Optional[str] = ""
     origem_cep: Optional[str] = ""
     origem_bairro: Optional[str] = ""
     origem_cidade: Optional[str] = ""
@@ -285,9 +294,18 @@ async def _buscar_cobertura(lat: float, lon: float, raio_km: float):
 
 @app.post("/api/cobertura-ceps", dependencies=[Depends(obter_operador_atual)])
 async def gerar_cobertura_ceps_instantanea(req: RaioCepRequest):
+    raio_max = req.raio_km if req.raio_km is not None else 30.0
+    if not (RAIO_MINIMO_KM <= raio_max <= RAIO_MAXIMO_KM):
+        raise HTTPException(status_code=422, detail=MSG_RAIO_INVALIDO)
+
+    if req.loja_id is not None:
+        return await _cobertura_da_loja(req.loja_id, raio_max)
+
+    if not (req.origem_rua or req.origem_cep):
+        raise HTTPException(status_code=422, detail="Escolha uma loja ou informe o endereço do hub.")
     async with httpx.AsyncClient() as client:
         lat, lon, cidade, uf, clean_cep, bairro, status_hub = await geocode_async(
-            client, req.origem_rua, req.origem_num, req.origem_bairro or "", req.origem_cep or "", req.origem_cidade or "", req.origem_uf or ""
+            client, req.origem_rua or "", req.origem_num or "", req.origem_bairro or "", req.origem_cep or "", req.origem_cidade or "", req.origem_uf or ""
         )
 
     # Sem coordenada real da loja/hub não há como calcular raio nenhum — em vez de
@@ -304,8 +322,6 @@ async def gerar_cobertura_ceps_instantanea(req: RaioCepRequest):
     clean_cep = str(clean_cep or "").replace("-", "").strip().zfill(8)
     # Código IBGE real do município da loja (tabela ibge_municipios); None se não achar, nunca um valor fixo.
     ibge_base = await database.buscar_ibge_municipio(uf, cidade)
-
-    raio_max = req.raio_km or 30.0
 
     # Cobertura real dentro do raio (prefixos do CNEFE). Sem dados reais para a região devolvemos
     # lista vazia com um aviso explícito em vez de inventar CEPs.
@@ -333,6 +349,38 @@ async def gerar_cobertura_ceps_instantanea(req: RaioCepRequest):
         "fonte": cobertura.ATRIBUICAO_CNEFE if pontos_cobertos else None,
         "aviso": aviso,
     }
+
+async def _cobertura_da_loja(loja_id: int, raio_max: float):
+    """Cobertura pela coordenada CADASTRADA da loja (sem geocodificar o endereço)."""
+    loja = await _com_conexao_lojas(lambda c: lojas.obter_ativa(c, loja_id))
+    lat, lon = loja["lat"], loja["lng"]
+    pontos_cobertos = await _buscar_cobertura(lat, lon, raio_max)
+    resumo = cobertura.resumir_cobertura(pontos_cobertos)
+    # A loja não tem cidade cadastrada: cidade, Estado e código IBGE vêm do prefixo de CEP mais próximo (a menos de 10 km),
+    # que é dado real do CNEFE; se não houver nenhum por perto, ficam vazios (nunca inventados).
+    proximo = next((p for p in pontos_cobertos if p["distancia_km"] <= DISTANCIA_MAXIMA_CIDADE_DA_LOJA_KM), None)
+    aviso = None
+    if not pontos_cobertos:
+        aviso = (
+            "Ainda não temos CEPs cadastrados para essa região. Confira a localização da loja "
+            "ou peça ao administrador do sistema para incluir a região."
+        )
+    return {
+        "hub": {
+            "lat": lat, "lon": lon, "cidade": proximo["cidade"] if proximo else "", "uf": loja["uf"] or (proximo["uf"] if proximo else ""),
+            "cep": "", "ibge": proximo["ibge"] if proximo else None,
+            "endereco": f"{loja['nome']} - {loja['endereco']}" if loja["endereco"] else loja["nome"],
+            "status": "VALIDO", "loja_id": loja["id"], "nome": loja["nome"],
+        },
+        "raio_limite_km": raio_max,
+        "total_pontos": len(pontos_cobertos),
+        "pontos_cobertos": pontos_cobertos,
+        "resumo_cobertura": resumo,
+        "legenda_cobertura": cobertura.LEGENDA_COBERTURA,
+        "fonte": cobertura.ATRIBUICAO_CNEFE if pontos_cobertos else None,
+        "aviso": aviso,
+    }
+
 
 class ExportarXlsxRequest(BaseModel):
     hub: Dict[str, Any]
@@ -610,8 +658,10 @@ class ModalConfigItem(BaseModel):
     capacidade: int
 
 class OtimizarRequest(BaseModel):
-    origem_rua: str
-    origem_num: str
+    # Com loja_id o hub é a coordenada cadastrada da loja (sem geocodificar) e o loja_hub gravado é o nome dela.
+    loja_id: Optional[int] = None
+    origem_rua: Optional[str] = ""
+    origem_num: Optional[str] = ""
     origem_bairro: Optional[str] = ""
     origem_cep: Optional[str] = ""
     modais_config: Optional[Dict[str, ModalConfigItem]] = None
@@ -713,7 +763,7 @@ def _novo_job() -> str:
     return job_id
 
 
-async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar: List[MotoristaItem], valores_informados: Optional[Dict[str, Any]] = None):
+async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar: List[MotoristaItem], valores_informados: Optional[Dict[str, Any]] = None, loja: Optional[Dict[str, Any]] = None):
     job = JOBS[job_id]
     try:
         modais_usar = {}
@@ -723,12 +773,16 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar:
         else:
             modais_usar = MODAIS_PADRAO_DEFAULT
 
-        # --- Etapa 1: geocodificar o Hub ---
-        job["etapa"] = "Localizando a Loja Central..."
-        async with httpx.AsyncClient() as client:
-            orig_lat, orig_lon, cidade_hub, uf_hub, cep_hub, _, status_hub = await geocode_async(
-                client, req.origem_rua, req.origem_num, req.origem_bairro or "", req.origem_cep or ""
-            )
+        # --- Etapa 1: o Hub. Loja cadastrada usa a coordenada dela; "Outro endereço" é geocodificado ---
+        if loja:
+            job["etapa"] = "Usando a localização cadastrada da loja..."
+            orig_lat, orig_lon, status_hub = loja["lat"], loja["lng"], "VALIDO"
+        else:
+            job["etapa"] = "Localizando a Loja Central..."
+            async with httpx.AsyncClient() as client:
+                orig_lat, orig_lon, cidade_hub, uf_hub, cep_hub, _, status_hub = await geocode_async(
+                    client, req.origem_rua or "", req.origem_num or "", req.origem_bairro or "", req.origem_cep or ""
+                )
 
         # Sem a coordenada real da loja não há como montar nenhuma rota — em vez de
         # rotear silenciosamente a partir de um ponto fictício (centro de SP), a
@@ -741,7 +795,12 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar:
             )
             return
 
-        origem_dict = {"rua": req.origem_rua, "numero": req.origem_num, "lat": orig_lat, "lon": orig_lon}
+        if loja:
+            origem_dict = {"rua": loja["nome"], "numero": "", "bairro": loja.get("endereco") or "", "lat": orig_lat, "lon": orig_lon, "loja_id": loja["id"]}
+            loja_hub_texto = loja["nome"]
+        else:
+            origem_dict = {"rua": req.origem_rua, "numero": req.origem_num, "lat": orig_lat, "lon": orig_lon}
+            loja_hub_texto = ", ".join(p for p in (str(req.origem_rua or "").strip(), str(req.origem_num or "").strip()) if p) + (f" - {req.origem_bairro}" if req.origem_bairro else "")
 
         # --- Etapa 2: geocodificar todos os pedidos (deduplicado + paralelo) ---
         total_pedidos = len(req.pedidos)
@@ -886,7 +945,7 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar:
         job["etapa"] = "Concluído."
         job["resultado"] = {
             "execucao_id": job_id,  # identifica esta roteirização para "Confirmar rotas"
-            "loja_hub": ", ".join(p for p in (str(req.origem_rua or "").strip(), str(req.origem_num or "").strip()) if p) + (f" - {req.origem_bairro}" if req.origem_bairro else ""),
+            "loja_hub": loja_hub_texto,
             "origem": origem_dict,
             "rotas": rotas_resultado,
             "kpis": kpis,
@@ -907,13 +966,16 @@ async def iniciar_otimizacao(req: "OtimizarRequest"):
         valores_informados = frota.interpretar_valores_informados(req.valores_por_rota)
     except ValueError as erro:
         raise HTTPException(status_code=422, detail=str(erro))
+    loja = await _com_conexao_lojas(lambda c: lojas.obter_ativa(c, req.loja_id)) if req.loja_id is not None else None
+    if loja is None and not (req.origem_rua or req.origem_cep):
+        raise HTTPException(status_code=422, detail="Escolha uma loja ou informe o endereço do hub.")
     motoristas = await _com_conexao_frota(lambda c: frota.selecionar_motoristas(c, req.motorista_ids))
     frota_usar = [
         MotoristaItem(id=m["id"], motorista=m["nome"], modal=m["tipo_veiculo"], custo_rota=m["custo_rota"], valor_motorista=m.get("valor_rota"))
         for m in motoristas
     ]
     job_id = _novo_job()
-    asyncio.create_task(_processar_otimizacao(job_id, req, frota_usar, valores_informados))
+    asyncio.create_task(_processar_otimizacao(job_id, req, frota_usar, valores_informados, loja))
     return {"job_id": job_id}
 
 
@@ -1166,6 +1228,66 @@ async def atualizar_motorista(id_motorista: int, dados: AtualizarMotoristaReques
 # ---------------------------------------------------------------------------------------------
 # Rotas realizadas: confirmar o resultado, desfazer e a contagem do dia (Etapa 5b)
 # ---------------------------------------------------------------------------------------------
+MSG_LOJAS_INDISPONIVEL = (
+    "O cadastro de lojas não está disponível agora. Tente novamente em instantes; "
+    "se o problema continuar, avise o administrador do sistema."
+)
+
+
+async def _com_conexao_lojas(operacao):
+    """Roda `operacao(conn)` numa conexão do pool; falha do banco vira 503 claro, valor inválido vira 422."""
+    pool = await database.get_pool()
+    if not pool:
+        raise HTTPException(status_code=503, detail=MSG_LOJAS_INDISPONIVEL)
+    try:
+        async with pool.acquire() as conn:
+            return await operacao(conn)
+    except HTTPException:
+        raise
+    except ValueError as erro:
+        raise HTTPException(status_code=422, detail=str(erro))
+    except Exception as erro:
+        print(f"[lojas] Falha no cadastro de lojas: {erro!r}")
+        raise HTTPException(status_code=503, detail=MSG_LOJAS_INDISPONIVEL)
+
+
+class LojaRequest(BaseModel):
+    nome: Optional[str] = None
+    uf: Optional[str] = None
+    endereco: Optional[str] = None
+    lat: Optional[Union[float, str]] = None
+    lng: Optional[Union[float, str]] = None
+    ativo: bool = True
+    capacidade_peso: Optional[Union[float, str]] = None  # só informativa: nunca bloqueia
+    capacidade_volume: Optional[Union[float, str]] = None
+    janela_manha_inicio: Optional[str] = None
+    janela_manha_fim: Optional[str] = None
+    janela_tarde_inicio: Optional[str] = None
+    janela_tarde_fim: Optional[str] = None
+    janela_noite_inicio: Optional[str] = None
+    janela_noite_fim: Optional[str] = None
+    usa_noite: bool = True
+
+
+@app.get("/api/lojas")
+async def listar_lojas(incluir_inativas: bool = True, operador: Operador = Depends(obter_operador_atual)):
+    return await _com_conexao_lojas(lambda c: lojas.listar(c, incluir_inativas))
+
+
+@app.post("/api/lojas", status_code=201)
+async def criar_loja(dados: LojaRequest, operador: Operador = Depends(obter_operador_atual)):
+    return await _com_conexao_lojas(lambda c: lojas.criar(c, dados.model_dump(), _rotulo_do_operador(operador)))
+
+
+@app.put("/api/lojas/{id_loja}")
+async def atualizar_loja(id_loja: int, dados: LojaRequest, operador: Operador = Depends(obter_operador_atual)):
+    """Edita a loja inteira, inclusive ativar/desativar. Não existe exclusão: a loja é desativada."""
+    loja = await _com_conexao_lojas(lambda c: lojas.atualizar(c, id_loja, dados.model_dump(), _rotulo_do_operador(operador)))
+    if loja is None:
+        raise HTTPException(status_code=404, detail=lojas.MSG_NAO_ENCONTRADA)
+    return loja
+
+
 class ConfirmarRotasRequest(BaseModel):
     execucao_id: str
     turno: Optional[str] = None

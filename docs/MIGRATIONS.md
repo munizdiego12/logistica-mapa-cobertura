@@ -12,6 +12,7 @@ Revisões atuais:
 | `0004` | Cria `tipos_veiculo` (já com "Carro de passeio" R$ 130 e "Fiorino/Utilitário" R$ 260, `ON CONFLICT DO NOTHING`: não desfaz o que um operador editou) e `motoristas` (desativa em vez de apagar). Idempotente; o `downgrade` não apaga nada. |
 | `0005` | Acrescenta `motoristas.valor_rota` (valor próprio por rota do motorista, opcional) com `CHECK (valor_rota IS NULL OR valor_rota >= 0)`, via `ADD COLUMN IF NOT EXISTS` (idempotente). Não altera dados; o `downgrade` não apaga nada. |
 | `0006` | Cria `rotas_realizadas` (rotas confirmadas: `execucao_id`, `numero_rota`, `motorista_id`, `data` no dia de Brasília, `loja_hub`, `turno`, `qtd_pedidos`, `distancia_km`, `status` `confirmada`/`cancelada`, `criado_em`, `criado_por`), com chave única `execucao_id` + `numero_rota` (confirmar de novo não duplica). Idempotente; o `downgrade` não apaga nada. |
+| `0007` | Cria `lojas` (nome já com a filial, `uf` e `endereco` opcionais, `lat`/`lng` com CHECK do Brasil, `ativo`, capacidades opcionais, janelas manhã/tarde/noite, `atualizado_em`/`atualizado_por`), com índice único no nome (sem diferença de maiúsculas e espaços) e sem coluna filial. Idempotente; o `downgrade` não apaga nada. |
 
 Não existe tabela `geocache`: esse nome aparece em notas antigas por causa do arquivo de teste `geocache.db`. O cache de geocodificação é a tabela `geocode_cache`.
 
@@ -45,7 +46,7 @@ cd backend
 $env:DATABASE_URL = "<string direta do Neon>"
 python -m alembic current
 python -m alembic upgrade head
-python -m alembic current          # deve mostrar o head (hoje 0006)
+python -m alembic current          # deve mostrar o head (hoje 0007)
 Remove-Item Env:DATABASE_URL
 cd ..
 ```

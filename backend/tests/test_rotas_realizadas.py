@@ -292,7 +292,7 @@ def test_api_otimizar_so_leva_os_motoristas_marcados(api, monkeypatch):
     cliente, banco = api
     capturado = {}
 
-    async def falso(job_id, req, frota_usar, valores_informados=None):
+    async def falso(job_id, req, frota_usar, valores_informados=None, loja=None):
         capturado["frota"] = frota_usar
 
     monkeypatch.setattr(main, "_processar_otimizacao", falso)

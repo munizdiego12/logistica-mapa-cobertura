@@ -53,3 +53,6 @@ data/cnefe/
 
 # Dados de pesos/pedidos do BigQuery (repositório público: nunca versionar)
 data/peso/
+
+# Cadastro de lojas (CSV exportado do Google Sheets/My Maps; repositório público: nunca versionar)
+data/lojas/

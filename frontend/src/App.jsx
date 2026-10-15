@@ -5,13 +5,15 @@ import {
   MapPin, ArrowUpRight, Play, Loader2,
   ShieldCheck, Activity, Trash2, Users, AlertCircle,
   CheckSquare, Square, Download, FileSpreadsheet, FileDown,
-  Settings, ChevronDown, ChevronUp, Layers, Compass, Table as TableIcon, 
+  Settings, ChevronDown, ChevronUp, Layers, Compass, Table as TableIcon, Store, 
   AlertTriangle, Scale
 } from 'lucide-react';
 import MapaLeaflet from './components/MapaLeaflet';
 import Login from './components/Login';
 import PesosItens from './components/PesosItens';
 import Motoristas from './components/Motoristas';
+import Lojas from './components/Lojas';
+import { interpretarRaio, nomeDoHub, RAIO_PADRAO_KM } from './services/lojas';
 import { API_BASE } from './config';
 import { instalarTratamento401, MENSAGEM_SESSAO_EXPIRADA } from './services/sessao';
 import { baixarBlob } from './services/download';
@@ -68,6 +70,12 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [mostrarPesos, setMostrarPesos] = useState(false);
   const [mostrarMotoristas, setMostrarMotoristas] = useState(false);
+  const [mostrarLojas, setMostrarLojas] = useState(false);
+  // Lojas ativas (mapa permanente), hub escolhido ('' = nenhum, 'outro' = "Outro endereço", ou o id da loja) e raio do "Raio X km".
+  const [lojas, setLojas] = useState([]);
+  const [lojasCarregadas, setLojasCarregadas] = useState(false);
+  const [selecaoHub, setSelecaoHub] = useState('');
+  const [raioTexto, setRaioTexto] = useState(String(RAIO_PADRAO_KM));
   const [loadingCeps, setLoadingCeps] = useState(false);
   const [dadosCoberturaCeps, setDadosCoberturaCeps] = useState(null);
   const [progresso, setProgresso] = useState(null); // { etapa, atual, total } | null
@@ -109,6 +117,26 @@ export default function App() {
     bairro: '',
     cep: ''
   });
+
+  // Lojas ativas para o mapa permanente e a escolha do hub.
+  const carregarLojas = useCallback(() => apiAuth.get('/lojas', { params: { incluir_inativas: false } })
+    .then((resp) => {
+      setLojas(resp.data);
+      // loja que foi desativada (ou sumiu) deixa de ser o hub escolhido
+      setSelecaoHub((atual) => (/^\d+$/.test(atual) && !resp.data.some((l) => String(l.id) === atual) ? '' : atual));
+    })
+    .catch(() => {})
+    .finally(() => setLojasCarregadas(true)), []);
+
+  useEffect(() => {
+    if (operador) carregarLojas();
+  }, [operador, carregarLojas]);
+
+  const lojaHubId = /^\d+$/.test(selecaoHub) ? Number(selecaoHub) : null;
+  const lojaHub = lojas.find((l) => l.id === lojaHubId) || null;
+  // Sem nenhuma loja cadastrada, o endereço livre aparece sozinho; com lojas, só em "Outro endereço".
+  const modoEndereco = selecaoHub === 'outro' || (lojasCarregadas && lojas.length === 0);
+  const hubDefinido = lojaHubId !== null || (modoEndereco && Boolean(origem.rua));
 
   // Lista de Múltiplos Arquivos/Lotes de Pedidos
   const [lotes, setLotes] = useState([]);
@@ -171,34 +199,74 @@ export default function App() {
     }
   };
 
-  // 1. Consultar Cobertura de CEPs por Haversine (0 a 30 km)
-  const consultarCoberturaCeps = async () => {
-    if (!origem.rua && !origem.cep) {
-      alert('Por favor, informe o Logradouro ou o CEP da Loja Central.');
+  // 1. Cobertura de CEPs até o raio escolhido ("Raio X km"). Com loja escolhida usa a coordenada cadastrada dela (sem
+  //    geocodificar o endereço); em "Outro endereço" vale o endereço digitado, como antes.
+  const consultarCoberturaCeps = async (idDaLoja = lojaHubId) => {
+    const raio = interpretarRaio(raioTexto);
+    if (!raio.ok) {
+      alert(raio.mensagem);
+      return;
+    }
+    if (idDaLoja === null && !origem.rua && !origem.cep) {
+      alert('Escolha uma loja ou informe o endereço do hub.');
       return;
     }
 
     setLoadingCeps(true);
     try {
-      const res = await apiAuth.post(`/cobertura-ceps`, {
-        origem_rua: origem.rua || "Centro Operacional",
-        origem_num: origem.numero || "S/N",
-        origem_cep: origem.cep || "",
-        origem_bairro: origem.bairro || "",
-        raio_km: 30.0
-      });
+      const corpo = idDaLoja !== null
+        ? { loja_id: idDaLoja, raio_km: raio.valor }
+        : {
+          origem_rua: origem.rua || "Centro Operacional",
+          origem_num: origem.numero || "S/N",
+          origem_cep: origem.cep || "",
+          origem_bairro: origem.bairro || "",
+          raio_km: raio.valor
+        };
+      const res = await apiAuth.post(`/cobertura-ceps`, corpo);
       setDadosCoberturaCeps(res.data);
     } catch (err) {
+      if (err?.response?.status === 401) return; // já voltou para o login, com o aviso
       const detalhe = err?.response?.data?.detail;
-      alert(detalhe || 'Não foi possível calcular a cobertura de CEPs. Verifique sua conexão e tente de novo.');
+      alert((typeof detalhe === 'string' && detalhe) || 'Não foi possível calcular a cobertura de CEPs. Verifique sua conexão e tente de novo.');
     } finally {
       setLoadingCeps(false);
     }
   };
 
+  // Escolher a loja (pelo seletor ou clicando no marcador do mapa): vira o hub e recalcula a cobertura e as faixas de CEP.
+  const escolherLoja = (id) => {
+    if (id === lojaHubId) return;
+    if (resultado && !confirmacao.confirmada
+      && !window.confirm('Trocar a loja descarta as rotas calculadas que ainda não foram confirmadas. Continuar?')) {
+      return;
+    }
+    setResultado(null);
+    setConfirmacao({ confirmada: false, linhas: [], enviando: false, erro: '' });
+    setDadosCoberturaCeps(null);
+    setSelecaoHub(String(id));
+    consultarCoberturaCeps(id);
+  };
+
+  const trocarSelecaoHub = (valor) => {
+    if (valor !== '' && valor !== 'outro') {
+      escolherLoja(Number(valor));
+      return;
+    }
+    if (valor === selecaoHub) return;
+    if (resultado && !confirmacao.confirmada
+      && !window.confirm('Trocar o ponto de partida descarta as rotas calculadas que ainda não foram confirmadas. Continuar?')) {
+      return;
+    }
+    setResultado(null);
+    setConfirmacao({ confirmada: false, linhas: [], enviando: false, erro: '' });
+    setDadosCoberturaCeps(null);
+    setSelecaoHub(valor);
+  };
+
   const handleOtimizar = async () => {
-    if (!origem.rua && !origem.cep) {
-      alert('Por favor, informe o Logradouro ou o CEP da Loja Central.');
+    if (lojaHubId === null && !origem.rua && !origem.cep) {
+      alert('Escolha uma loja ou informe o endereço do hub antes de gerar as rotas.');
       return;
     }
     if (pedidosAtivos.length === 0) {
@@ -223,10 +291,9 @@ export default function App() {
     try {
       // 1. Inicia o job em segundo plano — a resposta chega na hora, com um job_id.
       const inicio = await apiAuth.post(`/otimizar`, {
-        origem_rua: origem.rua,
-        origem_num: origem.numero,
-        origem_bairro: origem.bairro,
-        origem_cep: origem.cep,
+        ...(lojaHubId !== null
+          ? { loja_id: lojaHubId }
+          : { origem_rua: origem.rua, origem_num: origem.numero, origem_bairro: origem.bairro, origem_cep: origem.cep }),
         modais_config: modais,
         motorista_ids: selecionados,
         pedidos: pedidosAtivos
@@ -378,10 +445,10 @@ export default function App() {
       csvContent += `"${dadosCoberturaCeps.fonte}"\n`;
     }
 
-    const nomeHubLimpo = (origem.rua || dadosCoberturaCeps.hub?.cidade || 'hub')
+    const nomeHubLimpo = nomeDoHub(lojaHub, origem, dadosCoberturaCeps.hub?.cidade)
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
       .replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').slice(0, 30);
-    const numHubLimpo = origem.numero ? `_${origem.numero}` : '';
+    const numHubLimpo = !lojaHub && origem.numero ? `_${origem.numero}` : '';
     const dataAtual = new Date().toISOString().slice(0, 10);
     const nomeArquivo = `tabela_frete_${nomeHubLimpo}${numHubLimpo}_${dataAtual}.csv`;
 
@@ -406,10 +473,10 @@ export default function App() {
         pontos_cobertos: dadosCoberturaCeps.pontos_cobertos
       }, { responseType: 'blob' });
 
-      const nomeHubLimpo = (origem.rua || dadosCoberturaCeps.hub?.cidade || 'hub')
+      const nomeHubLimpo = nomeDoHub(lojaHub, origem, dadosCoberturaCeps.hub?.cidade)
         .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
         .replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').slice(0, 30);
-      const numHubLimpo = origem.numero ? `_${origem.numero}` : '';
+      const numHubLimpo = !lojaHub && origem.numero ? `_${origem.numero}` : '';
       const dataAtual = new Date().toISOString().slice(0, 10);
       const nomeArquivo = `tabela_frete_completa_${nomeHubLimpo}${numHubLimpo}_${dataAtual}.xlsx`;
 
@@ -497,6 +564,13 @@ export default function App() {
           </div>
           <div className="flex items-center gap-2 pl-3 border-l border-slate-800">
             <button
+              onClick={() => setMostrarLojas(true)}
+              className="flex items-center gap-1 text-[10px] font-semibold text-blue-300 hover:text-blue-200 bg-blue-500/10 border border-blue-500/20 px-2 py-1 rounded transition-colors"
+              title="Cadastrar e editar as lojas"
+            >
+              <Store className="w-3 h-3" /> Lojas
+            </button>
+            <button
               onClick={() => setMostrarMotoristas(true)}
               className="flex items-center gap-1 text-[10px] font-semibold text-blue-300 hover:text-blue-200 bg-blue-500/10 border border-blue-500/20 px-2 py-1 rounded transition-colors"
               title="Cadastrar motoristas e ajustar o valor base dos veículos"
@@ -521,6 +595,10 @@ export default function App() {
         </div>
       </header>
 
+      {mostrarLojas && (
+        <Lojas api={apiAuth} onFechar={() => setMostrarLojas(false)} onMudou={carregarLojas} />
+      )}
+
       {mostrarMotoristas && (
         <Motoristas api={apiAuth} onFechar={() => setMostrarMotoristas(false)} onMudou={carregarFrota} />
       )}
@@ -535,46 +613,87 @@ export default function App() {
         {/* Painel Lateral */}
         <aside className="w-full lg:w-[420px] border-r border-slate-800/80 bg-slate-900/30 p-6 flex flex-col gap-6 backdrop-blur-sm overflow-y-auto">
 
-          {/* 1. Hub / Loja Central */}
+          {/* 1. Hub / Loja Central: loja cadastrada (clique no mapa ou seletor) ou "Outro endereço" */}
           <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                <MapPin className="w-3.5 h-3.5 text-blue-400" /> Loja Central / Hub de Origem
-              </span>
-              <button
-                onClick={consultarCoberturaCeps}
-                disabled={loadingCeps || !origem.rua}
-                className="text-[10px] font-semibold text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded transition-colors flex items-center gap-1 disabled:opacity-40"
-                title="Consultar Faixa de CEPs até 30km"
-              >
-                {loadingCeps ? <Loader2 className="w-3 h-3 animate-spin" /> : <Compass className="w-3 h-3" />}
-                Raio 30 km
-              </button>
-            </div>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+              <MapPin className="w-3.5 h-3.5 text-blue-400" /> Loja Central / Hub de Origem
+            </span>
 
-            <input
-              type="text"
-              value={origem.rua}
-              onChange={(e) => setOrigem({ ...origem, rua: e.target.value })}
-              placeholder="Logradouro da Loja (ex: Av. Paulista)"
-              className="w-full text-xs bg-slate-900/90 border border-slate-800 focus:border-blue-500/80 rounded-lg px-3 py-2.5 text-slate-100 placeholder:text-slate-500 focus:outline-none transition-colors"
-            />
-            <div className="grid grid-cols-2 gap-2">
-              <input
-                type="text"
-                value={origem.numero}
-                onChange={(e) => setOrigem({ ...origem, numero: e.target.value })}
-                placeholder="Número (ex: 1000)"
-                className="w-full text-xs bg-slate-900/90 border border-slate-800 focus:border-blue-500/80 rounded-lg px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:outline-none transition-colors"
-              />
-              <input
-                type="text"
-                value={origem.cep}
-                onChange={(e) => setOrigem({ ...origem, cep: e.target.value })}
-                placeholder="CEP (ex: 01310-100)"
-                className="w-full text-xs bg-slate-900/90 border border-slate-800 focus:border-blue-500/80 rounded-lg px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:outline-none transition-colors"
-              />
-            </div>
+            {lojas.length > 0 && (
+              <select
+                value={selecaoHub}
+                onChange={(e) => trocarSelecaoHub(e.target.value)}
+                aria-label="Loja de origem"
+                className="w-full text-xs bg-slate-900/90 border border-slate-800 focus:border-blue-500/80 rounded-lg px-3 py-2.5 text-slate-100 focus:outline-none transition-colors"
+              >
+                <option value="">Escolha a loja (ou clique nela no mapa)</option>
+                {lojas.map((l) => <option key={l.id} value={String(l.id)}>{l.uf ? `${l.nome} - ${l.uf}` : l.nome}</option>)}
+                <option value="outro">Outro endereço</option>
+              </select>
+            )}
+
+            {/* Raio X km: ao lado do nome da loja escolhida */}
+            {(lojaHub || modoEndereco) && (
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-slate-200 truncate" title={lojaHub?.nome || 'Outro endereço'}>
+                  {lojaHub ? lojaHub.nome : 'Outro endereço'}
+                </span>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={raioTexto}
+                    onChange={(e) => setRaioTexto(e.target.value)}
+                    aria-label="Raio em km"
+                    title="Raio da consulta, em km (de 1 a 200; padrão 30)"
+                    className="w-14 text-[11px] text-center bg-slate-900/90 border border-slate-800 focus:border-emerald-500/60 rounded px-1.5 py-1 text-slate-100 focus:outline-none"
+                  />
+                  <button
+                    onClick={() => consultarCoberturaCeps()}
+                    disabled={loadingCeps || !hubDefinido}
+                    className="text-[10px] font-semibold text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 px-2 py-1 rounded transition-colors flex items-center gap-1 disabled:opacity-40"
+                    title="Consultar as faixas de CEP até o raio escolhido"
+                  >
+                    {loadingCeps ? <Loader2 className="w-3 h-3 animate-spin" /> : <Compass className="w-3 h-3" />}
+                    Raio X km
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {lojaHub && lojaHub.endereco && <p className="text-[11px] text-slate-500 truncate">{lojaHub.endereco}</p>}
+
+            {modoEndereco && (
+              <>
+                <input
+                  type="text"
+                  value={origem.rua}
+                  onChange={(e) => setOrigem({ ...origem, rua: e.target.value })}
+                  placeholder="Logradouro (ex: Av. Paulista)"
+                  className="w-full text-xs bg-slate-900/90 border border-slate-800 focus:border-blue-500/80 rounded-lg px-3 py-2.5 text-slate-100 placeholder:text-slate-500 focus:outline-none transition-colors"
+                />
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    value={origem.numero}
+                    onChange={(e) => setOrigem({ ...origem, numero: e.target.value })}
+                    placeholder="Número (ex: 1000)"
+                    className="w-full text-xs bg-slate-900/90 border border-slate-800 focus:border-blue-500/80 rounded-lg px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:outline-none transition-colors"
+                  />
+                  <input
+                    type="text"
+                    value={origem.cep}
+                    onChange={(e) => setOrigem({ ...origem, cep: e.target.value })}
+                    placeholder="CEP (ex: 01310-100)"
+                    className="w-full text-xs bg-slate-900/90 border border-slate-800 focus:border-blue-500/80 rounded-lg px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:outline-none transition-colors"
+                  />
+                </div>
+              </>
+            )}
+
+            {lojasCarregadas && lojas.length > 0 && !lojaHub && !modoEndereco && (
+              <p className="text-[11px] text-slate-500">Clique numa loja no mapa ou escolha na lista para definir o ponto de partida e ver as faixas de CEP.</p>
+            )}
 
             {/* Aviso explícito quando não há faixas de CEP reais cadastradas nesse raio
                 (Etapa 2: o gerador sintético de 48 pontos foi removido — não inventamos
@@ -845,7 +964,7 @@ export default function App() {
             )}
             <button
               onClick={handleOtimizar}
-              disabled={loading || pedidosAtivos.length === 0 || !origem.rua || !podeExecutarComMotoristas(selecionados)}
+              disabled={loading || pedidosAtivos.length === 0 || !hubDefinido || !podeExecutarComMotoristas(selecionados)}
               className="w-full py-3.5 bg-blue-600 hover:bg-blue-500 active:scale-[0.99] transition-all rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-blue-600/25 text-white disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4 fill-current" />}
@@ -999,28 +1118,26 @@ export default function App() {
             <div className="flex items-center justify-between mb-3 px-1">
               <div>
                 <h3 className="font-bold text-xs uppercase tracking-wider text-slate-200">Polígonos Espaciais & Raio de Cobertura</h3>
-                <p className="text-[11px] text-slate-500">Isolinhas concêntricas até 30 km com cálculo de Haversine e traçado viário OSRM</p>
+                <p className="text-[11px] text-slate-500">Lojas cadastradas, isolinhas de cobertura com cálculo de Haversine e traçado viário OSRM</p>
               </div>
               <span className="text-[10px] font-mono px-2 py-1 bg-slate-900 border border-slate-800 text-slate-400 rounded-md">
                 Haversine + Polar VRP
               </span>
             </div>
 
-            {resultado ? (
-              <MapaLeaflet origem={resultado ? resultado.origem : (dadosCoberturaCeps ? dadosCoberturaCeps.hub : null)} rotas={resultado ? resultado.rotas : []} dadosCeps={dadosCoberturaCeps} />
-            ) : (
-              <div className="h-[460px] flex flex-col items-center justify-center border border-slate-800/80 rounded-xl bg-slate-950/40 text-slate-500 gap-3">
-                <div className="w-12 h-12 rounded-full bg-slate-900 flex items-center justify-center border border-slate-800">
-                  <Navigation className="w-6 h-6 text-slate-500" />
-                </div>
-                <div className="text-center space-y-1">
-                  <p className="text-xs font-semibold text-slate-300">Nenhuma rota ativa</p>
-                  <p className="text-[11px] text-slate-500 max-w-sm">
-                    Preencha a Loja Central, selecione um lote anexado e clique em Executar Roteirização.
-                  </p>
-                </div>
-              </div>
-            )}
+            <MapaLeaflet
+              origem={resultado
+                ? resultado.origem
+                : (dadosCoberturaCeps
+                  ? dadosCoberturaCeps.hub
+                  : (lojaHub ? { lat: lojaHub.lat, lon: lojaHub.lng, rua: lojaHub.nome, numero: '' } : null))}
+              rotas={resultado ? resultado.rotas : []}
+              dadosCeps={dadosCoberturaCeps}
+              lojas={lojas}
+              lojaSelecionadaId={lojaHubId}
+              onEscolherLoja={escolherLoja}
+              raioKm={interpretarRaio(raioTexto).valor ?? RAIO_PADRAO_KM}
+            />
           </div>
 
           {/* Tabela de Resultados por Viagem / Motorista */}

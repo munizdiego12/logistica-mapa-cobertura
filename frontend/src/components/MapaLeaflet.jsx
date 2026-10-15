@@ -1,11 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect } from 'react';
 import { MapContainer, TileLayer, Polyline, Marker, Popup, Circle, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { rotuloDaOrigem } from '../services/valorRota';
-import {
-  TEMAS, ROTULO_TEMA, CAMADAS, ATRIBUICAO_ESRI, PALETAS, EVENTO_TEMA, lerTema, salvarTema, corDoTexto, corDaRotaNoTema
-} from '../services/temaMapa';
+import { CAMADAS, ATRIBUICAO_ESRI, ESTILO, corDoTexto } from '../services/estiloMapa';
 
 // Correção dos caminhos padrão dos ícones do Leaflet
 delete L.Icon.Default.prototype._getIconUrl;
@@ -24,7 +22,7 @@ const isCoordValid = (lat, lon) => {
 // Quando 'aproximado' é true (geocode_status === 'ALERTA_APROXIMADO', Etapa 2),
 // desenha um anel/badge amarelo indicando que a posição é só do bairro/cidade,
 // não do endereço exato — sem impedir a rota, só avisando visualmente.
-const createStopIcon = (num, color, aproximado, paleta) => {
+const createStopIcon = (num, color, aproximado) => {
   return L.divIcon({
     className: 'custom-stop-marker',
     html: `
@@ -40,8 +38,8 @@ const createStopIcon = (num, color, aproximado, paleta) => {
         justify-content: center;
         font-weight: 800;
         font-size: 11px;
-        border: 2px solid ${aproximado ? '#f59e0b' : paleta.paradaBorda};
-        box-shadow: 0 4px 10px ${paleta.paradaSombra};
+        border: 2px solid ${aproximado ? '#f59e0b' : ESTILO.paradaBorda};
+        box-shadow: 0 4px 10px ${ESTILO.paradaSombra};
         font-family: sans-serif;
         cursor: pointer;
       ">
@@ -73,12 +71,12 @@ const createStopIcon = (num, color, aproximado, paleta) => {
 };
 
 // Ícone para os pontos de amostragem de CEP do Haversine
-const createCityPinIcon = (paleta) => {
+const createCityPinIcon = () => {
   return L.divIcon({
     className: 'custom-city-pin',
     html: `
       <div style="
-        background-color: ${paleta.pinCep.fundo};
+        background-color: ${ESTILO.pinCep.fundo};
         color: #ffffff;
         width: 18px;
         height: 18px;
@@ -87,8 +85,8 @@ const createCityPinIcon = (paleta) => {
         align-items: center;
         justify-content: center;
         font-size: 8px;
-        border: 1.5px solid ${paleta.pinCep.borda};
-        box-shadow: 0 2px 6px ${paleta.paradaSombra};
+        border: 1.5px solid ${ESTILO.pinCep.borda};
+        box-shadow: 0 2px 6px ${ESTILO.paradaSombra};
         cursor: pointer;
       ">
         📍
@@ -101,20 +99,20 @@ const createCityPinIcon = (paleta) => {
 };
 
 // Ícone estilizado do Hub Central / Loja de Origem
-const criarHubIcon = (paleta) => L.divIcon({
+const hubIcon = L.divIcon({
   className: 'custom-hub-marker',
   html: `
     <div style="
-      background-color: ${paleta.hub.fundo};
-      color: ${paleta.hub.icone};
+      background-color: ${ESTILO.hub.fundo};
+      color: ${ESTILO.hub.icone};
       width: 38px;
       height: 38px;
       border-radius: 12px;
       display: flex;
       align-items: center;
       justify-content: center;
-      border: 2.5px solid ${paleta.hub.borda};
-      box-shadow: 0 0 20px ${paleta.hub.brilho};
+      border: 2.5px solid ${ESTILO.hub.borda};
+      box-shadow: 0 0 20px ${ESTILO.hub.brilho};
       cursor: pointer;
     ">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -149,14 +147,6 @@ function AjustarZoom({ center, pontos }) {
 }
 
 export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
-  // Tema do mapa (Escuro por padrão); a escolha fica lembrada neste navegador.
-  const [tema, setTema] = useState(() => lerTema());
-  const paleta = PALETAS[tema];
-  const escolherTema = (novo) => {
-    setTema(novo);
-    salvarTema(novo);
-    window.dispatchEvent(new CustomEvent(EVENTO_TEMA, { detail: novo }));
-  };
   const hubLat = origem ? Number(origem.lat) : NaN;
   const hubLon = origem ? Number(origem.lon) : NaN;
 
@@ -202,7 +192,7 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
         lonAjustada: lon,
         ordemNumero: idx + 1,
         rotaId: rota.id,
-        rotaCor: corDaRotaNoTema(rota.cor || '#3b82f6', tema),
+        rotaCor: rota.cor || '#3b82f6',
         rotaMotorista: rota.motorista_base || rota.motorista || `Rota ${rota.id}`,
         rotaModal: rota.modal || 'Veículo'
       });
@@ -225,7 +215,7 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
   const zonasCobertura = [
     {
       raio: 30000,
-      cor: paleta.zonas[30000],
+      cor: ESTILO.zonas[30000],
       titulo: 'Limite Máximo de Cobertura (30 km)',
       sla: 'D+2 a D+3 (Até 72h)',
       veiculoSugerido: 'Caminhão Leve / VUC / Utilitário',
@@ -233,7 +223,7 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
     },
     {
       raio: 20000,
-      cor: paleta.zonas[20000],
+      cor: ESTILO.zonas[20000],
       titulo: 'Zona Intermediária / Cinturão (20 km)',
       sla: 'D+2 (2 dias úteis)',
       veiculoSugerido: 'VUC / Fiorino / Van',
@@ -241,7 +231,7 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
     },
     {
       raio: 12000,
-      cor: paleta.zonas[12000],
+      cor: ESTILO.zonas[12000],
       titulo: 'Zona Estendida / Limite Capital (12 km)',
       sla: 'D+1 (1 dia útil / Same-Day)',
       veiculoSugerido: 'VUC / Fiorino / Carro',
@@ -249,7 +239,7 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
     },
     {
       raio: 7000,
-      cor: paleta.zonas[7000],
+      cor: ESTILO.zonas[7000],
       titulo: 'Zona Secundária / Centro Expandido (7 km)',
       sla: 'Até 2 horas / Same-Day',
       veiculoSugerido: 'Carro de Passeio / Fiorino / Moto',
@@ -257,7 +247,7 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
     },
     {
       raio: 3000,
-      cor: paleta.zonas[3000],
+      cor: ESTILO.zonas[3000],
       titulo: 'Zona Primária / Expressa (3 km)',
       sla: 'Até 45 minutos (Express)',
       veiculoSugerido: 'Moto / Bike / Veículo Leve',
@@ -266,34 +256,11 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
   ];
 
   return (
-    <div className={`mapa-${tema} w-full h-[540px] rounded-xl overflow-hidden border ${tema === 'claro' ? 'border-slate-300' : 'border-slate-800'} shadow-inner relative z-0`}>
-      <div
-        role="group"
-        aria-label="Fundo do mapa"
-        className={`absolute top-3 right-3 z-[1000] flex rounded-lg overflow-hidden border text-[11px] font-semibold shadow-md backdrop-blur-sm ${
-          tema === 'claro' ? 'bg-white/90 border-slate-300' : 'bg-[#0b1a33]/90 border-slate-600'
-        }`}
-      >
-        {TEMAS.map((t) => (
-          <button
-            key={t}
-            type="button"
-            aria-pressed={tema === t}
-            onClick={() => escolherTema(t)}
-            className={`px-2.5 py-1 transition-colors ${
-              tema === t
-                ? 'bg-blue-600 text-white'
-                : tema === 'claro' ? 'text-slate-700 hover:bg-blue-50' : 'text-slate-300 hover:bg-slate-800'
-            }`}
-          >
-            {ROTULO_TEMA[t]}
-          </button>
-        ))}
-      </div>
-      <MapContainer center={center} zoom={12} maxZoom={18} style={{ height: '100%', width: '100%', backgroundColor: paleta.fundoDoContainer }}>
-        {/* Mesmo provedor de antes (Esri, sem chave): bases em cinza; o tom azul vem do CSS (index.css). */}
-        <TileLayer key={`base-${tema}`} attribution={ATRIBUICAO_ESRI} url={CAMADAS[tema].base} maxNativeZoom={16} maxZoom={18} />
-        <TileLayer key={`rotulos-${tema}`} url={CAMADAS[tema].rotulos} maxNativeZoom={16} maxZoom={18} />
+    <div className="mapa-escuro w-full h-[540px] rounded-xl overflow-hidden border border-slate-800 shadow-inner relative z-0">
+      <MapContainer center={center} zoom={12} maxZoom={18} style={{ height: '100%', width: '100%', backgroundColor: ESTILO.fundoDoContainer }}>
+        {/* Esri em cinza escuro, sem chave de API; o tom azul-marinho vem do CSS (index.css, .mapa-escuro). */}
+        <TileLayer attribution={ATRIBUICAO_ESRI} url={CAMADAS.base} maxNativeZoom={16} maxZoom={18} />
+        <TileLayer url={CAMADAS.rotulos} maxNativeZoom={16} maxZoom={18} />
 
         <AjustarZoom center={center} pontos={todosPontosZoom} />
 
@@ -306,7 +273,7 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
             pathOptions={{
               color: zona.cor,
               fillColor: zona.cor,
-              fillOpacity: zona.raio === 30000 ? paleta.zonaPreenchimento / 3 : paleta.zonaPreenchimento,
+              fillOpacity: zona.raio === 30000 ? ESTILO.zonaPreenchimento / 3 : ESTILO.zonaPreenchimento,
               weight: zona.raio === 30000 ? 2 : 2.5,
               dashArray: zona.raio === 30000 ? '8, 8' : '5, 5'
             }}
@@ -344,7 +311,7 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
         ))}
 
         {/* 2. Marcador da Loja Central / Hub com Popup Completo */}
-        <Marker position={center} icon={criarHubIcon(paleta)} zIndexOffset={1000}>
+        <Marker position={center} icon={hubIcon} zIndexOffset={1000}>
           <Popup>
             <div className="text-slate-900 font-sans p-1 min-w-[210px]">
               <span className="text-[10px] font-bold uppercase tracking-wider text-blue-600 block">
@@ -369,7 +336,7 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
             <Marker
               key={`city-${cIdx}`}
               position={[cLat, cLon]}
-              icon={createCityPinIcon(paleta)}
+              icon={createCityPinIcon()}
               zIndexOffset={50}
             >
               <Popup>
@@ -411,14 +378,14 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
             ? rota.geometria.filter(pt => Array.isArray(pt) && isCoordValid(Number(pt[0]), Number(pt[1])))
             : [center, ...listaParadas.map(p => [Number(p.lat), Number(p.lon)]).filter(pt => isCoordValid(pt[0], pt[1])), center];
 
-          const corRota = corDaRotaNoTema(rota.cor || '#3b82f6', tema);
+          const corRota = rota.cor || '#3b82f6';
           return (
             <React.Fragment key={`poly-${rota.id}`}>
-            {/* Contorno: separa a rota das ruas do mapa-base (claro no tema claro, escuro no escuro) */}
+            {/* Contorno escuro: separa a rota das ruas do mapa-base */}
             <Polyline
               positions={polylinePositions}
               interactive={false}
-              pathOptions={{ color: paleta.rotaContorno, weight: 9, opacity: paleta.rotaContornoOpacidade, lineCap: 'round', lineJoin: 'round' }}
+              pathOptions={{ color: ESTILO.rotaContorno, weight: 9, opacity: ESTILO.rotaContornoOpacidade, lineCap: 'round', lineJoin: 'round' }}
             />
             <Polyline
               positions={polylinePositions}
@@ -503,7 +470,7 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
             <Marker
               key={`stop-${p.id || pIdx}`}
               position={[p.latAjustada, p.lonAjustada]}
-              icon={createStopIcon(p.ordemNumero, p.rotaCor, p.geocode_status === 'ALERTA_APROXIMADO', paleta)}
+              icon={createStopIcon(p.ordemNumero, p.rotaCor, p.geocode_status === 'ALERTA_APROXIMADO')}
               zIndexOffset={300 + pIdx}
             >
               <Popup>

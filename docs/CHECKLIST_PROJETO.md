@@ -20,6 +20,7 @@ Marque `[x]` conforme for concluindo. Um prompt por vez. Depois de cada um: revi
 - [x] Etapa 2b — municípios, faixas com `ibge`, AC e DF gravados no Neon (`cep_prefixos` 800 linhas, `ibge_municipios` 5.571)
 - [x] **Etapa 2b concluída** — CEPs do Brasil inteiro (IBGE/CNEFE): 27 UFs, ~24,6 mil prefixos, ~4 MB no Neon; cobertura por prefixo com Total/Parcial validada no site; faixas manuais e fallback removidos
 - [x] Limpezas: requirements em UTF-8, senhas fora do código, código morto removido, CLAUDE.md
+- [x] Mapa com tema único escuro (azul-marinho), sem seletor Escuro/Claro (15/10/2026): O **mapa tem um único tema, escuro (azul-marinho)**, sem seletor Escuro/Claro (decisão de 15/10/2026: o tema Claro foi testado e ficou ruim, então foi removido, com a escolha guardada no navegador, a paleta e o filtro do Claro e o ajuste de cores de rota por tema). Esri em cinza escuro (base e rótulos), sem chave de API e com a atribuição; o tom azul-marinho vem de um filtro de CSS só nos blocos do mapa; as rotas usam as cores que vêm do servidor, que já contrastam com o fundo; o estilo fica em `frontend/src/services/estiloMapa.js`.
 
 ---
 

@@ -14,7 +14,7 @@ Contexto detalhado: `docs/MEMORIA_PROJETO_roteirizacao.md` (regras e decisões) 
 
 ## Stack
 
-- **Frontend:** React (Vite) + Tailwind + React-Leaflet, hospedado na Vercel.
+- **Frontend:** React (Vite) + Tailwind + React-Leaflet, hospedado na Vercel. **O mapa tem um único tema, escuro (azul-marinho)**: sem seletor Escuro/Claro (o Claro foi testado e removido em 15/10/2026); Esri em cinza escuro, sem chave de API e com atribuição, tom azul por filtro de CSS (`index.css`, `.mapa-escuro`) e estilo em `frontend/src/services/estiloMapa.js`.
 - **Backend:** FastAPI (Python), hospedado no Render (plano free). `backend/main.py` é o ponto de entrada.
 - **Banco:** PostgreSQL (SQLAlchemy) no Neon (gratuito; o do Render expirava). **Tabelas novas entram só por migration do Alembic** (`backend/alembic.ini`, `backend/migrations/`; rode de dentro de `backend/` com `python -m alembic upgrade head`; nunca `create_all` para tabela nova). O Alembic e os scripts de carga novos usam **asyncpg**, porque o `psycopg2` pode estar bloqueado pelo Windows (política de Controle de Aplicativo): não tente contornar o bloqueio. `DATABASE_URL` só pela variável de ambiente, nunca em arquivo. **Backup automático concluído e validado** (`.github/workflows/backup.yml`, semanal, criptografado com `gpg`, artifact de 30 dias; ver `docs/BACKUP.md`; a restauração completa em banco novo ainda não foi testada). A revisão `0003` descreve as tabelas antigas com `CREATE ... IF NOT EXISTS` e **já está aplicada no Neon** (`alembic current` = `0003`; comandos em `docs/MIGRATIONS.md`).
 - **Roteamento viário:** OSRM. **Solver VRP:** OR-Tools, síncrono dentro do FastAPI.

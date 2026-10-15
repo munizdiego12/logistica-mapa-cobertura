@@ -1138,7 +1138,6 @@ export default function App() {
                   ? dadosCoberturaCeps.hub
                   : (lojaHub ? { lat: lojaHub.lat, lon: lojaHub.lng, rua: lojaHub.nome, numero: '' } : null))}
               rotas={resultado ? resultado.rotas : []}
-              dadosCeps={dadosCoberturaCeps}
               lojas={lojas}
               lojaSelecionadaId={lojaHubId}
               onEscolherLoja={escolherLoja}

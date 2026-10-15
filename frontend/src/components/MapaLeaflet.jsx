@@ -73,34 +73,6 @@ const createStopIcon = (num, color, aproximado) => {
   });
 };
 
-// Ícone para os pontos de amostragem de CEP do Haversine
-const createCityPinIcon = () => {
-  return L.divIcon({
-    className: 'custom-city-pin',
-    html: `
-      <div style="
-        background-color: ${ESTILO.pinCep.fundo};
-        color: #ffffff;
-        width: 18px;
-        height: 18px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 8px;
-        border: 1.5px solid ${ESTILO.pinCep.borda};
-        box-shadow: 0 2px 6px ${ESTILO.paradaSombra};
-        cursor: pointer;
-      ">
-        📍
-      </div>
-    `,
-    iconSize: [18, 18],
-    iconAnchor: [9, 9],
-    popupAnchor: [0, -9]
-  });
-};
-
 // Ícone estilizado do Hub Central / Loja de Origem
 const hubIcon = L.divIcon({
   className: 'custom-hub-marker',
@@ -155,16 +127,18 @@ const lojaHubIcon = L.divIcon({
 });
 
 // Componente para reenquadrar o zoom da tela. A chave evita reenquadrar (e desfazer o zoom do operador) a cada render.
-function AjustarZoom({ center, pontos, zoomSemHub = 12 }) {
+function AjustarZoom({ center, pontos, zoomSemHub = 12, raioM = null }) {
   const map = useMap();
-  const chave = JSON.stringify({ center, pontos, zoomSemHub });
+  const chave = JSON.stringify({ center, pontos, zoomSemHub, raioM });
   useEffect(() => {
     try {
       const pontosValidos = (pontos || []).filter(p => Array.isArray(p) && isCoordValid(p[0], p[1]));
       if (pontosValidos.length > 1) {
         map.fitBounds(pontosValidos, { padding: [55, 55], maxZoom: 15 });
       } else if (center && isCoordValid(center[0], center[1])) {
-        map.setView(center, zoomSemHub);
+        // Só o hub: enquadra o raio escolhido (os pontos de CEP não são mais desenhados, então não entram no enquadramento)
+        if (raioM) map.fitBounds(L.latLng(center[0], center[1]).toBounds(raioM * 2), { padding: [20, 20] });
+        else map.setView(center, zoomSemHub);
       }
     } catch (e) {
       if (center && isCoordValid(center[0], center[1])) {
@@ -176,7 +150,7 @@ function AjustarZoom({ center, pontos, zoomSemHub = 12 }) {
   return null;
 }
 
-export default function MapaLeaflet({ origem, rotas, dadosCeps = null, lojas = [], lojaSelecionadaId = null, onEscolherLoja = null, raioKm = 30 }) {
+export default function MapaLeaflet({ origem, rotas, lojas = [], lojaSelecionadaId = null, onEscolherLoja = null, raioKm = 30 }) {
   const hubLat = origem ? Number(origem.lat) : NaN;
   const hubLon = origem ? Number(origem.lon) : NaN;
 
@@ -185,8 +159,6 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null, lojas = [
   const lojasNoMapa = (Array.isArray(lojas) ? lojas : []).filter((l) => isCoordValid(Number(l.lat), Number(l.lng)));
   const center = temHub ? [hubLat, hubLon] : CENTRO_DO_BRASIL;
   const rotasArray = Array.isArray(rotas) ? rotas : [];
-  const temRotasAtivas = rotasArray.length > 0;
-  const cidadesCobertas = (dadosCeps && Array.isArray(dadosCeps.pontos_cobertos)) ? dadosCeps.pontos_cobertos : [];
 
   // 1. Processamento de todas as paradas com deslocamento anti-sobreposição
   const coordsContador = {};
@@ -228,16 +200,6 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null, lojas = [
   const todosPontosZoom = temHub
     ? [center, ...todasParadasProcessadas.map(p => [p.latAjustada, p.lonAjustada])]
     : lojasNoMapa.map((l) => [Number(l.lat), Number(l.lng)]);
-  if (temHub && !temRotasAtivas) {
-    cidadesCobertas.forEach(c => {
-      const cLat = Number(c.lat);
-      const cLon = Number(c.lon);
-      if (isCoordValid(cLat, cLon) && Number(c.distancia_km) > 0) {
-        todosPontosZoom.push([cLat, cLon]);
-      }
-    });
-  }
-
   // Zonas concêntricas de raio completas (Ordenadas do maior para o menor para manter a sobreposição correta)
   const zonasCobertura = [
     {
@@ -302,7 +264,7 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null, lojas = [
         <TileLayer attribution={ATRIBUICAO_ESRI} url={CAMADAS.base} maxNativeZoom={16} maxZoom={18} />
         <TileLayer url={CAMADAS.rotulos} maxNativeZoom={16} maxZoom={18} />
 
-        <AjustarZoom center={center} pontos={todosPontosZoom} zoomSemHub={temHub ? 12 : 4} />
+        <AjustarZoom center={center} pontos={todosPontosZoom} zoomSemHub={temHub ? 12 : 4} raioM={temHub && Number.isFinite(Number(raioKm)) && Number(raioKm) > 0 ? Number(raioKm) * 1000 : null} />
 
         {/* 1. Isolinhas Concêntricas de Raio com Popups Completos */}
         {temHub && zonasDoMapa.map((zona, idx) => (
@@ -387,51 +349,6 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null, lojas = [
                   </div>
                 </Tooltip>
               )}
-            </Marker>
-          );
-        })}
-
-        {/* 3. Marcadores de Amostragem de CEP (Exibidos na consulta de raio) */}
-        {!temRotasAtivas && cidadesCobertas.map((c, cIdx) => {
-          const cLat = Number(c.lat);
-          const cLon = Number(c.lon);
-          if (Number(c.distancia_km) === 0 || !isCoordValid(cLat, cLon)) return null;
-
-          return (
-            <Marker
-              key={`city-${cIdx}`}
-              position={[cLat, cLon]}
-              icon={createCityPinIcon()}
-              zIndexOffset={50}
-            >
-              <Popup>
-                <div className="text-slate-900 font-sans p-1 min-w-[210px]">
-                  <div className="flex items-center justify-between pb-1 border-b border-slate-200">
-                    <span className="text-xs font-bold text-emerald-700">{c.bairro || c.cidade}</span>
-                    <span className="text-[10px] font-mono text-slate-500">{c.distancia_km} km</span>
-                  </div>
-                  <div className="mt-1.5 space-y-1 text-[11px]">
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Faixa de CEP:</span>
-                      <span className="font-mono font-semibold text-slate-800">{c.cep_inicial} a {c.cep_final}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Prazo de Entrega:</span>
-                      <span className="font-bold text-emerald-600">{c.dias_sla} dia(s)</span>
-                    </div>
-                    {c.cobertura && (
-                      <div className="flex justify-between">
-                        <span className="text-slate-500">Cobertura:</span>
-                        <span className={`font-bold ${c.cobertura === 'Total' ? 'text-emerald-600' : 'text-amber-600'}`}>{c.cobertura}</span>
-                      </div>
-                    )}
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">IBGE:</span>
-                      <span className="font-mono text-slate-700">{c.ibge}</span>
-                    </div>
-                  </div>
-                </div>
-              </Popup>
             </Marker>
           );
         })}

@@ -58,7 +58,6 @@ test('o contorno das rotas, a borda das paradas e o hub se destacam do mapa', ()
   assert.ok(contraste(ESTILO.paradaBorda, FUNDO_APROXIMADO) >= 7, 'borda');
   assert.ok(contraste(ESTILO.hub.fundo, FUNDO_APROXIMADO) >= 3, 'hub');
   assert.ok(contraste(ESTILO.hub.icone, ESTILO.hub.fundo) >= 4.5, 'ícone do hub');
-  assert.ok(contraste(ESTILO.pinCep.fundo, FUNDO_APROXIMADO) >= 2.2, 'pin de CEP');
 });
 
 test('as lojas do mapa permanente e a borda verde do hub escolhido se destacam do mapa', () => {
@@ -73,4 +72,10 @@ test('o mapa mostra as lojas com hover (nome, endereço e UF) e clique para esco
   assert.match(MAPA, /linhasDoHover/);
   assert.match(MAPA, /onEscolherLoja/);
   assert.doesNotMatch(MAPA, /filial/i);
+});
+
+test('o mapa não desenha um marcador por faixa de CEP (isso travava o site) e não recebe a lista de faixas', () => {
+  assert.doesNotMatch(MAPA, /cidadesCobertas|createCityPinIcon|pontos_cobertos|dadosCeps|pinCep/);
+  assert.equal('pinCep' in ESTILO, false);
+  assert.doesNotMatch(MAPA, /Faixa de CEP:/); // o popup das faixas deixou de existir junto com os marcadores
 });

@@ -68,3 +68,96 @@ class FakePool:
                 return False
 
         return _Contexto()
+
+
+# ----------------------------------------------------------------------------------------------------------
+# Banco SQLite em memória com a interface da conexão asyncpg (fetch/fetchrow/fetchval/transaction) e as tabelas
+# das migrations 0004 a 0006. Testa o SQL de verdade (contagens, upsert, status), sem Postgres.
+# ----------------------------------------------------------------------------------------------------------
+import importlib.util
+import re
+import sqlite3
+from datetime import date, datetime
+from decimal import Decimal
+from pathlib import Path
+
+_VERSOES = Path(__file__).resolve().parents[1] / "migrations" / "versions"
+
+
+def _migracao(arquivo: str):
+    spec = importlib.util.spec_from_file_location(f"migracao_{arquivo}", _VERSOES / arquivo)
+    modulo = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(modulo)
+    return modulo
+
+
+class ConexaoSqlite:
+    def __init__(self):
+        self.db = sqlite3.connect(":memory:", isolation_level=None, check_same_thread=False)  # o TestClient roda a rota em outra thread
+        self.db.row_factory = sqlite3.Row
+        self.db.execute("PRAGMA foreign_keys = ON")
+        self.sqls = []
+
+    @staticmethod
+    def _sql(sql):
+        return re.sub(r"\$(\d+)(::\w+)?", r"?\1", sql)
+
+    @staticmethod
+    def _args(args):
+        convertidos = []
+        for a in args:
+            if isinstance(a, (date, datetime)):
+                a = a.isoformat()
+            elif isinstance(a, Decimal):
+                a = float(a)
+            convertidos.append(a)
+        return convertidos
+
+    def _rodar(self, sql, args):
+        self.sqls.append(sql)
+        return self.db.execute(self._sql(sql), self._args(args))
+
+    async def fetch(self, sql, *args):
+        return [dict(l) for l in self._rodar(sql, args).fetchall()]
+
+    async def fetchrow(self, sql, *args):
+        linha = self._rodar(sql, args).fetchone()
+        return None if linha is None else dict(linha)
+
+    async def fetchval(self, sql, *args):
+        linha = self._rodar(sql, args).fetchone()
+        return None if linha is None else linha[0]
+
+    async def execute(self, sql, *args):
+        self._rodar(sql, args)
+
+    def transaction(self):
+        conn = self
+
+        class _Transacao:
+            async def __aenter__(self):
+                conn.db.execute("BEGIN")
+
+            async def __aexit__(self, *erro):
+                conn.db.execute("COMMIT" if erro[0] is None else "ROLLBACK")
+
+        return _Transacao()
+
+    def inserir_motorista(self, nome, tipo="Carro de passeio", ativo=True):
+        cursor = self.db.execute("INSERT INTO motoristas (nome, tipo_veiculo, ativo) VALUES (?, ?, ?)", (nome, tipo, 1 if ativo else 0))
+        return cursor.lastrowid
+
+
+def criar_banco_sqlite():
+    """Cria o banco em memória aplicando as migrations 0004, 0005 e 0006 (SQL traduzido do Postgres para o SQLite)."""
+    conn = ConexaoSqlite()
+    for arquivo in ("0004_tipos_veiculo_motoristas.py", "0005_motoristas_valor_rota.py", "0006_rotas_realizadas.py"):
+        for comando in _migracao(arquivo).COMANDOS:
+            colunas = {l[1] for l in conn.db.execute("PRAGMA table_info(motoristas)")}
+            if "ADD COLUMN IF NOT EXISTS valor_rota" in comando and "valor_rota" in colunas:
+                continue
+            comando = (comando.replace("SERIAL PRIMARY KEY", "INTEGER PRIMARY KEY").replace("TIMESTAMPTZ", "TIMESTAMP")
+                       .replace("NOW()", "CURRENT_TIMESTAMP").replace("length(btrim(nome))", "length(trim(nome))")
+                       .replace("ADD COLUMN IF NOT EXISTS", "ADD COLUMN"))
+            conn.db.execute(comando)
+    return conn

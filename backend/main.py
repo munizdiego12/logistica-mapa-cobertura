@@ -22,6 +22,7 @@ import database
 import cobertura
 import item_pesos
 import frota
+import rotas_realizadas
 from logistica.costs import calcular_custo_rota
 from database import get_db, Operador, init_db
 from config import OPERATOR_INVITE_CODE
@@ -617,6 +618,8 @@ class OtimizarRequest(BaseModel):
     # Valor por rota informado pelo operador, por tipo de veículo ({"Carro de passeio": "130,50"}). Ausente ou vazio:
     # vale o valor base do tipo. Vale para todas as rotas daquele tipo nesta execução.
     valores_por_rota: Optional[Dict[str, Optional[Union[float, str]]]] = None
+    # Ids dos motoristas escolhidos no painel (só os marcados entram na roteirização; precisam estar ativos).
+    motorista_ids: Optional[List[Any]] = None
     pedidos: List[Dict[str, Any]]
 
 @app.get("/api/modais", dependencies=[Depends(obter_operador_atual)])
@@ -847,7 +850,7 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar:
                 titulo_viagem = f"{mot_info.motorista} • Viagem {num_viagem}" if total_viagens_por_motorista[mot_info.id] > 1 else mot_info.motorista
 
                 rotas_resultado.append({
-                    "id": c_idx + 1, "motorista": titulo_viagem, "motorista_base": mot_info.motorista,
+                    "id": c_idx + 1, "motorista": titulo_viagem, "motorista_base": mot_info.motorista, "motorista_id": mot_info.id,
                     "viagem_num": num_viagem, "modal": mot_info.modal, "cor": CORES_ROTAS[c_idx % len(CORES_ROTAS)],
                     "qtd_pedidos": len(pts_rota), "km_total": dist_km,
                     "tempo_formatado": f"{tempo_min // 60}h {tempo_min % 60}m" if tempo_min >= 60 else f"{tempo_min} min",
@@ -869,7 +872,9 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar:
 
         total_p = len(pedidos_geo)
         kpis = {
-            "total_pedidos": total_p, "total_veiculos": len(frota_usar),
+            "total_pedidos": total_p, "total_veiculos": len({r["motorista_id"] for r in rotas_resultado}),
+            # Motoristas realmente usados nas rotas (podem ser menos que os escolhidos se não houve pedido para todos).
+            "total_motoristas": len({r["motorista_id"] for r in rotas_resultado}),
             "total_rotas_viagens": len(rotas_resultado), "km_total": round(km_total_geral, 2),
             "custo_total": round(custo_total_geral, 2),
             "custo_medio_pedido": round(custo_total_geral / max(total_p, 1), 2),
@@ -880,6 +885,8 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar:
         job["status"] = "concluido"
         job["etapa"] = "Concluído."
         job["resultado"] = {
+            "execucao_id": job_id,  # identifica esta roteirização para "Confirmar rotas"
+            "loja_hub": ", ".join(p for p in (str(req.origem_rua or "").strip(), str(req.origem_num or "").strip()) if p) + (f" - {req.origem_bairro}" if req.origem_bairro else ""),
             "origem": origem_dict,
             "rotas": rotas_resultado,
             "kpis": kpis,
@@ -900,9 +907,7 @@ async def iniciar_otimizacao(req: "OtimizarRequest"):
         valores_informados = frota.interpretar_valores_informados(req.valores_por_rota)
     except ValueError as erro:
         raise HTTPException(status_code=422, detail=str(erro))
-    motoristas = await _com_conexao_frota(frota.frota_ativa)
-    if not motoristas:
-        raise HTTPException(status_code=422, detail=frota.MSG_SEM_MOTORISTAS)
+    motoristas = await _com_conexao_frota(lambda c: frota.selecionar_motoristas(c, req.motorista_ids))
     frota_usar = [
         MotoristaItem(id=m["id"], motorista=m["nome"], modal=m["tipo_veiculo"], custo_rota=m["custo_rota"], valor_motorista=m.get("valor_rota"))
         for m in motoristas
@@ -1156,6 +1161,47 @@ async def atualizar_motorista(id_motorista: int, dados: AtualizarMotoristaReques
     if motorista is None:
         raise HTTPException(status_code=404, detail="Motorista não encontrado.")
     return motorista
+
+
+# ---------------------------------------------------------------------------------------------
+# Rotas realizadas: confirmar o resultado, desfazer e a contagem do dia (Etapa 5b)
+# ---------------------------------------------------------------------------------------------
+class ConfirmarRotasRequest(BaseModel):
+    execucao_id: str
+    turno: Optional[str] = None
+
+
+@app.get("/api/rotas-realizadas/hoje")
+async def rotas_realizadas_hoje(operador: Operador = Depends(obter_operador_atual)):
+    """Rotas confirmadas hoje (dia de Brasília) por motorista: {"data": "2026-10-15", "por_motorista": {"3": 2}}."""
+    dia = rotas_realizadas.hoje_em_brasilia()
+    contagem = await _com_conexao_frota(lambda c: rotas_realizadas.contagem_do_dia(c, dia))
+    return {"data": dia.isoformat(), "por_motorista": {str(k): v for k, v in contagem.items()}}
+
+
+@app.post("/api/rotas-realizadas/confirmar")
+async def confirmar_rotas(dados: ConfirmarRotasRequest, operador: Operador = Depends(obter_operador_atual)):
+    """Grava uma rota por viagem do resultado, com o motorista de cada rota. Confirmar de novo não duplica."""
+    job = JOBS.get(dados.execucao_id)
+    if not job or job.get("status") != "concluido" or not job.get("resultado"):
+        raise HTTPException(status_code=404, detail="Este resultado não está mais disponível. Gere as rotas de novo.")
+    resultado = job["resultado"]
+    rotas = [
+        {"numero_rota": r["id"], "motorista_id": r["motorista_id"], "qtd_pedidos": r.get("qtd_pedidos", 0), "distancia_km": r.get("km_total", 0)}
+        for r in resultado.get("rotas", []) if r.get("motorista_id") is not None
+    ]
+    turno = (dados.turno or "").strip()[:20] or None
+    dia = rotas_realizadas.hoje_em_brasilia()
+    return await _com_conexao_frota(
+        lambda c: rotas_realizadas.confirmar(c, dados.execucao_id, rotas, dia, resultado.get("loja_hub"), turno, _rotulo_do_operador(operador))
+    )
+
+
+@app.post("/api/rotas-realizadas/{execucao_id}/desfazer")
+async def desfazer_confirmacao(execucao_id: str, operador: Operador = Depends(obter_operador_atual)):
+    """Marca as rotas confirmadas desta roteirização como canceladas (não apaga); elas deixam de contar."""
+    dia = rotas_realizadas.hoje_em_brasilia()
+    return await _com_conexao_frota(lambda c: rotas_realizadas.desfazer(c, execucao_id, dia))
 
 
 class RegistroOperadorSchema(BaseModel):

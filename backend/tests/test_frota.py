@@ -267,22 +267,22 @@ def test_frota_ativa_traz_custo_e_peso_de_referencia_do_tipo():
     assert "WHERE m.ativo" in conn.chamadas[0][1]
 
 
-def test_otimizar_sem_motoristas_cadastrados_pede_o_cadastro_sem_erro_tecnico(api, monkeypatch):
+def test_otimizar_sem_motorista_marcado_pede_a_escolha_sem_erro_tecnico(api, monkeypatch):
     cliente, conn = api
-    conn.respostas = [[]]  # nenhum motorista ativo
     chamado = []
     monkeypatch.setattr(main, "_processar_otimizacao", lambda *a, **k: chamado.append(a))
-    corpo = {"origem_rua": "Av Paulista", "origem_num": "1", "pedidos": [{"id": 1}]}
-    r = cliente.post("/api/otimizar", json=corpo)
-    assert r.status_code == 422
-    assert r.json()["detail"] == frota.MSG_SEM_MOTORISTAS and "Cadastre" in r.json()["detail"]
+    for extra in ({}, {"motorista_ids": []}, {"motorista_ids": None}):
+        corpo = {"origem_rua": "Av Paulista", "origem_num": "1", "pedidos": [{"id": 1}], **extra}
+        r = cliente.post("/api/otimizar", json=corpo)
+        assert r.status_code == 422
+        assert r.json()["detail"] == frota.MSG_ESCOLHA_UM_MOTORISTA and "Marque pelo menos um motorista" in r.json()["detail"]
     assert chamado == []
     assert not re.search(r"traceback|exception|null|none", r.json()["detail"], re.IGNORECASE)
 
 
 def test_otimizar_usa_os_motoristas_ativos_e_ignora_frota_e_custos_do_cliente(api, monkeypatch):
     cliente, conn = api
-    conn.respostas = [[{"id": 5, "nome": "Ana", "tipo_veiculo": "Fiorino/Utilitário", "custo_rota": Decimal("260.00"), "peso_referencia_kg": None}]]
+    conn.respostas = [[{"id": 5, "nome": "Ana", "ativo": True, "tipo_veiculo": "Fiorino/Utilitário", "valor_rota": None, "custo_rota": Decimal("260.00"), "peso_referencia_kg": None}]]
     capturado = {}
 
     async def falso(job_id, req, frota_usar, valores_informados=None):
@@ -291,7 +291,7 @@ def test_otimizar_usa_os_motoristas_ativos_e_ignora_frota_e_custos_do_cliente(ap
         capturado["valores"] = valores_informados
 
     monkeypatch.setattr(main, "_processar_otimizacao", falso)
-    corpo = {"origem_rua": "Av Paulista", "origem_num": "1", "pedidos": [{"id": 1}],
+    corpo = {"origem_rua": "Av Paulista", "origem_num": "1", "pedidos": [{"id": 1}], "motorista_ids": [5],
              "frota": [{"id": 1, "motorista": "Motorista 01", "modal": "Carro de Passeio"}],  # cliente antigo: ignorado
              "preco_gasolina": 9.9, "custo_hora": 99}
     r = cliente.post("/api/otimizar", json=corpo)
@@ -416,14 +416,14 @@ def test_valores_informados_por_tipo_sao_independentes():
 
 def test_otimizar_repassa_os_valores_informados_e_ignora_os_vazios(api, monkeypatch):
     cliente, conn = api
-    conn.respostas = [[{"id": 5, "nome": "Ana", "tipo_veiculo": "Fiorino/Utilitário", "custo_rota": Decimal("260.00"), "peso_referencia_kg": None}]]
+    conn.respostas = [[{"id": 5, "nome": "Ana", "ativo": True, "tipo_veiculo": "Fiorino/Utilitário", "valor_rota": None, "custo_rota": Decimal("260.00"), "peso_referencia_kg": None}]]
     capturado = {}
 
     async def falso(job_id, req, frota_usar, valores_informados=None):
         capturado["valores"] = valores_informados
 
     monkeypatch.setattr(main, "_processar_otimizacao", falso)
-    corpo = {"origem_rua": "Av Paulista", "origem_num": "1", "pedidos": [{"id": 1}],
+    corpo = {"origem_rua": "Av Paulista", "origem_num": "1", "pedidos": [{"id": 1}], "motorista_ids": [5],
              "valores_por_rota": {"Carro de passeio": "", "Fiorino/Utilitário": "300,50"}}
     assert cliente.post("/api/otimizar", json=corpo).status_code == 200
     assert capturado["valores"] == {"fiorino/utilitário": Decimal("300.50")}
@@ -431,14 +431,14 @@ def test_otimizar_repassa_os_valores_informados_e_ignora_os_vazios(api, monkeypa
 
 def test_otimizar_sem_o_campo_nao_informa_nada(api, monkeypatch):
     cliente, conn = api
-    conn.respostas = [[{"id": 5, "nome": "Ana", "tipo_veiculo": "Carro de passeio", "custo_rota": Decimal("130.00"), "peso_referencia_kg": None}]]
+    conn.respostas = [[{"id": 5, "nome": "Ana", "ativo": True, "tipo_veiculo": "Carro de passeio", "valor_rota": None, "custo_rota": Decimal("130.00"), "peso_referencia_kg": None}]]
     capturado = {}
 
     async def falso(job_id, req, frota_usar, valores_informados=None):
         capturado["valores"] = valores_informados
 
     monkeypatch.setattr(main, "_processar_otimizacao", falso)
-    assert cliente.post("/api/otimizar", json={"origem_rua": "A", "origem_num": "1", "pedidos": [{"id": 1}]}).status_code == 200
+    assert cliente.post("/api/otimizar", json={"origem_rua": "A", "origem_num": "1", "pedidos": [{"id": 1}], "motorista_ids": [5]}).status_code == 200
     assert capturado["valores"] == {}
 
 
@@ -602,15 +602,15 @@ def test_editar_sem_mandar_o_campo_mantem_o_valor_proprio(api):
 
 def test_otimizar_leva_o_valor_proprio_do_motorista_para_o_calculo(api, monkeypatch):
     cliente, conn = api
-    conn.respostas = [[{"id": 1, "nome": "João", "tipo_veiculo": "Carro de passeio", "valor_rota": Decimal("150.00"), "custo_rota": Decimal("130.00"), "peso_referencia_kg": None},
-                       {"id": 2, "nome": "Ana", "tipo_veiculo": "Fiorino/Utilitário", "valor_rota": None, "custo_rota": Decimal("260.00"), "peso_referencia_kg": None}]]
+    conn.respostas = [[{"id": 1, "nome": "João", "ativo": True, "tipo_veiculo": "Carro de passeio", "valor_rota": Decimal("150.00"), "custo_rota": Decimal("130.00"), "peso_referencia_kg": None},
+                       {"id": 2, "nome": "Ana", "ativo": True, "tipo_veiculo": "Fiorino/Utilitário", "valor_rota": None, "custo_rota": Decimal("260.00"), "peso_referencia_kg": None}]]
     capturado = {}
 
     async def falso(job_id, req, frota_usar, valores_informados=None):
         capturado["frota"] = frota_usar
 
     monkeypatch.setattr(main, "_processar_otimizacao", falso)
-    assert cliente.post("/api/otimizar", json={"origem_rua": "A", "origem_num": "1", "pedidos": [{"id": 1}]}).status_code == 200
+    assert cliente.post("/api/otimizar", json={"origem_rua": "A", "origem_num": "1", "pedidos": [{"id": 1}], "motorista_ids": [1, 2]}).status_code == 200
     assert [(m.motorista, m.custo_rota, m.valor_motorista) for m in capturado["frota"]] == [("João", 130.0, 150.0), ("Ana", 260.0, None)]
 
 

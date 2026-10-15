@@ -1,9 +1,8 @@
-// Cadastro de motoristas e tipos de veículo (valor base por rota e peso de referência).
+// Cadastro de motoristas e tipos de veículo (diária base e peso de referência).
 // Qualquer operador logado edita; o sistema guarda quem alterou e quando. Motorista não é apagado: é desativado.
 // O peso de referência é só um guia para o montador de rotas: não é limite e nunca bloqueia nem avisa nada.
 import { useEffect, useState } from 'react';
 import { X, Loader2, Save, AlertCircle, CheckCircle2, Users, Truck, Plus, Power } from 'lucide-react';
-import { validarValorRota, formatarReais } from '../services/valorRota';
 
 const formatarNumero = (n, max = 3) =>
   n === null || n === undefined ? '' : Number(n).toLocaleString('pt-BR', { maximumFractionDigits: max });
@@ -39,7 +38,7 @@ function LinhaTipo({ tipo, onSalvar }) {
 
   const salvar = async () => {
     if (!EH_NUMERO.test(custo.trim())) {
-      setErro('Digite o valor base da rota em reais, por exemplo 130 ou 130,50.');
+      setErro('Digite o valor da diária em reais, por exemplo 260 ou 260,50.');
       return;
     }
     if (peso.trim() !== '' && (!EH_NUMERO.test(peso.trim()) || Number(peso.trim().replace(',', '.')) <= 0)) {
@@ -58,17 +57,17 @@ function LinhaTipo({ tipo, onSalvar }) {
       <p className="text-sm font-semibold text-slate-100">{tipo.nome}</p>
       <div className="flex flex-wrap items-end gap-3">
         <label className="text-[11px] text-slate-400 space-y-1">
-          <span className="block">Valor base por rota (R$)</span>
+          <span className="block">Diária base (R$)</span>
           <input
             type="text"
             inputMode="decimal"
             value={custo}
             onChange={(e) => setCusto(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && mudou) salvar(); }}
-            aria-label={`Valor base por rota de ${tipo.nome}`}
+            aria-label={`Diária base de ${tipo.nome}`}
             className="w-28 px-2 py-1 rounded bg-slate-950 border border-slate-700 text-slate-100 text-sm font-mono focus:outline-none focus:border-blue-500"
           />
-          <span className="block text-[10px] text-slate-500">Usado quando o campo de valor fica vazio na roteirização</span>
+          <span className="block text-[10px] text-slate-500">Valor da diária do motorista</span>
         </label>
         <label className="text-[11px] text-slate-400 space-y-1">
           <span className="block">Peso de referência (kg)</span>
@@ -100,27 +99,20 @@ function LinhaTipo({ tipo, onSalvar }) {
 function LinhaMotorista({ motorista, tipos, onSalvar }) {
   const [nome, setNome] = useState(motorista.nome);
   const [tipoVeiculo, setTipoVeiculo] = useState(motorista.tipo_veiculo);
-  const [valor, setValor] = useState(formatarNumero(motorista.valor_rota, 2));
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState('');
 
-  const valorBase = tipos.find((t) => t.nome === tipoVeiculo)?.custo_rota;
-  const mudou = nome.trim() !== motorista.nome || tipoVeiculo !== motorista.tipo_veiculo
-    || valor.trim() !== formatarNumero(motorista.valor_rota, 2);
+  const mudou = nome.trim() !== motorista.nome || tipoVeiculo !== motorista.tipo_veiculo;
 
   const gravar = async (ativo) => {
     if (nome.trim() === '') {
       setErro('Informe o nome do motorista.');
       return;
     }
-    const conferencia = validarValorRota(valor);
-    if (!conferencia.ok) {
-      setErro(conferencia.mensagem);
-      return;
-    }
     setErro('');
     setSalvando(true);
-    const mensagem = await onSalvar(motorista, { nome: nome.trim(), tipo_veiculo: tipoVeiculo, ativo, valor_rota: valor.trim() === '' ? null : valor.trim() });
+    // Não manda valor_rota: o valor próprio (coluna que fica no banco, sem uso por enquanto) não é mexido por esta tela.
+    const mensagem = await onSalvar(motorista, { nome: nome.trim(), tipo_veiculo: tipoVeiculo, ativo });
     setSalvando(false);
     if (mensagem) setErro(mensagem);
   };
@@ -170,24 +162,6 @@ function LinhaMotorista({ motorista, tipos, onSalvar }) {
         </button>
         {!motorista.ativo && <span className="text-[10px] uppercase tracking-wider text-slate-500">Desativado</span>}
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <label className="flex items-center gap-1.5 text-[11px] text-slate-400">
-          Valor próprio por rota (opcional)
-          <input
-            type="text"
-            inputMode="decimal"
-            value={valor}
-            onChange={(e) => setValor(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && mudou) gravar(motorista.ativo); }}
-            placeholder="Vazio usa o valor base"
-            aria-label={`Valor próprio por rota de ${motorista.nome}`}
-            className="w-40 px-2 py-1 rounded bg-slate-950 border border-slate-700 text-slate-100 text-sm font-mono placeholder:text-slate-600 focus:outline-none focus:border-blue-500"
-          />
-        </label>
-        {valorBase !== undefined && (
-          <span className="text-[11px] text-slate-500">Valor base do tipo: <span className="font-mono text-slate-300">{formatarReais(valorBase)}</span></span>
-        )}
-      </div>
       {erro && <p className="flex items-center gap-1 text-[11px] text-amber-300"><AlertCircle className="w-3 h-3" /> {erro}</p>}
       {quemAlterou(motorista) && <p className="text-[10px] text-slate-500">{quemAlterou(motorista)}</p>}
     </div>
@@ -202,7 +176,6 @@ export default function Motoristas({ api, onFechar, onMudou }) {
   const [aviso, setAviso] = useState('');
   const [novoNome, setNovoNome] = useState('');
   const [novoTipo, setNovoTipo] = useState('');
-  const [novoValor, setNovoValor] = useState('');
   const [criando, setCriando] = useState(false);
   const [erroNovo, setErroNovo] = useState('');
 
@@ -258,18 +231,12 @@ export default function Motoristas({ api, onFechar, onMudou }) {
       setErroNovo('Informe o nome do motorista.');
       return;
     }
-    const conferencia = validarValorRota(novoValor);
-    if (!conferencia.ok) {
-      setErroNovo(conferencia.mensagem);
-      return;
-    }
     setErroNovo('');
     setCriando(true);
     try {
-      const { data } = await api.post('/motoristas', { nome: novoNome.trim(), tipo_veiculo: novoTipo, valor_rota: novoValor.trim() === '' ? null : novoValor.trim() });
+      const { data } = await api.post('/motoristas', { nome: novoNome.trim(), tipo_veiculo: novoTipo });
       setMotoristas((atuais) => [...atuais, data]);
       setNovoNome('');
-      setNovoValor('');
       onMudou?.();
       avisar(`${data.nome} cadastrado.`);
     } catch (err) {
@@ -297,8 +264,8 @@ export default function Motoristas({ api, onFechar, onMudou }) {
 
         <div className="px-5 py-4 space-y-5">
           <p className="text-[11px] text-slate-400 leading-snug">
-            Os motoristas ativos são os que entram nas rotas. Qualquer operador pode editar; fica registrado quem alterou e quando.
-            O valor base por rota é o de cada tipo de veículo. Cada motorista pode ter um valor próprio (opcional; vazio usa o valor base, e pode ser trocado quando ele mudar de loja). Na roteirização vale, do mais específico ao mais geral: o valor digitado na tela, o valor próprio do motorista e o valor base. O peso de referência é opcional e é só um guia para montar as rotas:
+            Só os motoristas ativos aparecem na escolha da roteirização (lá você marca quem entra nas rotas). Qualquer operador pode editar; fica registrado quem alterou e quando.
+            A diária base é o valor da diária do motorista, definido por tipo de veículo (por enquanto só cadastro: o pagamento ainda não é calculado). O peso de referência é opcional e é só um guia para montar as rotas: não é um limite e o sistema nunca bloqueia nem avisa por causa dele.
             não é um limite e o sistema nunca bloqueia nem avisa por causa dele.
           </p>
 
@@ -347,16 +314,6 @@ export default function Motoristas({ api, onFechar, onMudou }) {
                     >
                       {tipos.map((t) => <option key={t.id} value={t.nome}>{t.nome}</option>)}
                     </select>
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      value={novoValor}
-                      onChange={(e) => setNovoValor(e.target.value)}
-                      placeholder="Valor próprio (opcional)"
-                      aria-label="Valor próprio por rota do novo motorista (opcional)"
-                      title="Vazio usa o valor base"
-                      className="w-44 px-2 py-1.5 rounded bg-slate-950 border border-slate-700 text-slate-100 text-sm font-mono placeholder:text-slate-600 focus:outline-none focus:border-blue-500"
-                    />
                     <button
                       type="submit"
                       disabled={criando}

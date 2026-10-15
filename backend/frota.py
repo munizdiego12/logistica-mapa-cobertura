@@ -17,6 +17,8 @@ TAMANHO_MAXIMO_NOME = 120
 MSG_NOME_VAZIO = "Informe o nome do motorista."
 MSG_NOME_GRANDE = f"O nome do motorista pode ter até {TAMANHO_MAXIMO_NOME} letras."
 MSG_TIPO_INEXISTENTE = "Escolha um tipo de veículo da lista."
+MSG_ESCOLHA_UM_MOTORISTA = "Marque pelo menos um motorista para gerar as rotas."
+MSG_MOTORISTA_INEXISTENTE = "Um dos motoristas escolhidos não está mais cadastrado. Atualize a lista e escolha de novo."
 MSG_SEM_MOTORISTAS = (
     "Não há motoristas cadastrados. Cadastre pelo menos um motorista na tela \"Motoristas e veículos\" "
     "antes de gerar as rotas."
@@ -249,3 +251,40 @@ async def frota_ativa(conn) -> list:
          "peso_referencia_kg": None if l["peso_referencia_kg"] is None else float(l["peso_referencia_kg"])}
         for l in linhas
     ]
+
+
+async def selecionar_motoristas(conn, ids) -> list:
+    """
+    Motoristas escolhidos para a roteirização (na ordem escolhida, sem repetir), com o tipo de veículo e o valor base.
+    ValueError em linguagem do operador se não escolheu nenhum, se algum não existe ou se algum está desativado.
+    """
+    pedidos = []
+    for bruto in ids or []:
+        try:
+            if isinstance(bruto, bool) or (isinstance(bruto, float) and not bruto.is_integer()):
+                raise ValueError
+            numero = int(bruto)
+        except (TypeError, ValueError):
+            raise ValueError(MSG_MOTORISTA_INEXISTENTE) from None
+        if numero not in pedidos:
+            pedidos.append(numero)
+    if not pedidos:
+        raise ValueError(MSG_ESCOLHA_UM_MOTORISTA)
+    linhas = await conn.fetch(
+        "SELECT m.id, m.nome, m.ativo, m.tipo_veiculo, m.valor_rota, t.custo_rota, t.peso_referencia_kg "
+        "FROM motoristas m JOIN tipos_veiculo t ON t.nome = m.tipo_veiculo"
+    )
+    por_id = {int(l["id"]): l for l in linhas}
+    escolhidos = []
+    for numero in pedidos:
+        linha = por_id.get(numero)
+        if linha is None:
+            raise ValueError(MSG_MOTORISTA_INEXISTENTE)
+        if not linha["ativo"]:
+            raise ValueError(f'{linha["nome"]} está desativado. Ative-o na tela "Motoristas" ou tire-o da escolha.')
+        escolhidos.append({
+            "id": int(linha["id"]), "nome": linha["nome"], "tipo_veiculo": linha["tipo_veiculo"], "custo_rota": float(linha["custo_rota"]),
+            "valor_rota": None if linha["valor_rota"] is None else float(linha["valor_rota"]),
+            "peso_referencia_kg": None if linha["peso_referencia_kg"] is None else float(linha["peso_referencia_kg"]),
+        })
+    return escolhidos

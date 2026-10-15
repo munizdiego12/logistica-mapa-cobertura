@@ -2,7 +2,6 @@ import React, { useEffect } from 'react';
 import { MapContainer, TileLayer, Polyline, Marker, Popup, Circle, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { rotuloDaOrigem } from '../services/valorRota';
 import { CAMADAS, ATRIBUICAO_ESRI, ESTILO, corDoTexto } from '../services/estiloMapa';
 
 // Correção dos caminhos padrão dos ícones do Leaflet
@@ -426,20 +425,6 @@ export default function MapaLeaflet({ origem, rotas, dadosCeps = null }) {
                     <div className="flex justify-between items-center">
                       <span className="text-slate-500">Tempo Estimado:</span>
                       <span className="font-semibold text-slate-800">{rota.tempo_formatado}</span>
-                    </div>
-                    <div className="flex justify-between items-center pt-1 border-t border-slate-100">
-                      <span className="text-slate-500">Custo Total da Rota:</span>
-                      <span className="font-bold text-emerald-600">R$ {Number(rota.custo_total).toFixed(2)}</span>
-                    </div>
-                    {rota.origem_valor && (
-                      <div className="flex justify-between items-center">
-                        <span className="text-slate-500">Valor por rota:</span>
-                        <span className="font-semibold text-slate-700">{rotuloDaOrigem(rota.origem_valor)}</span>
-                      </div>
-                    )}
-                    <div className="flex justify-between items-center">
-                      <span className="text-slate-500">Custo Médio / Pedido:</span>
-                      <span className="font-semibold text-slate-700">R$ {Number(rota.custo_por_pedido).toFixed(2)}</span>
                     </div>
                   </div>
                   {rota.link_maps && (

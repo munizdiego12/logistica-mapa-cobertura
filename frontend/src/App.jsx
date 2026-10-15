@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import {
-  Truck, DollarSign, Navigation, Package, Upload,
-  MapPin, Sliders, ArrowUpRight, Play, Loader2,
+  Truck, Navigation, Package, Upload,
+  MapPin, ArrowUpRight, Play, Loader2,
   ShieldCheck, Activity, Trash2, Users, AlertCircle,
   CheckSquare, Square, Download, FileSpreadsheet, FileDown,
   Settings, ChevronDown, ChevronUp, Layers, Compass, Table as TableIcon, 
@@ -16,8 +16,9 @@ import { API_BASE } from './config';
 import { instalarTratamento401, MENSAGEM_SESSAO_EXPIRADA } from './services/sessao';
 import { baixarBlob } from './services/download';
 import {
-  rotuloDoTipo, validarValorRota, primeiroErroDeValores, montarValoresPorRota, dicaValorBase, rotuloDaOrigem, corDaOrigem
-} from './services/valorRota';
+  MSG_MARQUE_MOTORISTA, rotuloDoMotorista, textoRotasEMotoristas, linhaDeConfirmacao, linhaDeDesfazer,
+  rotasPorMotoristaDoResultado, manterSomenteAtivos, alternarMarcacao, motoristasMarcados, podeExecutarComMotoristas
+} from './services/selecaoMotoristas';
 
 // Instância dedicada que anexa automaticamente o token do operador logado
 // (Etapa 1 — Autenticação) em toda chamada ao backend, para que qualquer
@@ -78,20 +79,23 @@ export default function App() {
     'Fiorino/Utilitário': { capacidade: 12 }
   });
 
-  // Frota: os motoristas ativos e os tipos de veículo vêm do cadastro (tela "Motoristas e veículos").
+  // Motoristas ATIVOS do cadastro (tela "Motoristas e veículos"), quantas rotas cada um fez hoje e quais foram marcados
+  // para esta roteirização: só os marcados entram nas rotas. Marcar não ativa nem desativa ninguém.
   const [motoristas, setMotoristas] = useState([]);
-  const [tiposVeiculo, setTiposVeiculo] = useState([]);
+  const [rotasHoje, setRotasHoje] = useState({});
+  const [selecionados, setSelecionados] = useState([]);
   const [frotaCarregada, setFrotaCarregada] = useState(false);
-  // Valor por rota digitado na roteirização, por tipo de veículo (vazio = vale o valor base do cadastro).
-  const [valoresPorRota, setValoresPorRota] = useState({});
+  // Confirmação das rotas do resultado: { confirmada, linhas, enviando, erro }
+  const [confirmacao, setConfirmacao] = useState({ confirmada: false, linhas: [], enviando: false, erro: '' });
 
   // Sem o cadastro a roteirização avisa o operador na hora de gerar as rotas.
   const carregarFrota = useCallback(() => Promise.all([
     apiAuth.get('/motoristas', { params: { incluir_inativos: false } }),
-    apiAuth.get('/tipos-veiculo')
-  ]).then(([respMotoristas, respTipos]) => {
+    apiAuth.get('/rotas-realizadas/hoje').catch(() => ({ data: { por_motorista: {} } }))
+  ]).then(([respMotoristas, respHoje]) => {
     setMotoristas(respMotoristas.data);
-    setTiposVeiculo(respTipos.data);
+    setRotasHoje(respHoje.data.por_motorista || {});
+    setSelecionados((atuais) => manterSomenteAtivos(atuais, respMotoristas.data));
   }).catch(() => {}).finally(() => setFrotaCarregada(true)), []);
 
   useEffect(() => {
@@ -114,8 +118,9 @@ export default function App() {
   const loteSelecionado = lotes.find(l => l.id === loteAtivoId);
   const pedidosAtivos = loteSelecionado ? loteSelecionado.pedidos : [];
 
-  // Capacidade por Viagem Simultânea
-  const capacidadeSimultaneaFrota = capacityCheck(modais, motoristas);
+  // Capacidade por Viagem Simultânea: só dos motoristas marcados
+  const marcados = motoristasMarcados(motoristas, selecionados);
+  const capacidadeSimultaneaFrota = capacityCheck(modais, marcados);
 
   // Alterar capacidade variável de um modal específico
   const atualizarCapacidadeModal = (nomeModal, novaCapacidade) => {
@@ -201,15 +206,14 @@ export default function App() {
       return;
     }
 
-    const erroValores = primeiroErroDeValores(valoresPorRota);
-    if (erroValores) {
-      alert(erroValores);
+    if (frotaCarregada && motoristas.length === 0) {
+      alert('Não há motoristas ativos. Cadastre ou ative pelo menos um motorista em "Motoristas e veículos" antes de gerar as rotas.');
+      setMostrarMotoristas(true);
       return;
     }
 
-    if (frotaCarregada && motoristas.length === 0) {
-      alert('Não há motoristas cadastrados. Cadastre pelo menos um motorista em "Motoristas e veículos" antes de gerar as rotas.');
-      setMostrarMotoristas(true);
+    if (!podeExecutarComMotoristas(selecionados)) {
+      alert(MSG_MARQUE_MOTORISTA);
       return;
     }
 
@@ -224,7 +228,7 @@ export default function App() {
         origem_bairro: origem.bairro,
         origem_cep: origem.cep,
         modais_config: modais,
-        valores_por_rota: montarValoresPorRota(valoresPorRota),
+        motorista_ids: selecionados,
         pedidos: pedidosAtivos
       });
 
@@ -242,6 +246,7 @@ export default function App() {
             if (dados.status === 'concluido') {
               clearInterval(intervalo);
               setResultado(dados.resultado);
+              setConfirmacao({ confirmada: false, linhas: [], enviando: false, erro: '' });
               resolve();
             } else if (dados.status === 'erro') {
               clearInterval(intervalo);
@@ -260,6 +265,45 @@ export default function App() {
     } finally {
       setLoading(false);
       setProgresso(null);
+    }
+  };
+
+  // Confirma as rotas do resultado: uma rota por viagem, no nome do motorista de cada rota. Repetir não duplica.
+  const confirmarRotas = async () => {
+    if (!resultado?.execucao_id) return;
+    setConfirmacao((c) => ({ ...c, enviando: true, erro: '' }));
+    try {
+      const { data } = await apiAuth.post('/rotas-realizadas/confirmar', { execucao_id: resultado.execucao_id });
+      setConfirmacao({
+        confirmada: true,
+        linhas: data.motoristas.map((m) => linhaDeConfirmacao(m.nome, m.nesta_execucao, m.total_hoje)),
+        enviando: false,
+        erro: ''
+      });
+      carregarFrota();
+    } catch (err) {
+      if (err?.response?.status === 401) return; // já voltou para o login, com o aviso
+      const detalhe = err?.response?.data?.detail;
+      setConfirmacao((c) => ({ ...c, enviando: false, erro: (typeof detalhe === 'string' && detalhe) || 'Não foi possível confirmar as rotas agora. Tente de novo.' }));
+    }
+  };
+
+  const desfazerConfirmacao = async () => {
+    if (!resultado?.execucao_id) return;
+    setConfirmacao((c) => ({ ...c, enviando: true, erro: '' }));
+    try {
+      const { data } = await apiAuth.post(`/rotas-realizadas/${encodeURIComponent(resultado.execucao_id)}/desfazer`);
+      setConfirmacao({
+        confirmada: false,
+        linhas: data.motoristas.map((m) => linhaDeDesfazer(m.nome, m.total_hoje)),
+        enviando: false,
+        erro: ''
+      });
+      carregarFrota();
+    } catch (err) {
+      if (err?.response?.status === 401) return;
+      const detalhe = err?.response?.data?.detail;
+      setConfirmacao((c) => ({ ...c, enviando: false, erro: (typeof detalhe === 'string' && detalhe) || 'Não foi possível desfazer a confirmação agora. Tente de novo.' }));
     }
   };
 
@@ -703,11 +747,11 @@ export default function App() {
             )}
           </div>
 
-          {/* 4. Frota: motoristas ativos do cadastro */}
+          {/* 4. Motoristas da roteirização: escolha múltipla entre os ATIVOS; só os marcados entram nas rotas */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                <Users className="w-3.5 h-3.5 text-blue-400" /> Motoristas Ativos ({motoristas.length})
+                <Users className="w-3.5 h-3.5 text-blue-400" /> Motoristas ({selecionados.length} de {motoristas.length} marcados)
               </span>
               <button
                 onClick={() => setMostrarMotoristas(true)}
@@ -720,10 +764,49 @@ export default function App() {
             {frotaCarregada && motoristas.length === 0 ? (
               <div className="p-2.5 rounded-lg bg-amber-950/30 border border-amber-500/30 text-[11px] text-amber-300 flex items-start gap-2">
                 <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                <span>Não há motoristas cadastrados. Cadastre pelo menos um em "Gerenciar" para poder gerar as rotas.</span>
+                <span>Não há motoristas ativos. Cadastre ou ative pelo menos um em "Gerenciar" para poder gerar as rotas.</span>
               </div>
             ) : (
               <>
+                <div className="flex items-center gap-2 text-[10px]">
+                  <button
+                    type="button"
+                    onClick={() => setSelecionados(motoristas.map((m) => m.id))}
+                    className="px-2 py-0.5 rounded border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800"
+                  >
+                    Marcar todos
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelecionados([])}
+                    className="px-2 py-0.5 rounded border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800"
+                  >
+                    Limpar
+                  </button>
+                </div>
+
+                <div role="group" aria-label="Motoristas da roteirização" className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                  {motoristas.map((item) => {
+                    const marcado = selecionados.includes(item.id);
+                    return (
+                      <label
+                        key={item.id}
+                        className={`flex items-start gap-2 p-2 rounded-lg border cursor-pointer text-[11px] transition-colors ${
+                          marcado ? 'bg-blue-500/10 border-blue-500/40 text-slate-100' : 'bg-slate-900/90 border-slate-800/80 text-slate-300 hover:border-slate-700'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={marcado}
+                          onChange={() => setSelecionados((atuais) => alternarMarcacao(atuais, item.id))}
+                          className="mt-0.5 accent-blue-500"
+                        />
+                        <span className="leading-snug">{rotuloDoMotorista(item, rotasHoje[String(item.id)] || 0)}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+
                 <div className="p-2.5 rounded-lg bg-slate-950/60 border border-slate-800 text-[11px] space-y-1.5">
                   <div className="flex items-center justify-between">
                     <span className="text-slate-400">Capacidade por Saída Simultânea:</span>
@@ -738,53 +821,8 @@ export default function App() {
                     </div>
                   )}
                 </div>
-
-                <div className="space-y-2 max-h-36 overflow-y-auto pr-1">
-                  {motoristas.map((item) => (
-                    <div key={item.id} className="flex items-center justify-between gap-2 bg-slate-900/90 border border-slate-800/80 p-2 rounded-lg">
-                      <span className="text-[11px] font-medium text-slate-300 truncate">{item.nome}</span>
-                      <span className="text-[10px] text-slate-400 shrink-0">
-                        {item.tipo_veiculo}{item.valor_rota !== null && item.valor_rota !== undefined ? ' • valor próprio' : ''}
-                      </span>
-                    </div>
-                  ))}
-                </div>
               </>
             )}
-          </div>
-
-          {/* 5. Valor por rota (opcional): vazio = vale o valor base do tipo, cadastrado em "Motoristas" */}
-          <div className="space-y-3">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-              <Sliders className="w-3.5 h-3.5 text-blue-400" /> Valor por Rota
-            </span>
-            <div className="space-y-2">
-              {tiposVeiculo.map((t) => {
-                const texto = valoresPorRota[t.nome] ?? '';
-                const { ok, mensagem } = validarValorRota(texto);
-                return (
-                  <div key={t.id}>
-                    <label className="text-[10px] text-slate-400 block mb-1" htmlFor={`valor-rota-${t.id}`}>
-                      Valor por rota, {rotuloDoTipo(t.nome)}
-                    </label>
-                    <input
-                      id={`valor-rota-${t.id}`}
-                      type="text"
-                      inputMode="decimal"
-                      value={texto}
-                      onChange={(e) => setValoresPorRota((atuais) => ({ ...atuais, [t.nome]: e.target.value }))}
-                      placeholder={dicaValorBase(t.custo_rota)}
-                      aria-invalid={!ok}
-                      className={`w-full text-xs bg-slate-900/90 border rounded-lg px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:outline-none transition-colors ${ok ? 'border-slate-800 focus:border-blue-500/80' : 'border-amber-500/60 focus:border-amber-400'}`}
-                    />
-                    {!ok && <p className="text-[10px] text-amber-300 mt-1">{mensagem}</p>}
-                  </div>
-                );
-              })}
-              <p className="text-[10px] text-slate-500">
-                Opcional. Vale para todas as rotas do tipo nesta execução; vazio usa o valor próprio do motorista (se tiver) ou o valor base.
-              </p>
-            </div>
           </div>
 
           {/* Botão de Execução + Barra de Progresso */}
@@ -807,12 +845,17 @@ export default function App() {
             )}
             <button
               onClick={handleOtimizar}
-              disabled={loading || pedidosAtivos.length === 0 || !origem.rua}
+              disabled={loading || pedidosAtivos.length === 0 || !origem.rua || !podeExecutarComMotoristas(selecionados)}
               className="w-full py-3.5 bg-blue-600 hover:bg-blue-500 active:scale-[0.99] transition-all rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-blue-600/25 text-white disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4 fill-current" />}
               {loading ? (progresso ? progresso.etapa : 'Agrupando Polígonos & Otimizando...') : 'Executar Roteirização'}
             </button>
+            {frotaCarregada && motoristas.length > 0 && !podeExecutarComMotoristas(selecionados) && (
+              <p className="flex items-center gap-1.5 text-[11px] text-amber-300">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {MSG_MARQUE_MOTORISTA}
+              </p>
+            )}
           </div>
         </aside>
 
@@ -838,12 +881,18 @@ export default function App() {
                 <Layers className="w-4 h-4 text-indigo-400" />
               </div>
               <div className="flex items-baseline gap-2">
-                <span className="text-2xl font-black text-white font-mono">
-                  {resultado ? resultado.kpis.total_rotas_viagens : motoristas.length}
-                </span>
-                <span className="text-xs text-slate-500">
-                  {resultado ? `(${resultado.kpis.total_veiculos} veículos)` : 'rotas'}
-                </span>
+                {resultado ? (
+                  <span className="text-2xl font-black text-white font-mono">
+                    {textoRotasEMotoristas(resultado.kpis.total_rotas_viagens, resultado.kpis.total_motoristas ?? resultado.kpis.total_veiculos)}
+                  </span>
+                ) : (
+                  <>
+                    <span className="text-2xl font-black text-white font-mono">--</span>
+                    <span className="text-xs text-slate-500">
+                      {selecionados.length === 1 ? '1 motorista marcado' : `${selecionados.length} motoristas marcados`}
+                    </span>
+                  </>
+                )}
               </div>
             </div>
 
@@ -860,32 +909,70 @@ export default function App() {
 
             <div className="bg-slate-900/50 border border-slate-800/80 p-5 rounded-xl">
               <div className="flex items-center justify-between text-slate-400 mb-2">
-                <span className="text-[11px] font-semibold tracking-wider uppercase">Custo Estimado</span>
-                <DollarSign className="w-4 h-4 text-emerald-400" />
+                <span className="text-[11px] font-semibold tracking-wider uppercase">Rotas por Motorista</span>
+                <Users className="w-4 h-4 text-emerald-400" />
               </div>
-              <div>
-                <span className="text-2xl font-black text-emerald-400 font-mono">
-                  {resultado ? `R$ ${resultado.kpis.custo_total.toFixed(2)}` : '--'}
-                </span>
-                {resultado && (
-                  <p className="text-[10px] text-slate-500 font-mono mt-0.5">
-                    R$ {resultado.kpis.custo_medio_pedido.toFixed(2)} / entrega
-                  </p>
-                )}
-                {resultado?.kpis?.valores_por_tipo?.length > 0 && (
-                  <div className="mt-1.5 space-y-0.5">
-                    {resultado.kpis.valores_por_tipo.map((v) => (
-                      <p key={v.tipo} className="text-[10px] text-slate-400">
-                        Valor por rota, {rotuloDoTipo(v.tipo)}: <span className="font-mono text-slate-200">R$ {Number(v.valor).toFixed(2)}</span>{' '}
-                        <span className={corDaOrigem(v.origem)}>({rotuloDaOrigem(v.origem)})</span>{' '}
-                        <span className="text-slate-500">{v.rotas} {v.rotas === 1 ? 'rota' : 'rotas'}</span>
-                      </p>
-                    ))}
+              {(() => {
+                const nestaRoteirizacao = resultado ? rotasPorMotoristaDoResultado(resultado.rotas) : [];
+                const linhas = resultado
+                  ? nestaRoteirizacao
+                  : marcados.map((m) => ({ motorista_id: m.id, nome: m.nome, rotas: null }));
+                if (linhas.length === 0) return <span className="text-2xl font-black text-white font-mono">--</span>;
+                return (
+                  <div className="space-y-1 max-h-28 overflow-y-auto">
+                    {linhas.map((l) => {
+                      const hoje = rotasHoje[String(l.motorista_id)] || 0;
+                      return (
+                        <p key={l.motorista_id} className="text-[11px] text-slate-300 leading-snug">
+                          <span className="font-semibold text-white">{l.nome}</span>
+                          {l.rotas !== null && <>: {l.rotas === 1 ? '1 rota' : `${l.rotas} rotas`} nesta roteirização</>}
+                          <span className="text-slate-500"> • {hoje === 0 ? 'nenhuma rota hoje' : hoje === 1 ? '1 rota realizada hoje' : `${hoje} rotas realizadas hoje`}</span>
+                        </p>
+                      );
+                    })}
                   </div>
-                )}
-              </div>
+                );
+              })()}
             </div>
           </div>
+
+          {/* Confirmar rotas: grava uma rota por viagem, no nome do motorista de cada uma. Só as confirmadas contam no "hoje". */}
+          {resultado && resultado.execucao_id && (
+            <div className="bg-slate-900/50 border border-slate-800/80 rounded-xl p-4 space-y-2">
+              <div className="flex flex-wrap items-center gap-3">
+                {confirmacao.confirmada ? (
+                  <button
+                    onClick={desfazerConfirmacao}
+                    disabled={confirmacao.enviando}
+                    className="px-3 py-1.5 rounded-lg border border-amber-500/40 text-amber-300 hover:bg-amber-500/10 text-xs font-semibold disabled:opacity-40"
+                  >
+                    {confirmacao.enviando ? 'Desfazendo...' : 'Desfazer confirmação'}
+                  </button>
+                ) : (
+                  <button
+                    onClick={confirmarRotas}
+                    disabled={confirmacao.enviando}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold disabled:opacity-40"
+                  >
+                    {confirmacao.enviando ? 'Confirmando...' : 'Confirmar rotas'}
+                  </button>
+                )}
+                <span className="text-[11px] text-slate-400">
+                  {confirmacao.confirmada
+                    ? 'Rotas confirmadas: elas contam nas rotas de hoje de cada motorista.'
+                    : 'Só as rotas confirmadas contam nas rotas realizadas de cada motorista.'}
+                </span>
+              </div>
+              {confirmacao.linhas.length > 0 && (
+                <ul className="text-[12px] text-emerald-300 space-y-0.5">
+                  {confirmacao.linhas.map((linha) => <li key={linha}>{linha}</li>)}
+                </ul>
+              )}
+              {confirmacao.erro && (
+                <p className="flex items-center gap-1.5 text-[11px] text-amber-300"><AlertCircle className="w-3.5 h-3.5 shrink-0" /> {confirmacao.erro}</p>
+              )}
+            </div>
+          )}
 
           {/* Aviso de pedidos que não puderam ser geocodificados (Etapa 2): ficam de
               fora do cálculo de rotas em vez de serem posicionados num lugar errado. */}
@@ -963,8 +1050,6 @@ export default function App() {
                       <th className="p-3.5 font-semibold">Entregas</th>
                       <th className="p-3.5 font-semibold">Quilometragem</th>
                       <th className="p-3.5 font-semibold">Tempo</th>
-                      <th className="p-3.5 font-semibold">Custo Rota</th>
-                      <th className="p-3.5 font-semibold">Custo / Un</th>
                       <th className="p-3.5 font-semibold text-right">Navegação</th>
                     </tr>
                   </thead>
@@ -1007,13 +1092,6 @@ export default function App() {
                           </div>
                         </td>
                         <td className="p-3.5 text-slate-400">{r.tempo_formatado}</td>
-                        <td className="p-3.5 font-semibold text-emerald-400">
-                          R$ {r.custo_total.toFixed(2)}
-                          <span className={`block text-[10px] font-normal ${corDaOrigem(r.origem_valor)}`}>
-                            {rotuloDaOrigem(r.origem_valor)}
-                          </span>
-                        </td>
-                        <td className="p-3.5 text-slate-300">R$ {r.custo_por_pedido.toFixed(2)}</td>
                         <td className="p-3.5 text-right font-sans">
                           <a
                             href={r.link_maps}

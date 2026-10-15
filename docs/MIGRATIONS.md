@@ -11,6 +11,7 @@ Revisões atuais:
 | `0003` | Descreve as tabelas antigas (`operadores`, `geocode_cache`, `cep_prefixos`, `ibge_municipios`) em SQL idempotente (`CREATE ... IF NOT EXISTS`): num banco novo cria tudo; no Neon, onde já existem com dados, **não faz nada** (não apaga, não recria, não altera dados). O `downgrade` não apaga nada de propósito. |
 | `0004` | Cria `tipos_veiculo` (já com "Carro de passeio" R$ 130 e "Fiorino/Utilitário" R$ 260, `ON CONFLICT DO NOTHING`: não desfaz o que um operador editou) e `motoristas` (desativa em vez de apagar). Idempotente; o `downgrade` não apaga nada. |
 | `0005` | Acrescenta `motoristas.valor_rota` (valor próprio por rota do motorista, opcional) com `CHECK (valor_rota IS NULL OR valor_rota >= 0)`, via `ADD COLUMN IF NOT EXISTS` (idempotente). Não altera dados; o `downgrade` não apaga nada. |
+| `0006` | Cria `rotas_realizadas` (rotas confirmadas: `execucao_id`, `numero_rota`, `motorista_id`, `data` no dia de Brasília, `loja_hub`, `turno`, `qtd_pedidos`, `distancia_km`, `status` `confirmada`/`cancelada`, `criado_em`, `criado_por`), com chave única `execucao_id` + `numero_rota` (confirmar de novo não duplica). Idempotente; o `downgrade` não apaga nada. |
 
 Não existe tabela `geocache`: esse nome aparece em notas antigas por causa do arquivo de teste `geocache.db`. O cache de geocodificação é a tabela `geocode_cache`.
 
@@ -44,7 +45,7 @@ cd backend
 $env:DATABASE_URL = "<string direta do Neon>"
 python -m alembic current
 python -m alembic upgrade head
-python -m alembic current          # deve mostrar o head (hoje 0005)
+python -m alembic current          # deve mostrar o head (hoje 0006)
 Remove-Item Env:DATABASE_URL
 cd ..
 ```

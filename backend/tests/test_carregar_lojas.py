@@ -166,3 +166,39 @@ def test_conexao_que_cai_reconecta_sem_duplicar(arquivo, monkeypatch):
     feito = asyncio.run(script.com_conexao("dsn", lambda c: lojas.gravar_carga(c, linhas), dormir=sem_espera))
     assert feito["novas"] == 2 and len(tentativas) == 2
     assert banco.db.execute("SELECT count(*) FROM lojas").fetchone()[0] == 2
+
+
+def test_resumo_mostra_as_colunas_reconhecidas_e_quantas_lojas_estao_sem_cidade_e_sem_endereco(tmp_path, monkeypatch, capsys):
+    _sem_banco(monkeypatch)
+    caminho = tmp_path / "lojas.csv"
+    caminho.write_bytes(
+        ("Nome,UF,Endereço Completo,Cidade,Latitude,Longitude\n"
+         '"Atacadão Guarujá",SP,"Av. Santos Dumont, 100, Guarujá, SP, Brazil",Guarujá,"-23,9930","-46,2564"\n'
+         "Atacadão Campinas,SP,,,-22.9099,-47.0626\n").encode("utf-8"))
+    script.main(["--csv", str(caminho)])
+    texto = capsys.readouterr().out
+    assert 'colunas reconhecidas: Nome <- "Nome"; UF <- "UF"; Endereço <- "Endereço Completo"; Cidade <- "Cidade"; Latitude <- "Latitude"; Longitude <- "Longitude"' in texto
+    assert "sem endereço: 1" in texto and "sem cidade: 1" in texto
+    assert "NÃO encontradas" not in texto
+
+
+def test_resumo_avisa_as_colunas_que_nao_foram_encontradas(tmp_path, monkeypatch, capsys):
+    _sem_banco(monkeypatch)
+    caminho = tmp_path / "lojas.csv"
+    caminho.write_bytes("LOJA;ESTADO;LAT;LNG\nAtacadão X;SP;-23,5;-46,6\n".encode("utf-8"))
+    script.main(["--csv", str(caminho)])
+    texto = capsys.readouterr().out
+    assert 'Nome <- "LOJA"' in texto and 'Latitude <- "LAT"' in texto and 'Longitude <- "LNG"' in texto
+    assert "colunas NÃO encontradas (ficam em branco): Endereço, Cidade" in texto
+    assert "sem cidade: 1" in texto and "sem endereço: 1" in texto
+
+
+def test_gravar_guarda_a_cidade_e_celula_em_branco_nao_apaga_a_cidade_ja_cadastrada(banco_falso, tmp_path):
+    primeira = tmp_path / "a.csv"
+    primeira.write_text("Nome,UF,Endereço Completo,Cidade,Latitude,Longitude\nLoja X,SP,Rua A,São Paulo,-23.5,-46.6\n", encoding="utf-8")
+    segunda = tmp_path / "b.csv"
+    segunda.write_text("Nome,UF,Endereço Completo,Cidade,Latitude,Longitude\nLoja X,SP,,,-23.6,-46.7\n", encoding="utf-8")
+    script.main(["--csv", str(primeira), "--gravar", "--sim"])
+    assert tuple(banco_falso.db.execute("SELECT cidade, endereco FROM lojas").fetchone()) == ("São Paulo", "Rua A")
+    script.main(["--csv", str(segunda), "--gravar", "--sim"])
+    assert tuple(banco_falso.db.execute("SELECT cidade, endereco, lat FROM lojas").fetchone()) == ("São Paulo", "Rua A", -23.6)

@@ -134,6 +134,7 @@ export default function Lojas({ api, onFechar, onMudou }) {
     <div key={`${loja.id}|${loja.atualizado_em ?? ''}`} className={`p-3 rounded-lg border flex flex-wrap items-center gap-2 justify-between ${loja.ativo ? 'bg-slate-900/70 border-slate-800' : 'bg-slate-950/60 border-slate-800/60 opacity-75'}`}>
       <div className="min-w-0">
         <p className="text-sm font-semibold text-slate-100 truncate">{loja.nome}{loja.uf ? ` - ${loja.uf}` : ''}</p>
+        {loja.cidade && <p className="text-[11px] text-slate-300 truncate">{loja.cidade}</p>}
         {loja.endereco && <p className="text-[11px] text-slate-400 truncate">{loja.endereco}</p>}
         <p className="text-[10px] text-slate-500 font-mono">{loja.lat.toLocaleString('pt-BR', { maximumFractionDigits: 6 })}, {loja.lng.toLocaleString('pt-BR', { maximumFractionDigits: 6 })}</p>
         {quemAlterou(loja) && <p className="text-[10px] text-slate-500">{quemAlterou(loja)}</p>}
@@ -195,6 +196,10 @@ export default function Lojas({ api, onFechar, onMudou }) {
             </div>
             <label className="block text-[11px] text-slate-400">Endereço (opcional)
               <input type="text" value={form.endereco} maxLength={250} onChange={(e) => mudar('endereco', e.target.value)} placeholder="ex.: Av. Santos Dumont, 100" className={campo} />
+            </label>
+            <label className="block text-[11px] text-slate-400">Cidade (opcional; com o Estado, dá o código IBGE do ponto de partida)
+              <input type="text" value={form.cidade} maxLength={120} onChange={(e) => mudar('cidade', e.target.value)} placeholder="ex.: Guarujá" className={campo} />
+              <Erro texto={errosForm.cidade} />
             </label>
             <div className="grid grid-cols-2 gap-2">
               <label className="text-[11px] text-slate-400">Latitude

@@ -6,8 +6,10 @@ Usa asyncpg (o psycopg2 pode estar bloqueado no Windows) e lê a conexão SOMENT
 
 A tabela é criada antes pelo Alembic (dentro de backend/):  python -m alembic upgrade head
 
-Colunas aceitas:
-    Nome, Estado, Endereço, Latitude, Longitude   (Endereço pode ficar em branco; a filial já vai no nome, ex.: "Atacadão Guarujá")
+Colunas aceitas (reconhecidas pelo NOME do cabeçalho, em qualquer ordem, sem diferença de maiúsculas, acentos ou espaços):
+    Nome; UF ou Estado; Endereço, Endereco ou Endereço Completo; Cidade; Latitude ou Lat; Longitude, Lng ou Lon
+    (ex.: o CSV real tem Nome, UF, Endereço Completo, Cidade, Latitude, Longitude; endereço e cidade podem ficar em branco;
+    a filial já vai no nome, ex.: "Atacadão Guarujá")
     ou o formato do Google My Maps: WKT (POINT (longitude latitude)), name, description (o Estado não vem: a loja entra sem
     Estado e o operador completa na tela "Lojas").
 
@@ -39,7 +41,7 @@ sys.path.insert(0, str(RAIZ))
 
 from backend.db_url import dsn_asyncpg, mascarar_senha  # noqa: E402
 from backend.item_pesos import esta_protegido_do_git  # noqa: E402
-from backend.lojas import gravar_carga, ler_csv_lojas, para_gravar, prever_carga, resumir  # noqa: E402
+from backend.lojas import ROTULOS_DAS_COLUNAS, gravar_carga, ler_csv_lojas, para_gravar, prever_carga, resumir  # noqa: E402
 
 PASTA_PADRAO = RAIZ / "data" / "lojas"
 TENTATIVAS = 3
@@ -82,12 +84,19 @@ async def com_conexao(dsn: str, operacao, tentativas: int = TENTATIVAS, esperas=
 
 
 def imprimir_resumo(caminho: Path, resultado, resumo: dict) -> None:
-    formato = "Google My Maps (WKT, name, description)" if resultado.formato == "my_maps" else "colunas Nome, Estado, Endereço, Latitude, Longitude"
+    formato = "Google My Maps (WKT, name, description)" if resultado.formato == "my_maps" else "colunas Nome, UF, Endereço, Cidade, Latitude, Longitude"
     print(f"Arquivo: {caminho}")
     print(f"  formato: {formato} | separador: '{resultado.delimitador}' | codificação: {resultado.codificacao}")
+    campos = ("nome", "estado", "endereco", "cidade", "latitude", "longitude") if resultado.formato == "colunas" else ("wkt", "nome", "descricao", "cidade")
+    reconhecidas = [f"{ROTULOS_DAS_COLUNAS[c]} <- \"{resultado.colunas[c]}\"" for c in campos if c in resultado.colunas]
+    faltando = [ROTULOS_DAS_COLUNAS[c] for c in campos if c not in resultado.colunas]
+    print(f"  colunas reconhecidas: {'; '.join(reconhecidas)}")
+    if faltando:
+        print(f"  colunas NÃO encontradas (ficam em branco): {', '.join(faltando)}")
     print(f"  linhas lidas: {resumo['linhas']}")
     print(f"  LOJAS VÁLIDAS (serão gravadas): {resumo['validas']}")
     print(f"      sem endereço: {resumo['sem_endereco']}")
+    print(f"      sem cidade: {resumo['sem_cidade']}" + (" (o código IBGE do hub dessas lojas vem do CEP mais próximo; cadastre a cidade na tela \"Lojas\")" if resumo["sem_cidade"] else ""))
     print(f"      sem Estado: {resumo['sem_uf']}" + (" (o operador completa na tela \"Lojas\")" if resumo["sem_uf"] else ""))
     print(f"  DUPLICADAS (mesmo nome; vale a última linha): {resumo['duplicadas']}")
     for l in [l for l in resultado.linhas if l.status == "duplicada_ignorada"][: resumo["exemplos"]]:

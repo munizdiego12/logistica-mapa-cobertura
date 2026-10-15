@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  numeroPtBr, classificarCoordenadas, validarCoordenadas, linhasDoHover, interpretarRaio, validarFormularioLoja,
+  numeroPtBr, classificarCoordenadas, validarCoordenadas, linhasDoHover, enderecoParaExibir, interpretarRaio, validarFormularioLoja,
   corpoDaLoja, formularioDaLoja, nomeDoHub, FORMULARIO_VAZIO, UFS,
 } from './lojas.js';
 
@@ -94,4 +94,28 @@ test('nome do hub para arquivos: a loja (já com a filial) ou o logradouro', () 
   assert.equal(nomeDoHub(null, { rua: '' }, 'Santos'), 'Santos');
   assert.equal(nomeDoHub(null, null, ''), 'hub');
   assert.equal(UFS.length, 27);
+});
+
+test('hover: o endereço sai sem o ", Brazil" ou ", Brasil" do final, sem mexer no dado', () => {
+  assert.equal(enderecoParaExibir('Av. Santos Dumont, 100, Guarujá, SP, Brazil'), 'Av. Santos Dumont, 100, Guarujá, SP');
+  assert.equal(enderecoParaExibir('Rua A, 5, Brasil'), 'Rua A, 5');
+  assert.equal(enderecoParaExibir('Rua A, 5 ,BRASIL.'), 'Rua A, 5');
+  assert.equal(enderecoParaExibir('Avenida do Brasil'), 'Avenida do Brasil');
+  assert.equal(enderecoParaExibir('Rua Brasil, 5'), 'Rua Brasil, 5');
+  assert.equal(enderecoParaExibir('Brazil'), '');
+  assert.equal(enderecoParaExibir(null), '');
+  const loja = { nome: 'Atacadão Guarujá', endereco: 'Av. Santos Dumont, 100, Brazil', uf: 'SP' };
+  assert.deepEqual(linhasDoHover(loja), ['Atacadão Guarujá', 'Av. Santos Dumont, 100', 'SP']);
+  assert.equal(loja.endereco, 'Av. Santos Dumont, 100, Brazil');
+  assert.deepEqual(linhasDoHover({ nome: 'X', endereco: 'Brazil', uf: 'SP' }), ['X', 'SP']);
+});
+
+test('cidade é opcional no formulário e vai (ou não) no corpo enviado', () => {
+  assert.equal(validarFormularioLoja(formulario({ cidade: 'Guarujá' })).ok, true);
+  assert.equal(validarFormularioLoja(formulario({ cidade: '' })).ok, true);
+  assert.match(validarFormularioLoja(formulario({ cidade: 'x'.repeat(121) })).erros.cidade, /cidade/);
+  assert.equal(corpoDaLoja(formulario({ cidade: ' Guarujá ' })).cidade, 'Guarujá');
+  assert.equal(corpoDaLoja(formulario({ cidade: '  ' })).cidade, null);
+  assert.equal(formularioDaLoja({ nome: 'L', cidade: 'Santos', lat: -23.9, lng: -46.3 }).cidade, 'Santos');
+  assert.equal(formularioDaLoja({ nome: 'L', cidade: null, lat: -23.9, lng: -46.3 }).cidade, '');
 });

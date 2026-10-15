@@ -17,7 +17,7 @@ export const UFS = [
 ];
 
 export const FORMULARIO_VAZIO = {
-  nome: '', uf: '', endereco: '', lat: '', lng: '', capacidade_peso: '', capacidade_volume: '',
+  nome: '', uf: '', endereco: '', cidade: '', lat: '', lng: '', capacidade_peso: '', capacidade_volume: '',
   janela_manha_inicio: '08:00', janela_manha_fim: '13:00', janela_tarde_inicio: '13:00', janela_tarde_fim: '18:00',
   usa_noite: true, janela_noite_inicio: '18:00', janela_noite_fim: '21:00', ativo: true,
 };
@@ -65,9 +65,15 @@ export function validarCoordenadas(latTexto, lngTexto) {
   return { ok: true, lat, lng };
 }
 
-/** Linhas do hover do marcador: nome, endereço e UF, uma informação por linha e só o que existir. */
+/** Endereço para mostrar no hover: sem o ", Brazil" ou ", Brasil" do final, se existir (o dado guardado não muda). */
+export function enderecoParaExibir(endereco) {
+  const texto = String(endereco ?? '').trim().replace(/\s+/g, ' ');
+  return texto.replace(/(^|\s*,)\s*(brasil|brazil)\s*\.?\s*$/i, '').replace(/^[\s,]+|[\s,]+$/g, '');
+}
+
+/** Linhas do hover do marcador: nome, endereço (sem o país no final) e UF, uma informação por linha e só o que existir. */
 export function linhasDoHover(loja) {
-  return [loja?.nome, loja?.endereco, loja?.uf].map((t) => String(t ?? '').trim()).filter(Boolean);
+  return [loja?.nome, enderecoParaExibir(loja?.endereco), loja?.uf].map((t) => String(t ?? '').trim()).filter(Boolean);
 }
 
 /** Raio do "Raio X km": vazio vale o padrão (30); precisa ficar entre 1 e 200. */
@@ -87,6 +93,7 @@ const HORA = /^([01]?\d|2[0-3]):[0-5]\d$/;
 export function validarFormularioLoja(form) {
   const erros = {};
   if (!String(form.nome ?? '').trim()) erros.nome = 'Informe o nome da loja.';
+  if (String(form.cidade ?? '').trim().length > 120) erros.cidade = 'O nome da cidade pode ter até 120 letras.';
   if (String(form.uf ?? '').trim() && !UFS.includes(String(form.uf).trim().toUpperCase())) erros.uf = 'Estado inválido. Use a sigla (ex.: SP).';
   const coordenadas = validarCoordenadas(form.lat, form.lng);
   if (!coordenadas.ok) erros[coordenadas.campo] = coordenadas.mensagem;
@@ -118,6 +125,7 @@ export function corpoDaLoja(form) {
     nome: String(form.nome ?? '').trim(),
     uf: vazioParaNulo(form.uf) ? String(form.uf).trim().toUpperCase() : null,
     endereco: vazioParaNulo(form.endereco),
+    cidade: vazioParaNulo(form.cidade),
     lat: String(form.lat ?? '').trim(),
     lng: String(form.lng ?? '').trim(),
     ativo: form.ativo !== false,
@@ -137,7 +145,7 @@ export function corpoDaLoja(form) {
 export function formularioDaLoja(loja) {
   const texto = (v) => (v === null || v === undefined ? '' : String(v).replace('.', ','));
   return {
-    nome: loja.nome ?? '', uf: loja.uf ?? '', endereco: loja.endereco ?? '', lat: texto(loja.lat), lng: texto(loja.lng),
+    nome: loja.nome ?? '', uf: loja.uf ?? '', endereco: loja.endereco ?? '', cidade: loja.cidade ?? '', lat: texto(loja.lat), lng: texto(loja.lng),
     capacidade_peso: texto(loja.capacidade_peso), capacidade_volume: texto(loja.capacidade_volume),
     janela_manha_inicio: loja.janela_manha_inicio ?? '08:00', janela_manha_fim: loja.janela_manha_fim ?? '13:00',
     janela_tarde_inicio: loja.janela_tarde_inicio ?? '13:00', janela_tarde_fim: loja.janela_tarde_fim ?? '18:00',

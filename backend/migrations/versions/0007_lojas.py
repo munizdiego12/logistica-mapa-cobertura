@@ -1,7 +1,7 @@
 """lojas (Etapa 6a): cadastro de lojas com coordenadas fixas, janelas de entrega e auditoria
 
-A filial já faz parte do nome da loja (ex.: "Atacadão Guarujá"): NÃO existe coluna filial. `uf` e `endereco` são
-opcionais (linhas do Google My Maps não trazem Estado). As capacidades de peso e de volume são opcionais e só
+A filial já faz parte do nome da loja (ex.: "Atacadão Guarujá"): NÃO existe coluna filial. `uf`, `endereco` e `cidade`
+são opcionais (linhas do Google My Maps não trazem Estado nem cidade). A cidade + uf dão o código IBGE do hub. As capacidades de peso e de volume são opcionais e só
 informativas: nunca bloqueiam nada. Janelas de entrega: manhã 08-13 e tarde 13-18 (sempre), noite 18-21 (NULL = a
 loja não usa a noite). Loja não é apagada: é desativada (`ativo = false`). O nome é único entre as lojas (sem
 diferença de maiúsculas ou espaços), inclusive as desativadas.
@@ -26,6 +26,7 @@ COMANDOS = [
         nome VARCHAR(120) NOT NULL,
         uf VARCHAR(2),
         endereco VARCHAR(250),
+        cidade VARCHAR(120),
         lat DOUBLE PRECISION NOT NULL,
         lng DOUBLE PRECISION NOT NULL,
         ativo BOOLEAN NOT NULL DEFAULT TRUE,

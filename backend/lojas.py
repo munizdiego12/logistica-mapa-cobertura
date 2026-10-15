@@ -21,6 +21,7 @@ LAT_MIN, LAT_MAX = -34.0, 6.0
 LNG_MIN, LNG_MAX = -74.0, -34.0
 TAMANHO_NOME = 120
 TAMANHO_ENDERECO = 250
+TAMANHO_CIDADE = 120
 OPERADOR_CARGA_INICIAL = "carga inicial (script)"
 
 UFS = (
@@ -90,6 +91,24 @@ def normalizar_uf(valor, obrigatorio: bool = False) -> Optional[str]:
     if uf is None:
         raise ValueError("Estado inválido. Use a sigla (ex.: SP) ou o nome do Estado.")
     return uf
+
+
+def normalizar_cidade(valor) -> Optional[str]:
+    cidade = " ".join(str(valor or "").split())
+    if not cidade:
+        return None
+    if len(cidade) > TAMANHO_CIDADE:
+        raise ValueError(f"O nome da cidade pode ter até {TAMANHO_CIDADE} letras.")
+    return cidade
+
+
+_RE_PAIS_NO_FIM = re.compile(r"(^|\s*,)\s*(brasil|brazil)\s*\.?\s*$", re.IGNORECASE)  # só o país depois de vírgula (ou sozinho)
+
+
+def endereco_para_exibir(endereco) -> str:
+    """Endereço para mostrar (hover): sem o ", Brazil" ou ", Brasil" do final, se existir. O dado guardado não muda."""
+    texto = " ".join(str(endereco or "").split())
+    return _RE_PAIS_NO_FIM.sub("", texto).strip(" ,") if _RE_PAIS_NO_FIM.search(texto) else texto
 
 
 def normalizar_endereco(valor) -> Optional[str]:
@@ -209,6 +228,7 @@ def validar_loja(dados: dict) -> dict:
         "nome": normalizar_nome(dados.get("nome")),
         "uf": normalizar_uf(dados.get("uf")),
         "endereco": normalizar_endereco(dados.get("endereco")),
+        "cidade": normalizar_cidade(dados.get("cidade")),
         "ativo": bool(dados.get("ativo", True)),
         "capacidade_peso": interpretar_capacidade(dados.get("capacidade_peso"), "peso"),
         "capacidade_volume": interpretar_capacidade(dados.get("capacidade_volume"), "volume"),
@@ -222,12 +242,12 @@ def validar_loja(dados: dict) -> dict:
 # Banco (conexão asyncpg)
 # ----------------------------------------------------------------------------------------------------------
 _COLUNAS = (
-    "id, nome, uf, endereco, lat, lng, ativo, capacidade_peso, capacidade_volume, "
+    "id, nome, uf, endereco, cidade, lat, lng, ativo, capacidade_peso, capacidade_volume, "
     "janela_manha_inicio, janela_manha_fim, janela_tarde_inicio, janela_tarde_fim, janela_noite_inicio, janela_noite_fim, "
     "atualizado_em, atualizado_por"
 )
 _CAMPOS_GRAVAVEIS = (
-    "nome", "uf", "endereco", "lat", "lng", "ativo", "capacidade_peso", "capacidade_volume",
+    "nome", "uf", "endereco", "cidade", "lat", "lng", "ativo", "capacidade_peso", "capacidade_volume",
     "janela_manha_inicio", "janela_manha_fim", "janela_tarde_inicio", "janela_tarde_fim", "janela_noite_inicio", "janela_noite_fim",
 )
 
@@ -324,8 +344,8 @@ async def atualizar(conn, id_loja: int, dados: dict, rotulo_operador: str) -> Op
 
 
 def texto_do_hover(loja: dict) -> list:
-    """Linhas do hover do marcador: nome, endereço e UF, uma informação por linha e só o que existir."""
-    return [t for t in (loja.get("nome"), loja.get("endereco"), loja.get("uf")) if t]
+    """Linhas do hover do marcador: nome, endereço (sem ", Brazil" no fim) e UF, uma informação por linha e só o que existir."""
+    return [t for t in (loja.get("nome"), endereco_para_exibir(loja.get("endereco")), loja.get("uf")) if t]
 
 
 # ----------------------------------------------------------------------------------------------------------
@@ -341,7 +361,9 @@ class LinhaLoja:
     lng: Optional[float] = None
     status: str = "valida"  # valida | suspeita | invalida | duplicada_ignorada
     motivo: str = ""
+    cidade: Optional[str] = None
     sem_endereco: bool = False
+    sem_cidade: bool = False
     sem_uf: bool = False
     suspeita: Optional[str] = None  # trocadas | fora_do_brasil
 
@@ -353,16 +375,24 @@ class ResultadoCsvLojas:
     codificacao: str = "utf-8"
     formato: str = "colunas"  # colunas | my_maps
     avisos: list = field(default_factory=list)
+    colunas: dict = field(default_factory=dict)  # campo -> cabeçalho original reconhecido no arquivo
 
 
+# Cabeçalhos reconhecidos POR NOME (a ordem das colunas não importa), sem diferença de maiúsculas, acentos, espaços ou
+# separadores: "Endereço Completo", "ENDERECO_COMPLETO" e "EnderecoCompleto" são o mesmo cabeçalho.
 _ALIASES = {
-    "nome": ("nome", "loja", "nome_da_loja", "name"),
-    "estado": ("estado", "uf"),
-    "endereco": ("endereco", "logradouro"),
+    "nome": ("nome", "loja", "nomedaloja", "name"),
+    "estado": ("uf", "estado"),
+    "endereco": ("endereco", "enderecocompleto", "logradouro"),
+    "cidade": ("cidade", "municipio"),
     "latitude": ("latitude", "lat"),
     "longitude": ("longitude", "lng", "lon", "long"),
     "wkt": ("wkt",),
     "descricao": ("description", "descricao"),
+}
+ROTULOS_DAS_COLUNAS = {
+    "nome": "Nome", "estado": "UF", "endereco": "Endereço", "cidade": "Cidade", "latitude": "Latitude", "longitude": "Longitude",
+    "wkt": "WKT", "descricao": "description",
 }
 
 
@@ -374,8 +404,14 @@ def _ler_texto(caminho: Path) -> tuple:
         return dados.decode("cp1252", errors="replace"), "windows-1252"
 
 
+def _chave_do_cabecalho(texto) -> str:
+    return normalizar_cabecalho(texto).replace("_", "")
+
+
 def _indices(cabecalho: list) -> dict:
-    normalizados = {normalizar_cabecalho(c): i for i, c in enumerate(cabecalho)}
+    normalizados = {}
+    for i, c in enumerate(cabecalho):
+        normalizados.setdefault(_chave_do_cabecalho(c), i)
     achados = {}
     for campo, aliases in _ALIASES.items():
         for alias in aliases:
@@ -414,13 +450,13 @@ def ler_csv_lojas(caminho) -> ResultadoCsvLojas:
     """
     texto, codificacao = _ler_texto(caminho)
     primeira = next((l for l in texto.splitlines() if l.strip()), "")
-    escolhido, formato, indices = None, None, {}
+    escolhido, formato, indices, cabecalho_original = None, None, {}, []
     for delimitador in (";", ","):
         cabecalho = next(csv.reader([primeira], delimiter=delimitador), [])
         candidatos = _indices(cabecalho)
         achado = _formato(candidatos)
         if achado:
-            escolhido, formato, indices = delimitador, achado, candidatos
+            escolhido, formato, indices, cabecalho_original = delimitador, achado, candidatos, cabecalho
             break
     if escolhido is None:
         raise ValueError(
@@ -429,6 +465,7 @@ def ler_csv_lojas(caminho) -> ResultadoCsvLojas:
         )
 
     resultado = ResultadoCsvLojas(delimitador=escolhido, codificacao=codificacao, formato=formato)
+    resultado.colunas = {campo: cabecalho_original[i].strip() for campo, i in indices.items() if campo in ROTULOS_DAS_COLUNAS}
     leitor = csv.reader(texto.splitlines(), delimiter=escolhido)
     next(leitor)
 
@@ -452,6 +489,12 @@ def ler_csv_lojas(caminho) -> ResultadoCsvLojas:
             registro.status, registro.motivo = "invalida", str(erro).rstrip(".").lower()
             continue
         registro.sem_endereco = registro.endereco is None
+        try:
+            registro.cidade = normalizar_cidade(celula(linha, "cidade")) if "cidade" in indices else None
+        except ValueError as erro:
+            registro.status, registro.motivo = "invalida", str(erro).rstrip(".").lower()
+            continue
+        registro.sem_cidade = registro.cidade is None
         try:
             if formato == "my_maps":
                 registro.lat, registro.lng = interpretar_wkt(celula(linha, "wkt"))
@@ -494,6 +537,7 @@ def resumir(resultado: ResultadoCsvLojas, exemplos: int = 10) -> dict:
         "linhas": len(linhas),
         "validas": len(validas),
         "sem_endereco": sum(1 for l in validas if l.sem_endereco),
+        "sem_cidade": sum(1 for l in validas if l.sem_cidade),
         "sem_uf": sum(1 for l in validas if l.sem_uf),
         "duplicadas": sum(1 for l in linhas if l.status == "duplicada_ignorada"),
         "suspeitas": len(suspeitas),
@@ -526,7 +570,7 @@ async def prever_carga(conn, linhas: list, sobrescrever_editados: bool = False) 
 async def gravar_carga(conn, linhas: list, sobrescrever_editados: bool = False) -> dict:
     """
     Upsert por nome numa única transação (ou grava tudo, ou nada; repetir é seguro). Loja que um operador editou na tela
-    NÃO é sobrescrita (a menos de sobrescrever_editados). Em loja existente, endereço e Estado em branco no CSV não
+    NÃO é sobrescrita (a menos de sobrescrever_editados). Em loja existente, endereço, cidade e Estado em branco no CSV não
     apagam o que já está cadastrado.
     """
     novas = atualizadas = protegidas = 0
@@ -535,15 +579,15 @@ async def gravar_carga(conn, linhas: list, sobrescrever_editados: bool = False) 
             existente = await conn.fetchrow("SELECT id, atualizado_por FROM lojas WHERE lower(btrim(nome)) = lower($1)", l.nome)
             if existente is None:
                 await conn.fetchrow(
-                    "INSERT INTO lojas (nome, uf, endereco, lat, lng, atualizado_por) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
-                    l.nome, l.uf, l.endereco, l.lat, l.lng, OPERADOR_CARGA_INICIAL,
+                    "INSERT INTO lojas (nome, uf, endereco, cidade, lat, lng, atualizado_por) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+                    l.nome, l.uf, l.endereco, l.cidade, l.lat, l.lng, OPERADOR_CARGA_INICIAL,
                 )
                 novas += 1
             elif sobrescrever_editados or existente["atualizado_por"] == OPERADOR_CARGA_INICIAL:
                 await conn.fetchrow(
-                    "UPDATE lojas SET uf = COALESCE($2, uf), endereco = COALESCE($3, endereco), lat = $4, lng = $5, "
-                    "atualizado_em = CURRENT_TIMESTAMP, atualizado_por = $6 WHERE id = $1 RETURNING id",
-                    existente["id"], l.uf, l.endereco, l.lat, l.lng, OPERADOR_CARGA_INICIAL,
+                    "UPDATE lojas SET uf = COALESCE($2, uf), endereco = COALESCE($3, endereco), cidade = COALESCE($4, cidade), lat = $5, lng = $6, "
+                    "atualizado_em = CURRENT_TIMESTAMP, atualizado_por = $7 WHERE id = $1 RETURNING id",
+                    existente["id"], l.uf, l.endereco, l.cidade, l.lat, l.lng, OPERADOR_CARGA_INICIAL,
                 )
                 atualizadas += 1
             else:

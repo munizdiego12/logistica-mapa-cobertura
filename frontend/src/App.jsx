@@ -698,6 +698,12 @@ export default function App() {
             {/* Aviso explícito quando não há faixas de CEP reais cadastradas nesse raio
                 (Etapa 2: o gerador sintético de 48 pontos foi removido — não inventamos
                 mais CEPs fictícios para preencher esse painel). */}
+            {dadosCoberturaCeps && dadosCoberturaCeps.aviso_ibge && (
+              <div className="p-2.5 rounded-lg bg-amber-950/30 border border-amber-500/30 text-[11px] flex items-start gap-2">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+                <span className="text-amber-300">{dadosCoberturaCeps.aviso_ibge}</span>
+              </div>
+            )}
             {dadosCoberturaCeps && dadosCoberturaCeps.aviso && (
               <div className="p-2.5 rounded-lg bg-amber-950/30 border border-amber-500/30 text-[11px] flex items-start gap-2">
                 <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />

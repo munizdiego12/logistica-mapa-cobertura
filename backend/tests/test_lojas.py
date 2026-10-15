@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+import ibge
 import lojas
 import main
 from backend.tests.fakes_asyncpg import ConexaoSqlite, FakePool, criar_banco_sqlite
@@ -297,7 +298,7 @@ def test_migration_0007_idempotente_sem_apagar_e_sem_coluna_filial():
         for comando in modulo.COMANDOS:
             conn.db.execute(comando.replace("SERIAL PRIMARY KEY", "INTEGER PRIMARY KEY").replace("TIMESTAMPTZ", "TIMESTAMP").replace("NOW()", "CURRENT_TIMESTAMP"))
     colunas = [l[1] for l in conn.db.execute("PRAGMA table_info(lojas)")]
-    assert colunas == ["id", "nome", "uf", "endereco", "lat", "lng", "ativo", "capacidade_peso", "capacidade_volume", "janela_manha_inicio", "janela_manha_fim",
+    assert colunas == ["id", "nome", "uf", "endereco", "cidade", "lat", "lng", "ativo", "capacidade_peso", "capacidade_volume", "janela_manha_inicio", "janela_manha_fim",
                        "janela_tarde_inicio", "janela_tarde_fim", "janela_noite_inicio", "janela_noite_fim", "atualizado_em", "atualizado_por"]
 
 
@@ -529,3 +530,185 @@ def test_roteirizacao_com_loja_usa_a_coordenada_dela_e_grava_o_nome_como_loja_hu
     assert geocodificados == []
     assert resultado["loja_hub"] == "Atacadão Guarujá"
     assert (resultado["origem"]["lat"], resultado["origem"]["lon"], resultado["origem"]["rua"], resultado["origem"]["loja_id"]) == (-23.993, -46.2564, "Atacadão Guarujá", 7)
+
+
+# ----------------------------------------------------------------------------------------------------------
+# Cidade, cabeçalhos reconhecidos por nome e hover sem o país (ajuste de 16/10/2026)
+# ----------------------------------------------------------------------------------------------------------
+CSV_REAL = (
+    "Nome,UF,Endereço Completo,Cidade,Latitude,Longitude\n"
+    '"Atacadão Guarujá",SP,"Av. Santos Dumont, 100, Guarujá, SP, Brazil",Guarujá,"-23,9930","-46,2564"\n'
+    "Atacadão Campinas,SP,,campinas,-22.9099,-47.0626\n"
+    "Atacadão Sem Cidade,RJ,Rua A,,-22.9,-43.2\n"
+)
+
+
+def test_csv_real_nome_uf_endereco_completo_cidade_latitude_longitude(tmp_path):
+    r = lojas.ler_csv_lojas(_csv(tmp_path, CSV_REAL))
+    assert r.formato == "colunas" and r.delimitador == ","
+    assert r.colunas == {"nome": "Nome", "estado": "UF", "endereco": "Endereço Completo", "cidade": "Cidade", "latitude": "Latitude", "longitude": "Longitude"}
+    guaruja, campinas, sem_cidade = r.linhas
+    assert (guaruja.nome, guaruja.uf, guaruja.cidade, guaruja.lat, guaruja.lng, guaruja.status) == ("Atacadão Guarujá", "SP", "Guarujá", -23.993, -46.2564, "valida")
+    assert guaruja.endereco == "Av. Santos Dumont, 100, Guarujá, SP, Brazil"  # o dado guardado não perde o país
+    assert (campinas.cidade, campinas.sem_endereco, campinas.sem_cidade, campinas.lat) == ("campinas", True, False, -22.9099)  # ponto decimal também vale
+    assert (sem_cidade.cidade, sem_cidade.sem_cidade, sem_cidade.sem_endereco, sem_cidade.status) == (None, True, False, "valida")
+    resumo = lojas.resumir(r)
+    assert (resumo["validas"], resumo["sem_cidade"], resumo["sem_endereco"]) == (3, 1, 1)
+
+
+@pytest.mark.parametrize("cabecalho", [
+    "Nome;UF;Endereço Completo;Cidade;Latitude;Longitude",
+    "NOME;uf;ENDERECO COMPLETO;CIDADE;LAT;LNG",
+    "nome;estado;endereco;cidade;latitude;lon",
+    "Nome;Estado;EnderecoCompleto;Cidade;Lat;Longitude",
+    "Nome ;UF ;Endereço  Completo ;Cidade ;LATITUDE ;LONGITUDE ",
+    "Nome;UF;endereco_completo;Município;Latitude;Long",
+])
+def test_cabecalhos_com_variacoes_de_maiusculas_acentos_espacos_e_apelidos(tmp_path, cabecalho):
+    r = lojas.ler_csv_lojas(_csv(tmp_path, cabecalho + "\nAtacadão Teste;sp;Rua X, 1;Santos;-23,96;-46,33\n"))
+    linha = r.linhas[0]
+    assert (linha.nome, linha.uf, linha.endereco, linha.cidade, linha.lat, linha.lng, linha.status) == ("Atacadão Teste", "SP", "Rua X, 1", "Santos", -23.96, -46.33, "valida")
+    assert set(r.colunas) == {"nome", "estado", "endereco", "cidade", "latitude", "longitude"}
+
+
+def test_a_ordem_das_colunas_nao_importa(tmp_path):
+    texto = "Longitude;Latitude;Cidade;Endereço;UF;Nome\n-46,33;-23,96;Santos;Rua X, 1;SP;Atacadão Teste\n"
+    linha = lojas.ler_csv_lojas(_csv(tmp_path, texto)).linhas[0]
+    assert (linha.nome, linha.uf, linha.endereco, linha.cidade, linha.lat, linha.lng) == ("Atacadão Teste", "SP", "Rua X, 1", "Santos", -23.96, -46.33)
+
+
+def test_csv_sem_a_coluna_cidade_continua_funcionando_e_avisa_nas_contagens(tmp_path):
+    texto = "Nome;UF;Endereço;Latitude;Longitude\nLoja A;SP;Rua 1;-23,5;-46,6\n"
+    r = lojas.ler_csv_lojas(_csv(tmp_path, texto))
+    assert "cidade" not in r.colunas and r.linhas[0].status == "valida" and r.linhas[0].sem_cidade is True
+    assert lojas.resumir(r)["sem_cidade"] == 1
+
+
+def test_my_maps_com_coluna_cidade_tambem_e_lida(tmp_path):
+    texto = 'WKT,name,description,Cidade\n"POINT (-46.2564 -23.9930)",Atacadão Guarujá,"Av. Santos Dumont, 100",Guarujá\n'
+    r = lojas.ler_csv_lojas(_csv(tmp_path, texto))
+    assert r.formato == "my_maps" and r.linhas[0].cidade == "Guarujá" and r.colunas["cidade"] == "Cidade"
+
+
+@pytest.mark.parametrize("endereco, esperado", [
+    ("Av. Santos Dumont, 100, Guarujá, SP, Brazil", "Av. Santos Dumont, 100, Guarujá, SP"),
+    ("Av. Santos Dumont, 100, Guarujá - SP, Brasil", "Av. Santos Dumont, 100, Guarujá - SP"), ("Rua A, 5 - Brasil", "Rua A, 5 - Brasil"),
+    ("Rua A, 5, BRAZIL", "Rua A, 5"), ("Rua A, 5 ,brasil.", "Rua A, 5"), ("Rua A, 5, Brazil ", "Rua A, 5"),
+    ("Rua A, 5", "Rua A, 5"), ("Rua Brasil, 5", "Rua Brasil, 5"), ("Avenida do Brasil", "Avenida do Brasil"),
+    ("Brazil", ""), ("", ""), (None, ""),
+])
+def test_hover_mostra_o_endereco_sem_o_pais_no_final(endereco, esperado):
+    assert lojas.endereco_para_exibir(endereco) == esperado
+
+
+def test_hover_usa_o_endereco_sem_o_pais_e_nao_altera_o_dado_guardado():
+    loja = _loja(endereco="Av. Santos Dumont, 100, Guarujá, SP, Brazil")
+    assert lojas.texto_do_hover(loja) == ["Atacadão Guarujá", "Av. Santos Dumont, 100, Guarujá, SP", "SP"]
+    assert loja["endereco"].endswith("Brazil")
+    assert lojas.texto_do_hover(_loja(endereco="Brazil")) == ["Atacadão Guarujá", "SP"]  # só o país: não sobra linha vazia
+
+
+def test_cidade_e_opcional_normalizada_e_limitada(banco):
+    loja = _rodar(lojas.criar(banco, _loja(cidade="  Praia   Grande "), OPERADOR))
+    assert loja["cidade"] == "Praia Grande"
+    assert _rodar(lojas.criar(banco, _loja(nome="Outra", cidade=""), OPERADOR))["cidade"] is None
+    assert _rodar(lojas.criar(banco, _loja(nome="Outra 2"), OPERADOR))["cidade"] is None
+    with pytest.raises(ValueError) as erro:
+        lojas.validar_loja(_loja(cidade="x" * 200))
+    assert "cidade" in str(erro.value)
+    editada = _rodar(lojas.atualizar(banco, loja["id"], _loja(cidade="Santos"), OPERADOR))
+    assert editada["cidade"] == "Santos"
+
+
+def _com_municipios(banco):
+    for comando in ibge.SCHEMA_IBGE_MUNICIPIOS:
+        banco.db.execute(comando)
+    for codigo, nome, uf in ((3518701, "Guarujá", "SP"), (3550308, "São Paulo", "SP"), (3509502, "Campinas", "SP"), (3304557, "Rio de Janeiro", "RJ")):
+        banco.db.execute("INSERT INTO ibge_municipios (codigo, nome, uf, nome_normalizado) VALUES (?, ?, ?, ?)", (codigo, nome, uf, ibge.normalizar_nome(nome)))
+
+
+def _loja_via_api(cliente, **extra):
+    r = cliente.post("/api/lojas", json={**CORPO, **extra})
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+@pytest.mark.parametrize("cidade", ["Guarujá", "Guaruja", "GUARUJÁ", "guarujá", "  guaruja  "])
+def test_ibge_do_hub_vem_da_cidade_e_uf_com_ou_sem_acento_e_maiusculas(cobertura_api, cidade):
+    cliente, banco, id_loja, chamadas = cobertura_api
+    _com_municipios(banco)
+    cliente.put(f"/api/lojas/{id_loja}", json={**CORPO, "cidade": cidade})
+    r = cliente.post("/api/cobertura-ceps", json={"loja_id": id_loja})
+    hub = r.json()["hub"]
+    assert (hub["ibge"], hub["aviso_ibge"], r.json()["aviso_ibge"]) == (3518701, None, None)
+    assert hub["cidade"] == " ".join(cidade.split())
+
+
+def test_ibge_do_hub_pela_cidade_ganha_do_prefixo_de_cep_mais_proximo(cobertura_api, monkeypatch):
+    cliente, banco, id_loja, chamadas = cobertura_api
+    _com_municipios(banco)
+    cliente.put(f"/api/lojas/{id_loja}", json={**CORPO, "cidade": "São Paulo"})  # o prefixo mais próximo é de Guarujá
+    hub = cliente.post("/api/cobertura-ceps", json={"loja_id": id_loja}).json()["hub"]
+    assert hub["ibge"] == 3550308 and hub["cidade"] == "São Paulo" and hub["aviso_ibge"] is None
+
+
+def test_cidade_nao_encontrada_usa_o_cep_mais_proximo_e_avisa(cobertura_api):
+    cliente, banco, id_loja, chamadas = cobertura_api
+    _com_municipios(banco)
+    cliente.put(f"/api/lojas/{id_loja}", json={**CORPO, "cidade": "Cidade Inexistente"})
+    r = cliente.post("/api/cobertura-ceps", json={"loja_id": id_loja})
+    hub = r.json()["hub"]
+    assert hub["ibge"] == 3518701  # do prefixo de CEP mais próximo, como antes
+    assert 'Não achei a cidade "Cidade Inexistente" (SP)' in hub["aviso_ibge"] and "CEP mais próximo" in hub["aviso_ibge"]
+    assert r.json()["aviso_ibge"] == hub["aviso_ibge"]
+    assert not re.search(r"sql|tabela|banco|api|json|ibge_municipios", hub["aviso_ibge"], re.IGNORECASE)
+
+
+def test_cidade_com_o_mesmo_nome_em_outro_estado_nao_e_confundida(cobertura_api):
+    cliente, banco, id_loja, chamadas = cobertura_api
+    _com_municipios(banco)
+    cliente.put(f"/api/lojas/{id_loja}", json={**CORPO, "cidade": "Rio de Janeiro"})  # a loja é de SP: a cidade é do RJ
+    hub = cliente.post("/api/cobertura-ceps", json={"loja_id": id_loja}).json()["hub"]
+    assert hub["ibge"] == 3518701 and "Não achei a cidade" in hub["aviso_ibge"]
+
+
+def test_loja_sem_cidade_usa_o_cep_mais_proximo_e_avisa(cobertura_api):
+    cliente, banco, id_loja, chamadas = cobertura_api
+    r = cliente.post("/api/cobertura-ceps", json={"loja_id": id_loja})
+    hub = r.json()["hub"]
+    assert (hub["ibge"], hub["cidade"]) == (3518701, "Guarujá")
+    assert hub["aviso_ibge"].startswith("A loja está sem cidade cadastrada.") and "CEP mais próximo" in hub["aviso_ibge"]
+
+
+def test_loja_sem_cidade_e_sem_cep_por_perto_deixa_o_ibge_vazio_e_avisa(cobertura_api, monkeypatch):
+    cliente, banco, id_loja, chamadas = cobertura_api
+
+    async def longe(lat, lon, raio):
+        return [_prefixo("11410", 25.0, cidade="Santos", cod=3548500)]
+
+    monkeypatch.setattr(main.database, "consultar_prefixos_por_raio", longe)
+    hub = cliente.post("/api/cobertura-ceps", json={"loja_id": id_loja}).json()["hub"]
+    assert hub["ibge"] is None and hub["cidade"] == "" and "em branco" in hub["aviso_ibge"]
+
+
+def test_cidade_sem_estado_nao_da_para_buscar_no_ibge_e_avisa(cobertura_api):
+    cliente, banco, id_loja, chamadas = cobertura_api
+    _com_municipios(banco)
+    cliente.put(f"/api/lojas/{id_loja}", json={**CORPO, "uf": None, "cidade": "Guarujá"})
+    hub = cliente.post("/api/cobertura-ceps", json={"loja_id": id_loja}).json()["hub"]
+    assert hub["ibge"] == 3518701 and "sem Estado" in hub["aviso_ibge"] and hub["cidade"] == "Guarujá"
+
+
+def test_exportacao_usa_o_ibge_do_hub_vindo_da_cidade(cobertura_api):
+    import io
+    import openpyxl
+    cliente, banco, id_loja, chamadas = cobertura_api
+    _com_municipios(banco)
+    cliente.put(f"/api/lojas/{id_loja}", json={**CORPO, "cidade": "São Paulo"})
+    cobertura_resp = cliente.post("/api/cobertura-ceps", json={"loja_id": id_loja}).json()
+    sem_codigo_proprio = [{**p, "ibge": None} for p in cobertura_resp["pontos_cobertos"]]  # o código do hub vale onde o ponto não tem o seu
+    r = cliente.post("/api/exportar-tabela-frete-xlsx", json={"hub": cobertura_resp["hub"], "pontos_cobertos": sem_codigo_proprio})
+    assert r.status_code == 200
+    planilha = openpyxl.load_workbook(io.BytesIO(r.content))
+    textos = " ".join(str(c.value) for aba in planilha for linha in aba.iter_rows() for c in linha if c.value is not None)
+    assert "3550308" in textos

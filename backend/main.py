@@ -356,9 +356,28 @@ async def _cobertura_da_loja(loja_id: int, raio_max: float):
     lat, lon = loja["lat"], loja["lng"]
     pontos_cobertos = await _buscar_cobertura(lat, lon, raio_max)
     resumo = cobertura.resumir_cobertura(pontos_cobertos)
-    # A loja não tem cidade cadastrada: cidade, Estado e código IBGE vêm do prefixo de CEP mais próximo (a menos de 10 km),
-    # que é dado real do CNEFE; se não houver nenhum por perto, ficam vazios (nunca inventados).
+    # Código IBGE do hub: primeiro pela cidade + UF cadastradas na loja (busca sem acento e sem diferença de maiúsculas na
+    # lista de municípios do IBGE). Sem cidade, sem UF ou cidade não encontrada, vale o prefixo de CEP mais próximo
+    # (a menos de 10 km, dado real do CNEFE) e o operador é avisado; se nem isso houver, fica vazio (nunca inventado).
     proximo = next((p for p in pontos_cobertos if p["distancia_km"] <= DISTANCIA_MAXIMA_CIDADE_DA_LOJA_KM), None)
+    ibge_hub, cidade_hub, aviso_ibge = None, loja.get("cidade") or "", None
+    if loja.get("cidade") and loja.get("uf"):
+        ibge_hub = await database.buscar_ibge_municipio(loja["uf"], loja["cidade"])
+        if ibge_hub is None:
+            aviso_ibge = f"Não achei a cidade \"{loja['cidade']}\" ({loja['uf']}) na lista de municípios do IBGE. "
+    elif loja.get("cidade"):
+        aviso_ibge = "A loja está sem Estado cadastrado, então não dá para achar a cidade na lista de municípios do IBGE. "
+    else:
+        aviso_ibge = "A loja está sem cidade cadastrada. "
+    if ibge_hub is None:
+        if proximo is not None:
+            ibge_hub = proximo["ibge"]
+            cidade_hub = cidade_hub or proximo["cidade"]
+            aviso_ibge += "O código IBGE foi tirado do CEP mais próximo da loja. Confira ou cadastre a cidade na tela \"Lojas\"."
+        else:
+            aviso_ibge += "Também não há CEP cadastrado por perto, então o código IBGE ficou em branco. Cadastre a cidade na tela \"Lojas\"."
+    else:
+        aviso_ibge = None
     aviso = None
     if not pontos_cobertos:
         aviso = (
@@ -367,8 +386,8 @@ async def _cobertura_da_loja(loja_id: int, raio_max: float):
         )
     return {
         "hub": {
-            "lat": lat, "lon": lon, "cidade": proximo["cidade"] if proximo else "", "uf": loja["uf"] or (proximo["uf"] if proximo else ""),
-            "cep": "", "ibge": proximo["ibge"] if proximo else None,
+            "lat": lat, "lon": lon, "cidade": cidade_hub, "uf": loja["uf"] or (proximo["uf"] if proximo else ""),
+            "cep": "", "ibge": ibge_hub, "aviso_ibge": aviso_ibge,
             "endereco": f"{loja['nome']} - {loja['endereco']}" if loja["endereco"] else loja["nome"],
             "status": "VALIDO", "loja_id": loja["id"], "nome": loja["nome"],
         },
@@ -379,6 +398,7 @@ async def _cobertura_da_loja(loja_id: int, raio_max: float):
         "legenda_cobertura": cobertura.LEGENDA_COBERTURA,
         "fonte": cobertura.ATRIBUICAO_CNEFE if pontos_cobertos else None,
         "aviso": aviso,
+        "aviso_ibge": aviso_ibge,
     }
 
 
@@ -1255,6 +1275,7 @@ class LojaRequest(BaseModel):
     nome: Optional[str] = None
     uf: Optional[str] = None
     endereco: Optional[str] = None
+    cidade: Optional[str] = None
     lat: Optional[Union[float, str]] = None
     lng: Optional[Union[float, str]] = None
     ativo: bool = True

@@ -1,4 +1,5 @@
 import io
+import logging
 import math
 import time
 import asyncio
@@ -13,6 +14,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, Field
@@ -35,6 +37,10 @@ from auth import (
 )
 
 app = FastAPI(title="Zubale Routing Core - Dynamic National Engine")
+
+# Respostas a partir de ~1 KB saem compactadas (a cobertura de milhares de faixas cai de ~1,2 MB para ~60 KB). Fica ANTES do CORS
+# na pilha, então o CORS continua sendo a camada de fora e os cabeçalhos dele seguem em todas as respostas.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 app.add_middleware(
     CORSMiddleware,
@@ -274,14 +280,22 @@ class RaioCepRequest(BaseModel):
     origem_uf: Optional[str] = ""
     raio_km: Optional[float] = 30.0
 
-async def _buscar_cobertura(lat: float, lon: float, raio_km: float):
+logger_cobertura = logging.getLogger("zubale.cobertura")
+
+
+async def _buscar_cobertura(lat: float, lon: float, raio_km: float, medidas: Optional[dict] = None):
     """
     Cobertura por raio: prefixos de CEP do CNEFE (cep_prefixos). Falha do banco vira erro 503 explícito:
     lista vazia só significa "sem dados para essa região", nunca "deu erro".
     """
+    inicio_sql = time.perf_counter()
     try:
         prefixos = await database.consultar_prefixos_por_raio(lat, lon, raio_km)
+        if medidas is not None:
+            medidas["sql_ms"] = (time.perf_counter() - inicio_sql) * 1000
     except Exception as e:
+        if medidas is not None:
+            medidas["sql_ms"] = (time.perf_counter() - inicio_sql) * 1000
         print(f"[cobertura] Falha ao consultar a base de CEPs: {e!r}")
         raise HTTPException(
             status_code=503,
@@ -292,14 +306,43 @@ async def _buscar_cobertura(lat: float, lon: float, raio_km: float):
         )
     return cobertura.montar_cobertura(prefixos, raio_km)
 
+def _registrar_tempo_da_cobertura(req: "RaioCepRequest", medidas: dict, inicio: float, resultado: str, faixas: int = 0):
+    """
+    Uma linha no log do servidor com o tempo total do endpoint e o da consulta SQL, em milissegundos, e a quantidade de faixas.
+    Só números e o modo (loja ou endereço): nada de nome, endereço, CEP, e-mail do operador nem string de conexão.
+    """
+    total_ms = (time.perf_counter() - inicio) * 1000
+    sql_ms = medidas.get("sql_ms")
+    logger_cobertura.info(
+        "[cobertura] resultado=%s total_ms=%d sql_ms=%s faixas=%d modo=%s raio_km=%s",
+        resultado, round(total_ms), "n/d" if sql_ms is None else str(round(sql_ms)), faixas,
+        "loja" if req.loja_id is not None else "endereco", req.raio_km if req.raio_km is not None else 30.0,
+    )
+
+
 @app.post("/api/cobertura-ceps", dependencies=[Depends(obter_operador_atual)])
 async def gerar_cobertura_ceps_instantanea(req: RaioCepRequest):
+    inicio = time.perf_counter()
+    medidas: dict = {}
+    try:
+        resposta = await _gerar_cobertura_ceps(req, medidas)
+    except HTTPException as erro:
+        _registrar_tempo_da_cobertura(req, medidas, inicio, f"erro_{erro.status_code}")
+        raise
+    except Exception:
+        _registrar_tempo_da_cobertura(req, medidas, inicio, "erro_inesperado")
+        raise
+    _registrar_tempo_da_cobertura(req, medidas, inicio, "ok", int(resposta.get("total_pontos", 0)))
+    return resposta
+
+
+async def _gerar_cobertura_ceps(req: RaioCepRequest, medidas: dict):
     raio_max = req.raio_km if req.raio_km is not None else 30.0
     if not (RAIO_MINIMO_KM <= raio_max <= RAIO_MAXIMO_KM):
         raise HTTPException(status_code=422, detail=MSG_RAIO_INVALIDO)
 
     if req.loja_id is not None:
-        return await _cobertura_da_loja(req.loja_id, raio_max)
+        return await _cobertura_da_loja(req.loja_id, raio_max, medidas)
 
     if not (req.origem_rua or req.origem_cep):
         raise HTTPException(status_code=422, detail="Escolha uma loja ou informe o endereço do hub.")
@@ -325,7 +368,7 @@ async def gerar_cobertura_ceps_instantanea(req: RaioCepRequest):
 
     # Cobertura real dentro do raio (prefixos do CNEFE). Sem dados reais para a região devolvemos
     # lista vazia com um aviso explícito em vez de inventar CEPs.
-    pontos_cobertos = await _buscar_cobertura(lat, lon, raio_max)
+    pontos_cobertos = await _buscar_cobertura(lat, lon, raio_max, medidas)
     resumo = cobertura.resumir_cobertura(pontos_cobertos)
 
     aviso = None
@@ -350,11 +393,11 @@ async def gerar_cobertura_ceps_instantanea(req: RaioCepRequest):
         "aviso": aviso,
     }
 
-async def _cobertura_da_loja(loja_id: int, raio_max: float):
+async def _cobertura_da_loja(loja_id: int, raio_max: float, medidas: Optional[dict] = None):
     """Cobertura pela coordenada CADASTRADA da loja (sem geocodificar o endereço)."""
     loja = await _com_conexao_lojas(lambda c: lojas.obter_ativa(c, loja_id))
     lat, lon = loja["lat"], loja["lng"]
-    pontos_cobertos = await _buscar_cobertura(lat, lon, raio_max)
+    pontos_cobertos = await _buscar_cobertura(lat, lon, raio_max, medidas)
     resumo = cobertura.resumir_cobertura(pontos_cobertos)
     # Código IBGE do hub: primeiro pela cidade + UF cadastradas na loja (busca sem acento e sem diferença de maiúsculas na
     # lista de municípios do IBGE). Sem cidade, sem UF ou cidade não encontrada, vale o prefixo de CEP mais próximo

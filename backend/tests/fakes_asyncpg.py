@@ -37,7 +37,7 @@ class FakeConn:
     async def close(self):
         self.eventos.append("fechar")
 
-    def transaction(self):
+    def transaction(self, **opcoes):
         conn = self
 
         class _Transacao:
@@ -137,7 +137,7 @@ class ConexaoSqlite:
     async def close(self):
         pass
 
-    def transaction(self):
+    def transaction(self, **opcoes):
         conn = self
 
         class _Transacao:

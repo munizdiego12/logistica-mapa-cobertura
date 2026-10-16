@@ -12,6 +12,7 @@ import MapaLeaflet from './components/MapaLeaflet';
 import Login from './components/Login';
 import PesosItens from './components/PesosItens';
 import Motoristas from './components/Motoristas';
+import SeletorMotoristas from './components/SeletorMotoristas';
 import Lojas from './components/Lojas';
 import SeletorLoja from './components/SeletorLoja';
 import { interpretarRaio, nomeDoHub, RAIO_PADRAO_KM } from './services/lojas';
@@ -19,8 +20,8 @@ import { API_BASE } from './config';
 import { instalarTratamento401, MENSAGEM_SESSAO_EXPIRADA } from './services/sessao';
 import { baixarBlob } from './services/download';
 import {
-  MSG_MARQUE_MOTORISTA, rotuloDoMotorista, textoRotasEMotoristas, linhaDeConfirmacao, linhaDeDesfazer,
-  rotasPorMotoristaDoResultado, manterSomenteAtivos, alternarMarcacao, motoristasMarcados, podeExecutarComMotoristas
+  MSG_MARQUE_MOTORISTA, textoRotasEMotoristas, linhaDeConfirmacao, linhaDeDesfazer,
+  rotasPorMotoristaDoResultado, manterSomenteAtivos, motoristasMarcados, podeExecutarComMotoristas
 } from './services/selecaoMotoristas';
 
 // Instância dedicada que anexa automaticamente o token do operador logado
@@ -894,44 +895,13 @@ export default function App() {
               </div>
             ) : (
               <>
-                <div className="flex items-center gap-2 text-[10px]">
-                  <button
-                    type="button"
-                    onClick={() => setSelecionados(motoristas.map((m) => m.id))}
-                    className="px-2 py-0.5 rounded border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800"
-                  >
-                    Marcar todos
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSelecionados([])}
-                    className="px-2 py-0.5 rounded border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800"
-                  >
-                    Limpar
-                  </button>
-                </div>
-
-                <div role="group" aria-label="Motoristas da roteirização" className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-                  {motoristas.map((item) => {
-                    const marcado = selecionados.includes(item.id);
-                    return (
-                      <label
-                        key={item.id}
-                        className={`flex items-start gap-2 p-2 rounded-lg border cursor-pointer text-[11px] transition-colors ${
-                          marcado ? 'bg-blue-500/10 border-blue-500/40 text-slate-100' : 'bg-slate-900/90 border-slate-800/80 text-slate-300 hover:border-slate-700'
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={marcado}
-                          onChange={() => setSelecionados((atuais) => alternarMarcacao(atuais, item.id))}
-                          className="mt-0.5 accent-blue-500"
-                        />
-                        <span className="leading-snug">{rotuloDoMotorista(item, rotasHoje[String(item.id)] || 0)}</span>
-                      </label>
-                    );
-                  })}
-                </div>
+                <SeletorMotoristas
+                  motoristas={motoristas}
+                  lojaId={lojaHubId}
+                  rotasHoje={rotasHoje}
+                  selecionados={selecionados}
+                  onMudar={setSelecionados}
+                />
 
                 <div className="p-2.5 rounded-lg bg-slate-950/60 border border-slate-800 text-[11px] space-y-1.5">
                   <div className="flex items-center justify-between">

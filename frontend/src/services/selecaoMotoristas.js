@@ -73,3 +73,15 @@ export function motoristasMarcados(ativos, selecionados) {
 export function podeExecutarComMotoristas(selecionados) {
   return Array.isArray(selecionados) && selecionados.length > 0;
 }
+
+/** Marca vários de uma vez (ex.: "Marcar todos desta loja"), mantendo quem já estava marcado e sem repetir ids. */
+export function marcarVarios(selecionados, ids) {
+  const atuais = selecionados ?? [];
+  const novos = (ids ?? []).filter((id) => !atuais.includes(id));
+  return novos.length === 0 ? atuais : [...atuais, ...novos];
+}
+
+/** Etiqueta do motorista marcado: "João · MOT-0001" (sem código: só o nome). */
+export function etiquetaDoMotorista(motorista) {
+  return motorista.codigo ? `${motorista.nome} · ${motorista.codigo}` : motorista.nome;
+}

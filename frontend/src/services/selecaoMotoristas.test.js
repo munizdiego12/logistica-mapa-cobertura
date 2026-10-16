@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   MSG_MARQUE_MOTORISTA, textoRotasHoje, rotuloDoMotorista, textoRotasEMotoristas, linhaDeConfirmacao, linhaDeDesfazer,
-  rotasPorMotoristaDoResultado, manterSomenteAtivos, alternarMarcacao, motoristasMarcados, podeExecutarComMotoristas,
+  rotasPorMotoristaDoResultado, manterSomenteAtivos, alternarMarcacao, motoristasMarcados, podeExecutarComMotoristas, marcarVarios, etiquetaDoMotorista,
 } from './selecaoMotoristas.js';
 
 test('rótulo do campo: nome - tipo - rotas de hoje, com singular e plural certos', () => {
@@ -65,4 +65,17 @@ test('motorista desativado some da marcação quando a lista de ativos é atuali
 test('a mensagem de motorista não marcado é clara e sem termo técnico', () => {
   assert.equal(MSG_MARQUE_MOTORISTA, 'Marque pelo menos um motorista para gerar as rotas.');
   assert.doesNotMatch(MSG_MARQUE_MOTORISTA, /id|api|json|null|erro/i);
+});
+
+test('marcar vários mantém quem já estava marcado e não repete', () => {
+  assert.deepEqual(marcarVarios([5], [1, 2, 5]), [5, 1, 2]);
+  assert.deepEqual(marcarVarios([], [1, 2]), [1, 2]);
+  const atuais = [1, 2];
+  assert.equal(marcarVarios(atuais, [2]), atuais); // nada novo: devolve o mesmo (sem render à toa)
+  assert.deepEqual(marcarVarios(undefined, undefined), []);
+});
+
+test('etiqueta do motorista marcado: nome e código', () => {
+  assert.equal(etiquetaDoMotorista({ nome: 'João', codigo: 'MOT-0001' }), 'João · MOT-0001');
+  assert.equal(etiquetaDoMotorista({ nome: 'Ana', codigo: null }), 'Ana');
 });

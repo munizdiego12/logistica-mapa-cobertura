@@ -56,5 +56,5 @@ data/peso/
 
 # Cadastro de lojas (CSV exportado do Google Sheets/My Maps; repositório público: nunca versionar)
 data/lojas/
-
+# Cadastro de motoristas (CSV com dados pessoais, como telefone; repositório público: nunca versionar)
 data/motoristas/

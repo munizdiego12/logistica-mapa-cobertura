@@ -298,8 +298,8 @@ def test_migration_desfaz_com_downgrade():
 
 def test_alembic_tem_uma_cabeca_e_a_ordem_certa():
     script = ScriptDirectory.from_config(Config(str(BACKEND / "alembic.ini")))
-    assert script.get_heads() == ["0007"]
-    assert [r.revision for r in script.walk_revisions()] == ["0007", "0006", "0005", "0004", "0003", "0002", "0001"]
+    assert script.get_heads() == ["0008"]
+    assert [r.revision for r in script.walk_revisions()] == ["0008", "0007", "0006", "0005", "0004", "0003", "0002", "0001"]
     assert script.get_revision("0001").down_revision is None
 
 

@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 import frota
 import main
-from backend.tests.fakes_asyncpg import FakeConn, FakePool
+from backend.tests.fakes_asyncpg import FakeConn, FakePool, criar_banco_sqlite
 
 BACKEND = Path(__file__).resolve().parents[1]
 ARQUIVO_MIGRACAO = BACKEND / "migrations" / "versions" / "0004_tipos_veiculo_motoristas.py"
@@ -148,30 +148,6 @@ def test_editar_tipo_inexistente_da_404(api):
     assert cliente.put("/api/tipos-veiculo/99", json={"custo_rota": 130}).status_code == 404
 
 
-# ----------------------------------------------------------------------------------------------------------
-# Rotas: motoristas
-# ----------------------------------------------------------------------------------------------------------
-def test_listar_motoristas_com_e_sem_inativos(api):
-    cliente, conn = api
-    conn.respostas = [[_motorista(1), _motorista(2, "Ana", ativo=False)]]
-    r = cliente.get("/api/motoristas")
-    assert r.status_code == 200 and [m["ativo"] for m in r.json()] == [True, False]
-    assert "WHERE ativo" not in conn.chamadas[0][1]
-    conn.respostas = [[_motorista(1)]]
-    cliente.get("/api/motoristas", params={"incluir_inativos": "false"})
-    assert "WHERE ativo" in conn.chamadas[1][1]
-
-
-def test_criar_motorista(api):
-    cliente, conn = api
-    conn.respostas = ["Carro de passeio", _motorista(7, "Carlos Lima")]
-    r = cliente.post("/api/motoristas", json={"nome": "  Carlos   Lima ", "tipo_veiculo": "carro de passeio"})
-    assert r.status_code == 201 and r.json()["id"] == 7 and r.json()["ativo"] is True
-    insercao = conn.chamadas[1]
-    assert "INSERT INTO motoristas" in insercao[1]
-    assert insercao[2] == ("Carlos Lima", "Carro de passeio", None, "Maria Souza (maria@zubale.com)")  # sem valor próprio
-
-
 @pytest.mark.parametrize("corpo, trecho", [
     ({"nome": "", "tipo_veiculo": "Carro de passeio"}, "nome do motorista"),
     ({"nome": "   ", "tipo_veiculo": "Carro de passeio"}, "nome do motorista"),
@@ -183,34 +159,6 @@ def test_criar_motorista_com_nome_invalido(api, corpo, trecho):
     r = cliente.post("/api/motoristas", json=corpo)
     assert r.status_code == 422 and trecho in r.json()["detail"]
     assert conn.chamadas == []
-
-
-def test_criar_motorista_com_tipo_inexistente(api):
-    cliente, conn = api
-    conn.respostas = [None]  # o tipo não está no cadastro
-    r = cliente.post("/api/motoristas", json={"nome": "Carlos", "tipo_veiculo": "Caminhão"})
-    assert r.status_code == 422 and r.json()["detail"] == frota.MSG_TIPO_INEXISTENTE
-    assert all("INSERT" not in c[1] for c in conn.chamadas if c[1])
-    r = cliente.post("/api/motoristas", json={"nome": "Carlos"})
-    assert r.status_code == 422 and r.json()["detail"] == frota.MSG_TIPO_INEXISTENTE
-
-
-def test_desativar_motorista_em_vez_de_apagar(api):
-    cliente, conn = api
-    conn.respostas = ["Carro de passeio", _motorista(1, "João Silva", ativo=False)]
-    r = cliente.put("/api/motoristas/1", json={"nome": "João Silva", "tipo_veiculo": "Carro de passeio", "ativo": False})
-    assert r.status_code == 200 and r.json()["ativo"] is False
-    sql, args = conn.chamadas[1][1], conn.chamadas[1][2]
-    assert "UPDATE motoristas" in sql and "atualizado_em = NOW()" in sql and "atualizado_por" in sql
-    assert args == (1, "João Silva", "Carro de passeio", False, "Maria Souza (maria@zubale.com)")
-    assert not any(re.search(r"\bDELETE\b", c[1] or "", re.IGNORECASE) for c in conn.chamadas)
-
-
-def test_reativar_e_trocar_tipo(api):
-    cliente, conn = api
-    conn.respostas = ["Fiorino/Utilitário", _motorista(1, "João Silva", "Fiorino/Utilitário", True)]
-    r = cliente.put("/api/motoristas/1", json={"nome": "João Silva", "tipo_veiculo": "Fiorino/Utilitário", "ativo": True})
-    assert r.status_code == 200 and r.json()["tipo_veiculo"] == "Fiorino/Utilitário" and r.json()["ativo"] is True
 
 
 def test_editar_motorista_inexistente_da_404_e_nao_existe_exclusao(api):
@@ -555,51 +503,6 @@ def test_listar_motoristas_devolve_o_valor_proprio(api):
     assert [m["valor_rota"] for m in r.json()] == [150.5, None]
 
 
-def test_criar_motorista_com_valor_proprio_em_virgula_decimal(api):
-    cliente, conn = api
-    conn.respostas = ["Carro de passeio", _motorista(7, "Carlos Lima", valor="150.50")]
-    r = cliente.post("/api/motoristas", json={"nome": "Carlos Lima", "tipo_veiculo": "Carro de passeio", "valor_rota": "150,5"})
-    assert r.status_code == 201 and r.json()["valor_rota"] == 150.5
-    assert conn.chamadas[1][2] == ("Carlos Lima", "Carro de passeio", Decimal("150.50"), "Maria Souza (maria@zubale.com)")
-    assert "valor_rota" in conn.chamadas[1][1] and "INSERT INTO motoristas" in conn.chamadas[1][1]
-
-
-@pytest.mark.parametrize("valor, trecho", [(-10, "não pode ser negativo"), ("-0,01", "não pode ser negativo"), ("abc", "precisa ser um valor em reais")])
-def test_criar_ou_editar_motorista_com_valor_proprio_negativo_ou_texto_da_422(api, valor, trecho):
-    cliente, conn = api
-    r = cliente.post("/api/motoristas", json={"nome": "Carlos", "tipo_veiculo": "Carro de passeio", "valor_rota": valor})
-    assert r.status_code == 422 and trecho in r.json()["detail"]
-    r = cliente.put("/api/motoristas/1", json={"nome": "Carlos", "tipo_veiculo": "Carro de passeio", "ativo": True, "valor_rota": valor})
-    assert r.status_code == 422 and trecho in r.json()["detail"]
-    assert conn.chamadas == []  # nada foi gravado
-
-
-def test_editar_valor_proprio_registra_quem_alterou_e_quando(api):
-    cliente, conn = api
-    conn.respostas = ["Carro de passeio", _motorista(1, valor="175.00")]
-    r = cliente.put("/api/motoristas/1", json={"nome": "João Silva", "tipo_veiculo": "Carro de passeio", "ativo": True, "valor_rota": "175"})
-    assert r.status_code == 200 and r.json()["valor_rota"] == 175.0
-    sql, args = conn.chamadas[1][1], conn.chamadas[1][2]
-    assert "valor_rota = $6" in sql and "atualizado_em = NOW()" in sql and "atualizado_por = $5" in sql
-    assert args == (1, "João Silva", "Carro de passeio", True, "Maria Souza (maria@zubale.com)", Decimal("175.00"))
-
-
-def test_valor_proprio_em_branco_apaga_e_volta_a_usar_o_valor_base(api):
-    cliente, conn = api
-    for vazio in ("", None, "  "):
-        conn.respostas = ["Carro de passeio", _motorista(1)]
-        cliente.put("/api/motoristas/1", json={"nome": "João", "tipo_veiculo": "Carro de passeio", "ativo": True, "valor_rota": vazio})
-        assert "valor_rota = $6" in conn.chamadas[-1][1] and conn.chamadas[-1][2][-1] is None
-
-
-def test_editar_sem_mandar_o_campo_mantem_o_valor_proprio(api):
-    cliente, conn = api
-    conn.respostas = ["Carro de passeio", _motorista(1, ativo=False, valor="150.00")]
-    r = cliente.put("/api/motoristas/1", json={"nome": "João Silva", "tipo_veiculo": "Carro de passeio", "ativo": False})
-    assert r.status_code == 200 and r.json()["valor_rota"] == 150.0
-    assert "valor_rota =" not in conn.chamadas[1][1]  # o UPDATE não toca na coluna
-
-
 def test_otimizar_leva_o_valor_proprio_do_motorista_para_o_calculo(api, monkeypatch):
     cliente, conn = api
     conn.respostas = [[{"id": 1, "nome": "João", "ativo": True, "tipo_veiculo": "Carro de passeio", "valor_rota": Decimal("150.00"), "custo_rota": Decimal("130.00"), "peso_referencia_kg": None},
@@ -709,3 +612,115 @@ def test_migration_0005_valor_vazio_ou_zero_pode_mas_negativo_nao():
         conn.execute("INSERT INTO motoristas (nome, tipo_veiculo, valor_rota) VALUES ('D', 'Carro de passeio', -1)")
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute("UPDATE motoristas SET valor_rota = -0.01 WHERE nome = 'A'")
+
+
+# ----------------------------------------------------------------------------------------------------------
+# Rotas de motoristas com um banco SQLite de verdade (as tabelas das migrations 0004 a 0008)
+# ----------------------------------------------------------------------------------------------------------
+OPERADOR = "Maria Souza (maria@zubale.com)"
+
+
+@pytest.fixture
+def api_db(monkeypatch):
+    banco = criar_banco_sqlite()
+
+    async def get_pool():
+        return FakePool(banco)
+
+    main.app.dependency_overrides[main.obter_operador_atual] = lambda: OperadorFalso()
+    monkeypatch.setattr(main.database, "get_pool", get_pool)
+    yield TestClient(main.app), banco
+    main.app.dependency_overrides.clear()
+
+
+def _novo(**extra):
+    corpo = {"codigo": "MOT-0001", "nome": "Carlos Lima", "tipo_veiculo": "Carro de passeio"}
+    corpo.update(extra)
+    return corpo
+
+
+def test_listar_motoristas_com_e_sem_inativos(api_db):
+    cliente, banco = api_db
+    banco.inserir_motorista("João", ativo=True)
+    banco.inserir_motorista("Ana", ativo=False)
+    r = cliente.get("/api/motoristas")
+    assert r.status_code == 200 and [m["ativo"] for m in r.json()] == [True, False]
+    r = cliente.get("/api/motoristas", params={"incluir_inativos": "false"})
+    assert [m["nome"] for m in r.json()] == ["João"]
+
+
+def test_criar_motorista(api_db):
+    cliente, banco = api_db
+    r = cliente.post("/api/motoristas", json=_novo(nome="  Carlos   Lima ", tipo_veiculo="carro de passeio"))
+    assert r.status_code == 201
+    m = r.json()
+    assert m["nome"] == "Carlos Lima" and m["tipo_veiculo"] == "Carro de passeio" and m["ativo"] is True
+    assert m["codigo"] == "MOT-0001" and m["valor_rota"] is None and m["lojas"] == []
+    assert m["atualizado_por"] == OPERADOR
+
+
+def test_criar_motorista_com_tipo_inexistente(api_db):
+    cliente, banco = api_db
+    r = cliente.post("/api/motoristas", json=_novo(tipo_veiculo="Caminhão"))
+    assert r.status_code == 422 and r.json()["detail"] == frota.MSG_TIPO_INEXISTENTE
+    r = cliente.post("/api/motoristas", json={"codigo": "MOT-0001", "nome": "Carlos"})
+    assert r.status_code == 422 and r.json()["detail"] == frota.MSG_TIPO_INEXISTENTE
+    assert cliente.get("/api/motoristas").json() == []
+
+
+def test_desativar_motorista_em_vez_de_apagar(api_db):
+    cliente, banco = api_db
+    id_ = cliente.post("/api/motoristas", json=_novo(nome="João Silva")).json()["id"]
+    r = cliente.put(f"/api/motoristas/{id_}", json={"nome": "João Silva", "tipo_veiculo": "Carro de passeio", "ativo": False})
+    assert r.status_code == 200 and r.json()["ativo"] is False and r.json()["atualizado_por"] == OPERADOR
+    assert not any(re.search(r"\bDELETE\b", sql, re.IGNORECASE) for sql in banco.sqls if "motoristas" in sql and "motorista_lojas" not in sql)
+    assert len(cliente.get("/api/motoristas").json()) == 1  # continua cadastrado
+
+
+def test_reativar_e_trocar_tipo(api_db):
+    cliente, banco = api_db
+    id_ = cliente.post("/api/motoristas", json=_novo(nome="João Silva")).json()["id"]
+    cliente.put(f"/api/motoristas/{id_}", json={"nome": "João Silva", "tipo_veiculo": "Carro de passeio", "ativo": False})
+    r = cliente.put(f"/api/motoristas/{id_}", json={"nome": "João Silva", "tipo_veiculo": "Fiorino/Utilitário", "ativo": True})
+    assert r.status_code == 200 and r.json()["tipo_veiculo"] == "Fiorino/Utilitário" and r.json()["ativo"] is True
+
+
+def test_criar_motorista_com_valor_proprio_em_virgula_decimal(api_db):
+    cliente, banco = api_db
+    r = cliente.post("/api/motoristas", json=_novo(valor_rota="150,5"))
+    assert r.status_code == 201 and r.json()["valor_rota"] == 150.5
+
+
+@pytest.mark.parametrize("valor, trecho", [(-10, "não pode ser negativo"), ("-0,01", "não pode ser negativo"), ("abc", "precisa ser um valor em reais")])
+def test_criar_ou_editar_motorista_com_valor_proprio_negativo_ou_texto_da_422(api_db, valor, trecho):
+    cliente, banco = api_db
+    r = cliente.post("/api/motoristas", json=_novo(valor_rota=valor))
+    assert r.status_code == 422 and trecho in r.json()["detail"]
+    id_ = cliente.post("/api/motoristas", json=_novo()).json()["id"]
+    r = cliente.put(f"/api/motoristas/{id_}", json={"nome": "Carlos", "tipo_veiculo": "Carro de passeio", "ativo": True, "valor_rota": valor})
+    assert r.status_code == 422 and trecho in r.json()["detail"]
+    assert cliente.get(f"/api/motoristas/{id_}").json()["valor_rota"] is None  # nada foi gravado
+
+
+def test_editar_valor_proprio_registra_quem_alterou_e_quando(api_db):
+    cliente, banco = api_db
+    id_ = cliente.post("/api/motoristas", json=_novo(nome="João Silva")).json()["id"]
+    r = cliente.put(f"/api/motoristas/{id_}", json={"nome": "João Silva", "tipo_veiculo": "Carro de passeio", "ativo": True, "valor_rota": "175"})
+    assert r.status_code == 200 and r.json()["valor_rota"] == 175.0
+    assert r.json()["atualizado_por"] == OPERADOR and r.json()["atualizado_em"]
+
+
+def test_valor_proprio_em_branco_apaga_e_volta_a_usar_o_valor_base(api_db):
+    cliente, banco = api_db
+    id_ = cliente.post("/api/motoristas", json=_novo(valor_rota="200")).json()["id"]
+    for vazio in ("", None, "  "):
+        cliente.put(f"/api/motoristas/{id_}", json={"nome": "João", "tipo_veiculo": "Carro de passeio", "ativo": True, "valor_rota": "200"})
+        r = cliente.put(f"/api/motoristas/{id_}", json={"nome": "João", "tipo_veiculo": "Carro de passeio", "ativo": True, "valor_rota": vazio})
+        assert r.json()["valor_rota"] is None
+
+
+def test_editar_sem_mandar_o_campo_mantem_o_valor_proprio(api_db):
+    cliente, banco = api_db
+    id_ = cliente.post("/api/motoristas", json=_novo(nome="João Silva", valor_rota="150")).json()["id"]
+    r = cliente.put(f"/api/motoristas/{id_}", json={"nome": "João Silva", "tipo_veiculo": "Carro de passeio", "ativo": False})
+    assert r.status_code == 200 and r.json()["valor_rota"] == 150.0

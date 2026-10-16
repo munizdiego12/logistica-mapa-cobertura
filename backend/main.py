@@ -1228,7 +1228,8 @@ async def _com_conexao_frota(operacao):
     except ValueError as erro:
         raise HTTPException(status_code=422, detail=str(erro))
     except Exception as erro:
-        print(f"[frota] Falha no cadastro de motoristas: {erro!r}")
+        # Só a classe e o código do erro: a mensagem do banco pode trazer a linha inteira (telefone é dado pessoal).
+        print(f"[frota] Falha no cadastro de motoristas: {type(erro).__name__} (sqlstate={getattr(erro, 'sqlstate', None)})")
         raise HTTPException(status_code=503, detail=MSG_FROTA_INDISPONIVEL)
 
 
@@ -1238,16 +1239,22 @@ class AtualizarTipoVeiculoRequest(BaseModel):
 
 
 class NovoMotoristaRequest(BaseModel):
+    codigo: Optional[str] = None  # obrigatório no cadastro novo (ex.: MOT-0001); único
     nome: Optional[str] = None
     tipo_veiculo: Optional[str] = None
-    valor_rota: Optional[Union[float, str]] = None  # valor próprio por rota (vazio = usa o valor base do tipo)
+    valor_rota: Optional[Union[float, str]] = None  # diária própria (vazio = usa a diária base do tipo)
+    telefone: Optional[str] = None  # opcional; dado pessoal (nunca vai para log nem para mensagem de erro)
+    lojas: Optional[List[Any]] = None  # ids das lojas do motorista
 
 
 class AtualizarMotoristaRequest(BaseModel):
+    codigo: Optional[str] = None  # ausente mantém; não pode ser apagado de quem já tem
     nome: Optional[str] = None
     tipo_veiculo: Optional[str] = None
     ativo: bool = True
     valor_rota: Optional[Union[float, str]] = None  # vazio apaga o valor próprio; se o campo nem vier, ele é mantido
+    telefone: Optional[str] = None  # vazio apaga; ausente mantém
+    lojas: Optional[List[Any]] = None  # presente substitui o conjunto de lojas; ausente mantém
 
 
 @app.get("/api/tipos-veiculo")
@@ -1271,17 +1278,42 @@ async def listar_motoristas(incluir_inativos: bool = True, operador: Operador = 
     return await _com_conexao_frota(lambda c: frota.listar_motoristas(c, incluir_inativos))
 
 
+@app.get("/api/motoristas/proximo-codigo")
+async def proximo_codigo_motorista(operador: Operador = Depends(obter_operador_atual)):
+    """Próximo código livre no padrão MOT-0001 (a tela sugere; o operador pode trocar)."""
+    return {"codigo": await _com_conexao_frota(frota.proximo_codigo)}
+
+
+@app.get("/api/motoristas/{id_motorista}")
+async def obter_motorista(id_motorista: int, operador: Operador = Depends(obter_operador_atual)):
+    """Um motorista com o telefone completo (só para a tela de edição; as listas trazem o telefone mascarado)."""
+    motorista = await _com_conexao_frota(lambda c: frota.obter_motorista(c, id_motorista, True))
+    if motorista is None:
+        raise HTTPException(status_code=404, detail="Motorista não encontrado.")
+    return motorista
+
+
 @app.post("/api/motoristas", status_code=201)
 async def criar_motorista(dados: NovoMotoristaRequest, operador: Operador = Depends(obter_operador_atual)):
-    return await _com_conexao_frota(lambda c: frota.criar_motorista(c, dados.nome, dados.tipo_veiculo, _rotulo_do_operador(operador), dados.valor_rota))
+    return await _com_conexao_frota(
+        lambda c: frota.criar_motorista(c, dados.nome, dados.tipo_veiculo, _rotulo_do_operador(operador), dados.valor_rota,
+                                        dados.codigo, dados.telefone, dados.lojas)
+    )
 
 
 @app.put("/api/motoristas/{id_motorista}")
 async def atualizar_motorista(id_motorista: int, dados: AtualizarMotoristaRequest, operador: Operador = Depends(obter_operador_atual)):
-    """Edita nome, tipo de veículo, situação e valor próprio por rota. Não existe exclusão: o motorista é desativado."""
-    valor_rota = dados.valor_rota if "valor_rota" in dados.model_fields_set else frota.MANTER
+    """Edita nome, código, tipo, situação, telefone, valor próprio e lojas. Não existe exclusão: o motorista é desativado."""
+    enviados = dados.model_fields_set
+
+    def valor(campo):
+        return getattr(dados, campo) if campo in enviados else frota.MANTER
+
     motorista = await _com_conexao_frota(
-        lambda c: frota.atualizar_motorista(c, id_motorista, dados.nome, dados.tipo_veiculo, dados.ativo, _rotulo_do_operador(operador), valor_rota)
+        lambda c: frota.atualizar_motorista(
+            c, id_motorista, dados.nome, dados.tipo_veiculo, dados.ativo, _rotulo_do_operador(operador),
+            valor("valor_rota"), valor("codigo"), valor("telefone"), valor("lojas"),
+        )
     )
     if motorista is None:
         raise HTTPException(status_code=404, detail="Motorista não encontrado.")

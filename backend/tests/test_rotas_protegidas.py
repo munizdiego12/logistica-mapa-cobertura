@@ -26,6 +26,8 @@ ROTAS = [
     ("get", "/api/tipos-veiculo", {}, 503),
     ("put", "/api/tipos-veiculo/1", {"json": {"custo_rota": 130}}, 503),
     ("get", "/api/motoristas", {}, 503),
+    ("get", "/api/motoristas/proximo-codigo", {}, 503),
+    ("get", "/api/motoristas/1", {}, 503),
     ("post", "/api/motoristas", {"json": {"nome": "João", "tipo_veiculo": "Carro de passeio"}}, 503),
     ("put", "/api/motoristas/1", {"json": {"nome": "João", "tipo_veiculo": "Carro de passeio", "ativo": False}}, 503),
 ]

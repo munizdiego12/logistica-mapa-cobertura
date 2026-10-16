@@ -7,6 +7,8 @@ recebem uma conexão asyncpg (`conn`), como item_pesos.py. Motorista nunca é ap
 O peso de referência NÃO é limite: é só um guia para o motor de roteirização. Nada aqui bloqueia nem avisa por peso.
 Mensagens de erro são em linguagem do operador (viram o `detail` das respostas 422).
 """
+import re
+import unicodedata
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Optional
 
@@ -17,6 +19,15 @@ TAMANHO_MAXIMO_NOME = 120
 MSG_NOME_VAZIO = "Informe o nome do motorista."
 MSG_NOME_GRANDE = f"O nome do motorista pode ter até {TAMANHO_MAXIMO_NOME} letras."
 MSG_TIPO_INEXISTENTE = "Escolha um tipo de veículo da lista."
+TAMANHO_MAXIMO_CODIGO = 40
+MSG_CODIGO_VAZIO = "Informe o código do motorista, por exemplo MOT-0001."
+MSG_CODIGO_GRANDE = f"O código do motorista pode ter até {TAMANHO_MAXIMO_CODIGO} caracteres."
+MSG_CODIGO_REPETIDO = "Já existe um motorista com esse código. Escolha outro código."
+MSG_CODIGO_NAO_PODE_FICAR_VAZIO = "Este motorista já tem código, e o código não pode ser apagado. Troque por outro código se precisar."
+MSG_TELEFONE_INVALIDO = "O telefone não parece válido. Use o DDD e o número, por exemplo (11) 98765-4321."
+MSG_TELEFONE_SEM_DDD = "O telefone precisa ter o DDD, por exemplo (11) 98765-4321."
+MSG_LOJA_INEXISTENTE = "Uma das lojas escolhidas não está mais cadastrada. Atualize a lista e escolha de novo."
+MSG_LOJAS_FORMATO = "A lista de lojas do motorista não está num formato válido. Atualize a tela e escolha de novo."
 MSG_ESCOLHA_UM_MOTORISTA = "Marque pelo menos um motorista para gerar as rotas."
 MSG_MOTORISTA_INEXISTENTE = "Um dos motoristas escolhidos não está mais cadastrado. Atualize a lista e escolha de novo."
 MSG_SEM_MOTORISTAS = (
@@ -149,20 +160,122 @@ def normalizar_nome_motorista(valor) -> str:
     return nome
 
 
+def _sem_acento(texto) -> str:
+    return unicodedata.normalize("NFKD", str(texto or "")).encode("ascii", "ignore").decode("ascii")
+
+
+def normalizar_codigo(valor) -> str:
+    """
+    Código do motorista como é guardado: sem acentos, sem espaços e em maiúsculas ("mot 0001" -> "MOT0001").
+    Vazio devolve "" (quem chama decide se é obrigatório). Erro se passar do tamanho.
+    """
+    codigo = "".join(_sem_acento(valor).split()).upper()
+    if len(codigo) > TAMANHO_MAXIMO_CODIGO:
+        raise ValueError(MSG_CODIGO_GRANDE)
+    return codigo
+
+
+def chave_do_codigo(valor) -> str:
+    """Chave de comparação do código (a mesma regra do índice único): normalizado e em minúsculas."""
+    return normalizar_codigo(valor).lower()
+
+
+_DDDS_VALIDOS = frozenset(
+    "11 12 13 14 15 16 17 18 19 21 22 24 27 28 31 32 33 34 35 37 38 41 42 43 44 45 46 47 48 49 51 53 54 55 "
+    "61 62 63 64 65 66 67 68 69 71 73 74 75 77 79 81 82 83 84 85 86 87 88 89 91 92 93 94 95 96 97 98 99".split()
+)
+
+
+def normalizar_telefone(valor) -> Optional[str]:
+    """
+    Telefone do Brasil só com dígitos (10 ou 11, com DDD). Aceita parênteses, traços, pontos, espaços, +55 e 0 antes
+    do DDD. Vazio/None = sem telefone (devolve None). Inválido ou sem DDD: ValueError, e a mensagem NUNCA repete o
+    número digitado (telefone é dado pessoal e não pode ir parar em log nem em resposta de erro).
+    """
+    if valor is None or isinstance(valor, bool):
+        if valor is None:
+            return None
+        raise ValueError(MSG_TELEFONE_INVALIDO)
+    texto = str(valor).strip()
+    if not texto:
+        return None
+    if re.search(r"[^\d\s()+\-.]", texto):
+        raise ValueError(MSG_TELEFONE_INVALIDO)
+    digitos = re.sub(r"\D", "", texto)
+    if len(digitos) in (12, 13) and digitos.startswith("55"):
+        digitos = digitos[2:]
+    elif len(digitos) in (11, 12) and digitos.startswith("0"):
+        digitos = digitos[1:]
+    if len(digitos) in (8, 9):
+        raise ValueError(MSG_TELEFONE_SEM_DDD)
+    if len(digitos) not in (10, 11) or digitos[:2] not in _DDDS_VALIDOS:
+        raise ValueError(MSG_TELEFONE_INVALIDO)
+    numero = digitos[2:]
+    if len(digitos) == 11 and numero[0] != "9":
+        raise ValueError(MSG_TELEFONE_INVALIDO)
+    if len(digitos) == 10 and numero[0] not in "2345":
+        raise ValueError(MSG_TELEFONE_INVALIDO)
+    return digitos
+
+
+def mascarar_telefone(telefone) -> Optional[str]:
+    """(11) *****-1234 (11 dígitos) ou (11) ****-1234 (10 dígitos). Sem telefone: None."""
+    digitos = re.sub(r"\D", "", str(telefone or ""))
+    if len(digitos) not in (10, 11):
+        return None
+    return f"({digitos[:2]}) {'*' * (len(digitos) - 6)}-{digitos[-4:]}"
+
+
+def interpretar_lojas(valor) -> list:
+    """Lista de ids de loja (sem repetir, na ordem recebida). ValueError se não for uma lista de números inteiros."""
+    if valor is None:
+        return []
+    if not isinstance(valor, (list, tuple, set)):
+        raise ValueError(MSG_LOJAS_FORMATO)
+    ids = []
+    for bruto in valor:
+        try:
+            if isinstance(bruto, bool) or (isinstance(bruto, float) and not bruto.is_integer()):
+                raise ValueError
+            numero = int(bruto)
+        except (TypeError, ValueError):
+            raise ValueError(MSG_LOJAS_FORMATO) from None
+        if numero not in ids:
+            ids.append(numero)
+    return ids
+
+
 # ----------------------------------------------------------------------------------------------------------
 # Banco (conexão asyncpg)
 # ----------------------------------------------------------------------------------------------------------
 _COLUNAS_TIPO = "id, nome, custo_rota, peso_referencia_kg, ativo, atualizado_em, atualizado_por"
-_COLUNAS_MOTORISTA = "id, nome, tipo_veiculo, valor_rota, ativo, atualizado_em, atualizado_por"
+_COLUNAS_MOTORISTA = "id, codigo, nome, tipo_veiculo, valor_rota, telefone, ativo, atualizado_em, atualizado_por"
 
-# "Não mexer no valor próprio": usado quando o pedido de edição não traz o campo valor_rota.
+# "Não mexer no campo": usado quando o pedido de edição não traz o campo (valor_rota, código, telefone, lojas).
 MANTER = object()
 
 
-def _motorista_para_dict(linha) -> dict:
+def _motorista_para_dict(linha, lojas=None, completo: bool = False) -> dict:
+    """
+    Motorista para a resposta da API. O telefone completo só sai com `completo=True` (tela de edição de um motorista);
+    nas listas e nas respostas de gravação vai só o mascarado e `tem_telefone`.
+    """
     d = dict(linha)
+    telefone = d.pop("telefone", None)
     d["valor_rota"] = None if d.get("valor_rota") is None else float(d["valor_rota"])
+    if "ativo" in d:
+        d["ativo"] = bool(d["ativo"])
+    d.setdefault("codigo", None)
+    d["tem_telefone"] = bool(telefone)
+    d["telefone_mascarado"] = mascarar_telefone(telefone)
+    if completo:
+        d["telefone"] = telefone or None
+    d["lojas"] = list(lojas or [])
     return d
+
+
+def _e_violacao_de_unico(erro: Exception) -> bool:
+    return type(erro).__name__ in ("UniqueViolationError", "IntegrityError")
 
 
 def _tipo_para_dict(linha) -> dict:
@@ -194,48 +307,165 @@ async def _nome_do_tipo(conn, nome_tipo) -> Optional[str]:
     return await conn.fetchval("SELECT nome FROM tipos_veiculo WHERE lower(nome) = lower($1)", str(nome_tipo or "").strip())
 
 
+async def _lojas_dos_motoristas(conn) -> dict:
+    """{motorista_id: [{id, nome, ativo}]}, em ordem de nome da loja. Loja desativada continua na lista."""
+    linhas = await conn.fetch(
+        "SELECT ml.motorista_id, l.id AS loja_id, l.nome, l.ativo FROM motorista_lojas ml "
+        "JOIN lojas l ON l.id = ml.loja_id ORDER BY lower(l.nome), l.id"
+    )
+    por_motorista = {}
+    for l in linhas:
+        por_motorista.setdefault(int(l["motorista_id"]), []).append(
+            {"id": int(l["loja_id"]), "nome": l["nome"], "ativo": bool(l["ativo"])}
+        )
+    return por_motorista
+
+
 async def listar_motoristas(conn, incluir_inativos: bool = True) -> list:
+    """Todos os motoristas com código e lojas; o telefone vai só mascarado (nunca o número completo)."""
     onde = "" if incluir_inativos else "WHERE ativo"
     linhas = await conn.fetch(f"SELECT {_COLUNAS_MOTORISTA} FROM motoristas {onde} ORDER BY ativo DESC, lower(nome), id")
-    return [_motorista_para_dict(l) for l in linhas]
+    lojas = await _lojas_dos_motoristas(conn)
+    return [_motorista_para_dict(l, lojas.get(int(l["id"]))) for l in linhas]
 
 
-async def criar_motorista(conn, nome, tipo_veiculo, rotulo_operador: str, valor_rota=None) -> dict:
+async def obter_motorista(conn, id_motorista: int, completo: bool = True) -> Optional[dict]:
+    """Um motorista, com o telefone completo (tela de edição). None se não existe."""
+    linha = await conn.fetchrow(f"SELECT {_COLUNAS_MOTORISTA} FROM motoristas WHERE id = $1", id_motorista)
+    if linha is None:
+        return None
+    lojas = await _lojas_dos_motoristas(conn)
+    return _motorista_para_dict(linha, lojas.get(int(linha["id"])), completo)
+
+
+_PADRAO_CODIGO_SUGERIDO = re.compile(r"^MOT-?(\d+)$")
+
+
+async def proximo_codigo(conn) -> str:
+    """Próximo código livre no padrão MOT-0001 (maior número já usado + 1)."""
+    linhas = await conn.fetch("SELECT codigo FROM motoristas WHERE codigo IS NOT NULL")
+    maior = 0
+    for l in linhas:
+        achou = _PADRAO_CODIGO_SUGERIDO.match(normalizar_codigo(l["codigo"]))
+        if achou:
+            maior = max(maior, int(achou.group(1)))
+    return f"MOT-{maior + 1:04d}"
+
+
+async def _codigo_em_uso(conn, codigo: str, exceto_id: Optional[int] = None) -> bool:
+    achou = await conn.fetchval(
+        "SELECT id FROM motoristas WHERE lower(btrim(codigo)) = lower($1) AND id <> $2",
+        codigo, -1 if exceto_id is None else exceto_id,
+    )
+    return achou is not None
+
+
+async def _conferir_lojas_novas(conn, ids_novos: list) -> None:
+    """Vínculo novo só com loja cadastrada e ativa (vínculos antigos de lojas hoje desativadas podem ficar)."""
+    if not ids_novos:
+        return
+    linhas = await conn.fetch("SELECT id, nome, ativo FROM lojas")
+    por_id = {int(l["id"]): l for l in linhas}
+    for numero in ids_novos:
+        loja = por_id.get(numero)
+        if loja is None:
+            raise ValueError(MSG_LOJA_INEXISTENTE)
+        if not loja["ativo"]:
+            raise ValueError(f'A loja {loja["nome"]} está desativada. Ative-a na tela "Lojas" ou tire-a da escolha.')
+
+
+async def criar_motorista(conn, nome, tipo_veiculo, rotulo_operador: str, valor_rota=None, codigo=None, telefone=None, lojas=None) -> dict:
+    """Cadastro novo: o código é obrigatório e único; telefone, valor próprio e lojas são opcionais."""
     nome = normalizar_nome_motorista(nome)
+    codigo = normalizar_codigo(codigo)
+    if not codigo:
+        raise ValueError(MSG_CODIGO_VAZIO)
     valor = interpretar_valor_proprio(valor_rota)
+    fone = normalizar_telefone(telefone)
+    ids_lojas = interpretar_lojas(lojas)
     tipo = await _nome_do_tipo(conn, tipo_veiculo)
     if tipo is None:
         raise ValueError(MSG_TIPO_INEXISTENTE)
-    linha = await conn.fetchrow(
-        f"INSERT INTO motoristas (nome, tipo_veiculo, valor_rota, ativo, atualizado_por) VALUES ($1, $2, $3, TRUE, $4) RETURNING {_COLUNAS_MOTORISTA}",
-        nome, tipo, valor, rotulo_operador,
-    )
-    return _motorista_para_dict(linha)
+    if await _codigo_em_uso(conn, codigo):
+        raise ValueError(MSG_CODIGO_REPETIDO)
+    await _conferir_lojas_novas(conn, ids_lojas)
+    try:
+        async with conn.transaction():
+            linha = await conn.fetchrow(
+                f"INSERT INTO motoristas (codigo, nome, tipo_veiculo, valor_rota, telefone, ativo, atualizado_por) "
+                f"VALUES ($1, $2, $3, $4, $5, TRUE, $6) RETURNING {_COLUNAS_MOTORISTA}",
+                codigo, nome, tipo, valor, fone, rotulo_operador,
+            )
+            for id_loja in ids_lojas:
+                await conn.execute(
+                    "INSERT INTO motorista_lojas (motorista_id, loja_id, atualizado_por) VALUES ($1, $2, $3)",
+                    linha["id"], id_loja, rotulo_operador,
+                )
+    except Exception as erro:
+        if _e_violacao_de_unico(erro):
+            raise ValueError(MSG_CODIGO_REPETIDO) from None
+        raise
+    return await obter_motorista(conn, linha["id"], completo=False)
 
 
-async def atualizar_motorista(conn, id_motorista: int, nome, tipo_veiculo, ativo: bool, rotulo_operador: str, valor_rota=MANTER) -> Optional[dict]:
+async def atualizar_motorista(conn, id_motorista: int, nome, tipo_veiculo, ativo: bool, rotulo_operador: str,
+                              valor_rota=MANTER, codigo=MANTER, telefone=MANTER, lojas=MANTER) -> Optional[dict]:
     """
-    Edita nome, tipo, situação (ativar/desativar) e valor próprio por rota. None se o motorista não existe. Nunca apaga.
-    valor_rota: vazio/None apaga o valor próprio (volta a valer o valor base); ausente (MANTER) não mexe nele.
+    Edita nome, tipo, situação (ativar/desativar), código, telefone, valor próprio por rota e lojas. None se o motorista
+    não existe. Nunca apaga o motorista. Campo ausente (MANTER) não é mexido; valor_rota e telefone vazios apagam o
+    valor; `lojas` presente substitui o conjunto de lojas; o código não pode ser apagado de quem já tem.
     """
     nome = normalizar_nome_motorista(nome)
     valor = None if valor_rota is MANTER else interpretar_valor_proprio(valor_rota)
+    fone = None if telefone is MANTER else normalizar_telefone(telefone)
+    ids_lojas = None if lojas is MANTER else interpretar_lojas(lojas)
+    novo_codigo = None if codigo is MANTER else normalizar_codigo(codigo)
     tipo = await _nome_do_tipo(conn, tipo_veiculo)
     if tipo is None:
         raise ValueError(MSG_TIPO_INEXISTENTE)
-    if valor_rota is MANTER:
-        linha = await conn.fetchrow(
-            f"UPDATE motoristas SET nome = $2, tipo_veiculo = $3, ativo = $4, atualizado_em = NOW(), atualizado_por = $5 "
-            f"WHERE id = $1 RETURNING {_COLUNAS_MOTORISTA}",
-            id_motorista, nome, tipo, bool(ativo), rotulo_operador,
-        )
-    else:
-        linha = await conn.fetchrow(
-            f"UPDATE motoristas SET nome = $2, tipo_veiculo = $3, ativo = $4, valor_rota = $6, atualizado_em = NOW(), atualizado_por = $5 "
-            f"WHERE id = $1 RETURNING {_COLUNAS_MOTORISTA}",
-            id_motorista, nome, tipo, bool(ativo), rotulo_operador, valor,
-        )
-    return None if linha is None else _motorista_para_dict(linha)
+    atual = await conn.fetchrow("SELECT id, codigo FROM motoristas WHERE id = $1", id_motorista)
+    if atual is None:
+        return None
+    if codigo is not MANTER:
+        if not novo_codigo:
+            if atual["codigo"]:
+                raise ValueError(MSG_CODIGO_NAO_PODE_FICAR_VAZIO)
+            novo_codigo = None
+        elif await _codigo_em_uso(conn, novo_codigo, id_motorista):
+            raise ValueError(MSG_CODIGO_REPETIDO)
+    ja_vinculadas = []
+    if ids_lojas is not None:
+        existentes = await conn.fetch("SELECT loja_id FROM motorista_lojas WHERE motorista_id = $1", id_motorista)
+        ja_vinculadas = [int(l["loja_id"]) for l in existentes]
+        await _conferir_lojas_novas(conn, [i for i in ids_lojas if i not in ja_vinculadas])
+
+    campos = ["nome = $2", "tipo_veiculo = $3", "ativo = $4", "atualizado_em = NOW()", "atualizado_por = $5"]
+    args = [id_motorista, nome, tipo, bool(ativo), rotulo_operador]
+    for coluna, ausente, conteudo in (("valor_rota", valor_rota is MANTER, valor), ("telefone", telefone is MANTER, fone),
+                                      ("codigo", codigo is MANTER, novo_codigo)):
+        if not ausente:
+            args.append(conteudo)
+            campos.append(f"{coluna} = ${len(args)}")
+    try:
+        async with conn.transaction():
+            linha = await conn.fetchrow(f"UPDATE motoristas SET {', '.join(campos)} WHERE id = $1 RETURNING id", *args)
+            if ids_lojas is not None:
+                for id_loja in ja_vinculadas:
+                    if id_loja not in ids_lojas:
+                        await conn.execute("DELETE FROM motorista_lojas WHERE motorista_id = $1 AND loja_id = $2", id_motorista, id_loja)
+                for id_loja in ids_lojas:
+                    if id_loja not in ja_vinculadas:
+                        await conn.execute(
+                            "INSERT INTO motorista_lojas (motorista_id, loja_id, atualizado_por) VALUES ($1, $2, $3)",
+                            id_motorista, id_loja, rotulo_operador,
+                        )
+    except Exception as erro:
+        if _e_violacao_de_unico(erro):
+            raise ValueError(MSG_CODIGO_REPETIDO) from None
+        raise
+    if linha is None:
+        return None
+    return await obter_motorista(conn, id_motorista, completo=False)
 
 
 async def frota_ativa(conn) -> list:

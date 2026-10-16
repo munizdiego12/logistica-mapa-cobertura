@@ -159,3 +159,118 @@ export function formularioDaLoja(loja) {
 export function nomeDoHub(loja, origem, cidade) {
   return (loja?.nome || origem?.rua || cidade || 'hub');
 }
+
+// ----------------------------------------------------------------------------------------------------------
+// Pesquisa de lojas (campo com lista): normalização e filtro
+// ----------------------------------------------------------------------------------------------------------
+export const ROTULO_OUTRO_ENDERECO = 'Outro endereço';
+const MARCAS_DE_ACENTO = /[̀-ͯ]/g;
+const UFS_EM_MINUSCULAS = UFS.map((uf) => uf.toLowerCase());
+
+/** Texto para comparar: sem acentos, em minúsculas e com espaços simples ("  Guarujá " -> "guaruja"). */
+export function normalizarBusca(texto) {
+  return String(texto ?? '').normalize('NFD').replace(MARCAS_DE_ACENTO, '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function palavras(textoNormalizado) {
+  return textoNormalizado ? textoNormalizado.split(' ') : [];
+}
+
+const comecaUmaPalavra = (textoNormalizado, trecho) => palavras(textoNormalizado).some((p) => p.startsWith(trecho));
+
+/**
+ * Pontuação de UM termo da busca em uma loja, ou 0 se não casa. Casa por nome, cidade e UF:
+ * a sigla do Estado (2 letras, ex.: "sp") vale como UF (ou início de palavra do nome/cidade), não como pedaço no meio de uma palavra.
+ */
+function pontosDoTermo(termo, nome, cidade, uf) {
+  if (termo.length === 2 && UFS_EM_MINUSCULAS.includes(termo)) {
+    if (uf === termo) return 4;
+    if (comecaUmaPalavra(nome, termo)) return 3;
+    if (comecaUmaPalavra(cidade, termo)) return 2;
+    return 0;
+  }
+  if (comecaUmaPalavra(nome, termo)) return 3;
+  if (comecaUmaPalavra(cidade, termo)) return 2;
+  if (nome.includes(termo) || cidade.includes(termo)) return 1;
+  return 0;
+}
+
+/**
+ * Filtra as lojas pela busca (nome, cidade e UF; sem diferença de maiúsculas, acentos nem espaços extras). Todos os termos
+ * digitados precisam casar. Devolve [{ loja, pontos }], as que casam melhor primeiro e, empatando, em ordem de nome.
+ * Busca vazia devolve todas, em ordem de nome.
+ */
+export function filtrarLojas(lojas, busca) {
+  const termos = palavras(normalizarBusca(busca));
+  const comPontos = [];
+  for (const loja of lojas ?? []) {
+    const nome = normalizarBusca(loja.nome);
+    const cidade = normalizarBusca(loja.cidade);
+    const uf = normalizarBusca(loja.uf);
+    let total = 0;
+    let casou = true;
+    for (const termo of termos) {
+      const pontos = pontosDoTermo(termo, nome, cidade, uf);
+      if (pontos === 0) { casou = false; break; }
+      total += pontos;
+    }
+    if (casou) comPontos.push({ loja, pontos: total });
+  }
+  return comPontos.sort((a, b) => b.pontos - a.pontos || String(a.loja.nome).localeCompare(String(b.loja.nome), 'pt-BR'));
+}
+
+/** Linha pequena da lista: "Guarujá · SP" (só o que existir). */
+export function cidadeEUf(loja) {
+  return [loja?.cidade, loja?.uf].map((t) => String(t ?? '').trim()).filter(Boolean).join(' · ');
+}
+
+/**
+ * Divide o texto em trechos [{ texto, destaque }] marcando as partes que casam com a busca (sem diferença de maiúsculas
+ * nem acentos): "guaruja" em "Atacadão Guarujá" destaca "Guarujá".
+ */
+export function destacarTrechos(texto, busca) {
+  const original = String(texto ?? '');
+  const termos = palavras(normalizarBusca(busca));
+  if (!original || termos.length === 0) return [{ texto: original, destaque: false }];
+  let normal = '';
+  const origem = []; // posição no texto original de cada letra do texto normalizado
+  for (let i = 0; i < original.length; i += 1) {
+    const base = original[i].normalize('NFD').replace(MARCAS_DE_ACENTO, '').toLowerCase();
+    for (const letra of base) { normal += letra; origem.push(i); }
+  }
+  const eMarca = (caractere) => /[̀-ͯ]/.test(caractere);
+  const faixas = [];
+  for (const termo of termos) {
+    let de = normal.indexOf(termo);
+    while (de !== -1) {
+      let fim = origem[de + termo.length - 1] + 1;
+      while (fim < original.length && eMarca(original[fim])) fim += 1; // acento solto depois da letra
+      faixas.push([origem[de], fim]);
+      de = normal.indexOf(termo, de + 1);
+    }
+  }
+  if (faixas.length === 0) return [{ texto: original, destaque: false }];
+  faixas.sort((a, b) => a[0] - b[0]);
+  const unidas = [faixas[0].slice()];
+  for (const [inicio, fim] of faixas.slice(1)) {
+    const ultima = unidas[unidas.length - 1];
+    if (inicio <= ultima[1]) ultima[1] = Math.max(ultima[1], fim);
+    else unidas.push([inicio, fim]);
+  }
+  const trechos = [];
+  let cursor = 0;
+  for (const [inicio, fim] of unidas) {
+    if (inicio > cursor) trechos.push({ texto: original.slice(cursor, inicio), destaque: false });
+    trechos.push({ texto: original.slice(inicio, fim), destaque: true });
+    cursor = fim;
+  }
+  if (cursor < original.length) trechos.push({ texto: original.slice(cursor), destaque: false });
+  return trechos;
+}
+
+/** Move o item em destaque da lista com as setas, dando a volta nas pontas. */
+export function moverDestaque(indice, passo, total) {
+  if (total <= 0) return -1;
+  if (indice < 0) return passo > 0 ? 0 : total - 1;
+  return (indice + passo + total) % total;
+}

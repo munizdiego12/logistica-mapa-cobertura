@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   numeroPtBr, classificarCoordenadas, validarCoordenadas, linhasDoHover, enderecoParaExibir, interpretarRaio, validarFormularioLoja,
   corpoDaLoja, formularioDaLoja, nomeDoHub, FORMULARIO_VAZIO, UFS,
+  normalizarBusca, filtrarLojas, cidadeEUf, destacarTrechos, moverDestaque, ROTULO_OUTRO_ENDERECO,
 } from './lojas.js';
 
 const formulario = (extra = {}) => ({ ...FORMULARIO_VAZIO, nome: 'Atacadão Guarujá', uf: 'SP', lat: '-23,9930', lng: '-46,2564', ...extra });
@@ -118,4 +119,116 @@ test('cidade é opcional no formulário e vai (ou não) no corpo enviado', () =>
   assert.equal(corpoDaLoja(formulario({ cidade: '  ' })).cidade, null);
   assert.equal(formularioDaLoja({ nome: 'L', cidade: 'Santos', lat: -23.9, lng: -46.3 }).cidade, 'Santos');
   assert.equal(formularioDaLoja({ nome: 'L', cidade: null, lat: -23.9, lng: -46.3 }).cidade, '');
+});
+
+// ---------------------------------------------------------------- pesquisa de lojas (campo com lista)
+const LOJAS = [
+  { id: 1, nome: 'Atacadão Guarujá', cidade: 'Guarujá', uf: 'SP' },
+  { id: 2, nome: 'Atacadão Campinas', cidade: 'Campinas', uf: 'SP' },
+  { id: 3, nome: 'Atacadão Rio Branco', cidade: 'Rio de Janeiro', uf: 'RJ' },
+  { id: 4, nome: 'Atacadão Aspen', cidade: 'Niterói', uf: 'RJ' },
+  { id: 5, nome: 'Atacadão Zona Sul', cidade: 'Santos', uf: 'SP' },
+  { id: 6, nome: 'Atacadão São José', cidade: 'São José dos Campos', uf: 'SP' },
+  { id: 7, nome: 'Atacadão Cuiabá', cidade: 'Cuiabá', uf: 'MT' },
+  { id: 8, nome: 'Atacadão Sem Cidade', cidade: null, uf: null },
+];
+const nomes = (resultado) => resultado.map((r) => r.loja.nome);
+
+test('normalizar a busca: sem acento, minúsculas e espaços simples', () => {
+  assert.equal(normalizarBusca('  Atacadão   GUARUJÁ '), 'atacadao guaruja');
+  assert.equal(normalizarBusca('São José'), 'sao jose');
+  assert.equal(normalizarBusca(null), '');
+  assert.equal(normalizarBusca('Ç ã ü'), 'c a u');
+});
+
+test('"guaruja" acha "Atacadão Guarujá" (sem acento, maiúsculas ou espaços extras)', () => {
+  for (const busca of ['guaruja', 'GUARUJÁ', '  guaruja  ', 'Guarujá', 'ataca guaruja', 'atacadao   guaruja']) {
+    assert.deepEqual(nomes(filtrarLojas(LOJAS, busca)), ['Atacadão Guarujá'], busca);
+  }
+});
+
+test('digitar com acento acha nome sem acento e o contrário', () => {
+  assert.deepEqual(nomes(filtrarLojas(LOJAS, 'cuiabá')), ['Atacadão Cuiabá']);
+  assert.deepEqual(nomes(filtrarLojas(LOJAS, 'cuiaba')), ['Atacadão Cuiabá']);
+  assert.deepEqual(nomes(filtrarLojas(LOJAS, 'sao jose')), ['Atacadão São José']);
+  assert.equal(filtrarLojas([{ nome: 'Atacadao Maringa', cidade: 'Maringa', uf: 'PR' }], 'maringá').length, 1);
+});
+
+test('a busca também olha a cidade (a loja pode ter nome diferente da cidade)', () => {
+  assert.deepEqual(nomes(filtrarLojas(LOJAS, 'santos')), ['Atacadão Zona Sul']);
+  assert.deepEqual(nomes(filtrarLojas(LOJAS, 'niteroi')), ['Atacadão Aspen']);
+  assert.deepEqual(nomes(filtrarLojas(LOJAS, 'niterói')), ['Atacadão Aspen']);
+  assert.deepEqual(nomes(filtrarLojas(LOJAS, 'rio de janeiro')), ['Atacadão Rio Branco']);
+  assert.deepEqual(nomes(filtrarLojas(LOJAS, 'campos')), ['Atacadão São José']); // "São José dos Campos"
+});
+
+test('"sp" lista as lojas de SP (a sigla vale como UF, não como pedaço no meio de uma palavra)', () => {
+  assert.deepEqual(nomes(filtrarLojas(LOJAS, 'sp')), ['Atacadão Campinas', 'Atacadão Guarujá', 'Atacadão São José', 'Atacadão Zona Sul']);
+  assert.deepEqual(nomes(filtrarLojas(LOJAS, 'SP')), nomes(filtrarLojas(LOJAS, 'sp')));
+  assert.deepEqual(nomes(filtrarLojas(LOJAS, 'rj')), ['Atacadão Aspen', 'Atacadão Rio Branco']);
+  assert.equal(nomes(filtrarLojas(LOJAS, 'sp')).includes('Atacadão Aspen'), false); // "Aspen" tem "sp" no meio: não entra
+  assert.deepEqual(nomes(filtrarLojas(LOJAS, 'mt')), ['Atacadão Cuiabá']);
+});
+
+test('vários termos precisam casar todos (nome + UF, nome + cidade)', () => {
+  assert.deepEqual(nomes(filtrarLojas(LOJAS, 'atacadao sp')), ['Atacadão Campinas', 'Atacadão Guarujá', 'Atacadão São José', 'Atacadão Zona Sul']);
+  assert.deepEqual(nomes(filtrarLojas(LOJAS, 'atacadao rj')), ['Atacadão Aspen', 'Atacadão Rio Branco']);
+  assert.deepEqual(nomes(filtrarLojas(LOJAS, 'zona santos')), ['Atacadão Zona Sul']);
+  assert.deepEqual(nomes(filtrarLojas(LOJAS, 'guaruja rj')), []);
+});
+
+test('sem resultado devolve lista vazia', () => {
+  assert.deepEqual(filtrarLojas(LOJAS, 'xyzxyz'), []);
+  assert.deepEqual(filtrarLojas(LOJAS, 'guaruja sp campinas'), []);
+  assert.deepEqual(filtrarLojas([], 'sp'), []);
+  assert.deepEqual(filtrarLojas(undefined, 'sp'), []);
+});
+
+test('busca vazia ou só com espaços devolve todas as lojas em ordem de nome', () => {
+  const todas = nomes(filtrarLojas(LOJAS, ''));
+  assert.equal(todas.length, LOJAS.length);
+  assert.deepEqual(todas, [...todas].sort((a, b) => a.localeCompare(b, 'pt-BR')));
+  assert.equal(filtrarLojas(LOJAS, '   ').length, LOJAS.length);
+});
+
+test('quem começa com o que foi digitado vem antes de quem só contém', () => {
+  const lojas = [{ nome: 'Loja Anassul', cidade: 'Z', uf: 'RS' }, { nome: 'Sul Atacado', cidade: 'Y', uf: 'RS' }, { nome: 'Loja Parque Sul', cidade: 'X', uf: 'SP' }];
+  assert.deepEqual(nomes(filtrarLojas(lojas, 'sul')), ['Loja Parque Sul', 'Sul Atacado', 'Loja Anassul']);
+});
+
+test('loja sem cidade e sem UF continua achável pelo nome', () => {
+  assert.deepEqual(nomes(filtrarLojas(LOJAS, 'sem cidade')), ['Atacadão Sem Cidade']);
+});
+
+test('linha pequena da lista: cidade e UF, só o que existir', () => {
+  assert.equal(cidadeEUf({ cidade: 'Guarujá', uf: 'SP' }), 'Guarujá · SP');
+  assert.equal(cidadeEUf({ cidade: null, uf: 'SP' }), 'SP');
+  assert.equal(cidadeEUf({ cidade: 'Guarujá', uf: '' }), 'Guarujá');
+  assert.equal(cidadeEUf({}), '');
+});
+
+test('destaque da parte que casou (sem diferença de acento ou maiúsculas)', () => {
+  assert.deepEqual(destacarTrechos('Atacadão Guarujá', 'guaruja'), [{ texto: 'Atacadão ', destaque: false }, { texto: 'Guarujá', destaque: true }]);
+  assert.deepEqual(destacarTrechos('Atacadão Guarujá', 'ATACADAO'), [{ texto: 'Atacadão', destaque: true }, { texto: ' Guarujá', destaque: false }]);
+  assert.deepEqual(destacarTrechos('São José', 'sao jose'), [{ texto: 'São', destaque: true }, { texto: ' ', destaque: false }, { texto: 'José', destaque: true }]);
+  assert.deepEqual(destacarTrechos('Guarujá · SP', 'sp'), [{ texto: 'Guarujá · ', destaque: false }, { texto: 'SP', destaque: true }]);
+  assert.deepEqual(destacarTrechos('Atacadão Guarujá', 'gua'), [{ texto: 'Atacadão ', destaque: false }, { texto: 'Gua', destaque: true }, { texto: 'rujá', destaque: false }]);
+});
+
+test('destaque sem busca, sem casamento e com termos que se sobrepõem', () => {
+  assert.deepEqual(destacarTrechos('Atacadão Guarujá', ''), [{ texto: 'Atacadão Guarujá', destaque: false }]);
+  assert.deepEqual(destacarTrechos('Atacadão Guarujá', 'xyz'), [{ texto: 'Atacadão Guarujá', destaque: false }]);
+  assert.deepEqual(destacarTrechos('', 'sp'), [{ texto: '', destaque: false }]);
+  assert.deepEqual(destacarTrechos('Guarujá', 'gua uaru'), [{ texto: 'Guaru', destaque: true }, { texto: 'já', destaque: false }]);
+  assert.equal(destacarTrechos('Atacadão Guarujá', 'ata guaruja').map((t) => t.texto).join(''), 'Atacadão Guarujá'); // nunca perde letra
+});
+
+test('setas dão a volta nas pontas da lista', () => {
+  assert.equal(moverDestaque(0, 1, 3), 1);
+  assert.equal(moverDestaque(2, 1, 3), 0);
+  assert.equal(moverDestaque(0, -1, 3), 2);
+  assert.equal(moverDestaque(-1, 1, 3), 0);
+  assert.equal(moverDestaque(-1, -1, 3), 2);
+  assert.equal(moverDestaque(0, 1, 0), -1);
+  assert.equal(ROTULO_OUTRO_ENDERECO, 'Outro endereço');
 });

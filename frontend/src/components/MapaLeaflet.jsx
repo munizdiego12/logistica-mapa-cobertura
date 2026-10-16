@@ -101,6 +101,20 @@ const hubIcon = L.divIcon({
   popupAnchor: [0, -19]
 });
 
+// Centraliza o mapa na loja escolhida (na lista ou clicando nela), mesmo que seja a loja que já era o hub.
+function FocarLoja({ foco, raioM }) {
+  const map = useMap();
+  const n = foco?.n ?? 0;
+  const lat = foco?.lat;
+  const lng = foco?.lng;
+  useEffect(() => {
+    if (!n || !isCoordValid(Number(lat), Number(lng))) return;
+    map.fitBounds(L.latLng(Number(lat), Number(lng)).toBounds(Math.max(raioM || 0, 3000) * 2), { padding: [20, 20] });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [n]);
+  return null;
+}
+
 // Marcador de loja cadastrada (mapa permanente) e da loja escolhida como hub (borda verde)
 const ICONE_LOJA_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>';
 
@@ -150,7 +164,7 @@ function AjustarZoom({ center, pontos, zoomSemHub = 12, raioM = null }) {
   return null;
 }
 
-export default function MapaLeaflet({ origem, rotas, lojas = [], lojaSelecionadaId = null, onEscolherLoja = null, raioKm = 30 }) {
+export default function MapaLeaflet({ origem, rotas, lojas = [], lojaSelecionadaId = null, onEscolherLoja = null, focoLoja = null, raioKm = 30 }) {
   const hubLat = origem ? Number(origem.lat) : NaN;
   const hubLon = origem ? Number(origem.lon) : NaN;
 
@@ -264,6 +278,7 @@ export default function MapaLeaflet({ origem, rotas, lojas = [], lojaSelecionada
         <TileLayer attribution={ATRIBUICAO_ESRI} url={CAMADAS.base} maxNativeZoom={16} maxZoom={18} />
         <TileLayer url={CAMADAS.rotulos} maxNativeZoom={16} maxZoom={18} />
 
+        <FocarLoja foco={focoLoja} raioM={Number(raioKm) > 0 ? Number(raioKm) * 1000 : null} />
         <AjustarZoom center={center} pontos={todosPontosZoom} zoomSemHub={temHub ? 12 : 4} raioM={temHub && Number.isFinite(Number(raioKm)) && Number(raioKm) > 0 ? Number(raioKm) * 1000 : null} />
 
         {/* 1. Isolinhas Concêntricas de Raio com Popups Completos */}

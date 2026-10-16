@@ -13,6 +13,7 @@ import Login from './components/Login';
 import PesosItens from './components/PesosItens';
 import Motoristas from './components/Motoristas';
 import Lojas from './components/Lojas';
+import SeletorLoja from './components/SeletorLoja';
 import { interpretarRaio, nomeDoHub, RAIO_PADRAO_KM } from './services/lojas';
 import { API_BASE } from './config';
 import { instalarTratamento401, MENSAGEM_SESSAO_EXPIRADA } from './services/sessao';
@@ -76,6 +77,8 @@ export default function App() {
   const [lojasCarregadas, setLojasCarregadas] = useState(false);
   const [selecaoHub, setSelecaoHub] = useState('');
   const [raioTexto, setRaioTexto] = useState(String(RAIO_PADRAO_KM));
+  // Cada escolha de loja (na lista ou clicando no mapa) pede para o mapa centralizar nela: { n, lat, lng }
+  const [focoMapa, setFocoMapa] = useState(null);
   const [loadingCeps, setLoadingCeps] = useState(false);
   const [dadosCoberturaCeps, setDadosCoberturaCeps] = useState(null);
   const [progresso, setProgresso] = useState(null); // { etapa, atual, total } | null
@@ -236,6 +239,8 @@ export default function App() {
 
   // Escolher a loja (pelo seletor ou clicando no marcador do mapa): vira o hub e recalcula a cobertura e as faixas de CEP.
   const escolherLoja = (id) => {
+    const alvo = lojas.find((l) => l.id === id);
+    if (alvo) setFocoMapa((atual) => ({ n: (atual?.n ?? 0) + 1, lat: alvo.lat, lng: alvo.lng }));
     if (id === lojaHubId) return;
     if (resultado && !confirmacao.confirmada
       && !window.confirm('Trocar a loja descarta as rotas calculadas que ainda não foram confirmadas. Continuar?')) {
@@ -620,16 +625,12 @@ export default function App() {
             </span>
 
             {lojas.length > 0 && (
-              <select
-                value={selecaoHub}
-                onChange={(e) => trocarSelecaoHub(e.target.value)}
-                aria-label="Loja de origem"
-                className="w-full text-xs bg-slate-900/90 border border-slate-800 focus:border-blue-500/80 rounded-lg px-3 py-2.5 text-slate-100 focus:outline-none transition-colors"
-              >
-                <option value="">Escolha a loja (ou clique nela no mapa)</option>
-                {lojas.map((l) => <option key={l.id} value={String(l.id)}>{l.uf ? `${l.nome} - ${l.uf}` : l.nome}</option>)}
-                <option value="outro">Outro endereço</option>
-              </select>
+              <SeletorLoja
+                lojas={lojas}
+                selecaoHub={selecaoHub}
+                onEscolherLoja={escolherLoja}
+                onOutroEndereco={() => trocarSelecaoHub('outro')}
+              />
             )}
 
             {/* Raio X km: ao lado do nome da loja escolhida */}
@@ -1141,6 +1142,7 @@ export default function App() {
               lojas={lojas}
               lojaSelecionadaId={lojaHubId}
               onEscolherLoja={escolherLoja}
+              focoLoja={focoMapa}
               raioKm={interpretarRaio(raioTexto).valor ?? RAIO_PADRAO_KM}
             />
           </div>

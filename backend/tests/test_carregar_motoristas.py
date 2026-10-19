@@ -433,3 +433,163 @@ def test_telefone_com_55_nunca_aparece_no_resumo(tmp_path, monkeypatch, capsys):
     texto = capsys.readouterr().out
     assert "com telefone: 1" in texto and "M-2" in texto and "TELEFONES INVÁLIDOS (linha recusada): 1" in texto
     assert "996641565" not in texto and "17996" not in texto and "9966" not in texto
+
+
+# ----------------------------------------------------------------------------------------------------------
+# Siglas de rede, apelidos, exportação e --listar-todas
+# ----------------------------------------------------------------------------------------------------------
+REDES = [
+    {"id": 10, "nome": "Sam's Club Campinas", "ativo": True},
+    {"id": 11, "nome": "Carrefour Hiper Osasco", "ativo": True},
+    {"id": 12, "nome": "Atacadão Porto Alegre Humaitá", "ativo": True},
+    {"id": 13, "nome": "Atacadão Humaitá Centro", "ativo": True},
+    {"id": 14, "nome": "Atacadão Desativado Sul", "ativo": False},
+]
+
+
+def _linha(*nomes):
+    r = carga.ResultadoCsvMotoristas(delimitador=";", codificacao="utf-8")
+    r.linhas.append(carga.LinhaMotorista(numero=2, codigo="M-1", nome="Ana", tipo="Carro de passeio", lojas_nomes=list(nomes)))
+    return r
+
+
+@pytest.mark.parametrize("nome", ["SAMS Campinas", "SAMs Campinas", "sams campinas", "Sam's Club Campinas", "SAMS Club Campinas", "Sams  - Campinas"])
+def test_sigla_sams_vale_sams_club(nome):
+    r = _linha(nome)
+    carga.conferir_lojas(r, REDES)
+    assert r.linhas[0].lojas_ids == [10], nome
+
+
+@pytest.mark.parametrize("nome", ["CRFO Hiper Osasco", "crfo hiper osasco", "Carrefour Hiper Osasco"])
+def test_sigla_crfo_vale_carrefour(nome):
+    r = _linha(nome)
+    carga.conferir_lojas(r, REDES)
+    assert r.linhas[0].lojas_ids == [11], nome
+
+
+def test_siglas_so_valem_no_inicio_e_atc_av_continuam():
+    assert carga.chave_da_loja("Loja SAMS") == "loja sams" and carga.chave_da_loja("Posto CRFO") == "posto crfo"
+    assert carga.chave_da_loja("ATC Av das Torres") == "atacadao avenida das torres"
+    assert carga.chave_da_loja("Sam's Club") == "sams club"
+
+
+def test_exportar_modelo_de_apelidos_so_com_nao_encontrados_e_ambiguos(tmp_path):
+    r = carga.ResultadoCsvMotoristas(delimitador=";", codificacao="utf-8")
+    casos = [("M-1", ["ATC Humaita", "SAMS Campinas"]), ("M-2", ["ATC Humaita"]), ("M-3", ["Atacadão Desativado Sul"]), ("M-4", ["ATC Zzz"])]
+    for n, (cod, lojas) in enumerate(casos, start=2):
+        r.linhas.append(carga.LinhaMotorista(numero=n, codigo=cod, nome="Fulano Nome", tipo="Carro de passeio", lojas_nomes=lojas, telefone="11912345678"))
+    carga.conferir_lojas(r, REDES)
+    destino = tmp_path / "apelidos.csv"
+    assert carga.exportar_apelidos(destino, r, REDES) == 3
+    import csv as _csv
+    linhas = list(_csv.reader(destino.read_text(encoding="utf-8").splitlines()))
+    assert linhas[0] == ["nome_na_planilha", "motoristas", "sugestoes", "nome_da_loja"]
+    por_nome = {l[0]: l for l in linhas[1:]}
+    assert set(por_nome) == {"ATC Humaita", "Atacadão Desativado Sul", "ATC Zzz"}  # SAMS Campinas casou: fora
+    assert por_nome["ATC Humaita"][1] == "2" and por_nome["ATC Humaita"][3] == ""
+    assert "Atacadão Porto Alegre Humaitá" in por_nome["ATC Humaita"][2] and len(por_nome["ATC Humaita"][2].split(" | ")) <= 3
+    assert por_nome["ATC Zzz"][2] == ""
+    assert "Desativado" not in por_nome["ATC Humaita"][2]  # sugestão só de loja ativa
+    assert "11912345678" not in destino.read_text(encoding="utf-8") and "Fulano" not in destino.read_text(encoding="utf-8")
+    with pytest.raises(ValueError, match="já existe"):
+        carga.exportar_apelidos(destino, r, REDES)  # não sobrescreve o que pode estar preenchido
+
+
+def _apelidos(tmp_path, linhas):
+    caminho = tmp_path / "ap.csv"
+    caminho.write_text("nome_na_planilha,motoristas,sugestoes,nome_da_loja\n" + "\n".join(linhas) + "\n", encoding="utf-8")
+    return carga.ler_apelidos(caminho)
+
+
+def test_apelido_valido_liga_a_loja_e_vale_antes_do_casamento_automatico(tmp_path):
+    ap = _apelidos(tmp_path, ['ATC Humaita,2,,"atacadão  porto alegre HUMAITÁ"'])
+    r = _linha("ATC Humaita", "SAMS Campinas")
+    carga.conferir_lojas(r, REDES, ap)
+    l = r.linhas[0]
+    assert l.lojas_ids == [12, 10] and l.lojas_por_apelido == ["ATC Humaita"] and l.lojas_nao_encontradas == []
+    resumo = carga.resumir(r)
+    assert resumo["ligados_por_apelido"] == 1 and resumo["apelidos_invalidos"] == []
+
+
+def test_apelido_cuja_loja_e_ambigua_e_invalido(tmp_path):
+    lojas = REDES + [{"id": 15, "nome": "Atacadão - Humaitá Centro", "ativo": True}]
+    r = _linha("ATC Humaita Centro")
+    carga.conferir_lojas(r, lojas)
+    assert r.linhas[0].lojas_ambiguas == ["ATC Humaita Centro"]
+    r = _linha("ATC Xis")
+    carga.conferir_lojas(r, lojas, _apelidos(tmp_path, ["ATC Xis,1,,Atacadão Humaitá Centro"]))
+    assert r.linhas[0].lojas_ids == [] and [m for _, _, m in r.apelidos_invalidos] == ["o nome da loja casa com mais de uma loja"]
+
+
+def test_apelido_invalido_inexistente_ou_desativado_e_listado_e_ignorado(tmp_path):
+    ap = _apelidos(tmp_path, ["ATC A,1,,Atacadão Que Não Existe", "ATC B,1,,Atacadão Desativado Sul"])
+    r = _linha("ATC A", "ATC B")
+    carga.conferir_lojas(r, REDES, ap)
+    l = r.linhas[0]
+    assert l.lojas_ids == [] and l.lojas_por_apelido == [] and l.lojas_nao_encontradas == ["ATC A", "ATC B"]
+    assert sorted((p, m) for p, _, m in r.apelidos_invalidos) == [("ATC A", "loja inexistente"), ("ATC B", "loja desativada")]
+
+
+def test_apelido_com_nome_da_loja_vazio_e_ignorado(tmp_path):
+    ap = _apelidos(tmp_path, ["ATC A,1,Atacadão Porto Alegre Humaitá,", "ATC B,1,,   "])
+    assert ap == {}
+    r = _linha("ATC A")
+    carga.conferir_lojas(r, REDES, ap)
+    assert r.linhas[0].lojas_ids == [] and r.linhas[0].lojas_nao_encontradas == ["ATC A"] and r.apelidos_invalidos == []
+
+
+def test_arquivo_de_apelidos_sem_as_colunas_e_recusado(tmp_path):
+    caminho = tmp_path / "x.csv"
+    caminho.write_text("a,b\n1,2\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="nome_na_planilha"):
+        carga.ler_apelidos(caminho)
+
+
+def _planilha_com_lojas_desconhecidas(tmp_path, n=14):
+    linhas = "".join(f"M-{i};Pessoa {i};Passeio;Loja Estranha {i:02d};;(11) 91234-5678\n" for i in range(1, n + 1))
+    return _escrever(tmp_path, CABECALHO + linhas)
+
+
+def test_resumo_corta_a_lista_e_listar_todas_mostra_tudo(tmp_path, banco_falso, capsys):
+    caminho = _planilha_com_lojas_desconhecidas(tmp_path)
+    script.main(["--csv", caminho])
+    padrao = capsys.readouterr().out
+    assert "Loja Estranha 01" in padrao and "use --listar-todas" in padrao
+    assert sum(f"Loja Estranha {i:02d}" in padrao for i in range(1, 15)) == 10
+    script.main(["--csv", caminho, "--listar-todas"])
+    inteiro = capsys.readouterr().out
+    assert all(f"Loja Estranha {i:02d}" in inteiro for i in range(1, 15)) and "use --listar-todas" not in inteiro
+    assert "91234" not in padrao + inteiro
+
+
+def test_exportar_e_usar_apelidos_pelo_script_sem_mostrar_telefone(tmp_path, banco_falso, capsys):
+    caminho = _escrever(tmp_path, CABECALHO + "M-1;Ana;Passeio;ATC Humaita|Loja Xis;;(11) 91234-5678\nM-2;Beto;Passeio;ATC Humaita;;5517996641565\n")
+    banco_falso.db.execute("INSERT INTO lojas (nome, lat, lng) VALUES ('Atacadão Porto Alegre Humaitá', -30, -51)")
+    modelo = tmp_path / "apelidos.csv"
+    script.main(["--csv", caminho, "--exportar-apelidos", str(modelo)])
+    texto = capsys.readouterr().out
+    assert "Modelo de apelidos escrito" in texto and "(2 nome(s) de loja)" in texto
+    assert "91234" not in texto and "996641565" not in texto
+    assert "91234" not in modelo.read_text(encoding="utf-8")
+    linhas = []
+    for l in modelo.read_text(encoding="utf-8").splitlines():
+        linhas.append(l + "Atacadão Porto Alegre Humaitá" if l.startswith("ATC Humaita,") and l.endswith(",") else l)
+    modelo.write_text("\n".join(linhas) + "\n", encoding="utf-8")
+    script.main(["--csv", caminho, "--apelidos", str(modelo), "--gravar", "--sim"])
+    texto = capsys.readouterr().out
+    assert "motoristas ligados a alguma loja por apelido: 2" in texto and "APELIDOS INVÁLIDOS (ignorados): 0" in texto
+    assert '"Loja Xis": 1 motorista(s)' in texto and "91234" not in texto and "996641565" not in texto
+    assert banco_falso.db.execute("SELECT COUNT(*) FROM motorista_lojas").fetchone()[0] == 2
+
+
+def test_exportar_nao_sobrescreve_e_exige_o_banco(tmp_path, monkeypatch, banco_falso):
+    caminho = _escrever(tmp_path, CABECALHO + "M-1;Ana;Passeio;Loja Xis;;\n")
+    existente = tmp_path / "ap.csv"
+    existente.write_text("ja preenchido", encoding="utf-8")
+    with pytest.raises(SystemExit) as saida:
+        script.main(["--csv", caminho, "--exportar-apelidos", str(existente)])
+    assert "já existe" in str(saida.value) and existente.read_text(encoding="utf-8") == "ja preenchido"
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    with pytest.raises(SystemExit) as saida:
+        script.main(["--csv", caminho, "--exportar-apelidos", str(tmp_path / "novo.csv")])
+    assert "DATABASE_URL" in str(saida.value) and not (tmp_path / "novo.csv").exists()

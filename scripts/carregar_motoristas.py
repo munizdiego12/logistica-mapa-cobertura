@@ -19,6 +19,12 @@ definida, o resumo avisa e segue sem conferir as lojas:
     $env:DATABASE_URL = "<string do Neon>"
     python scripts/carregar_motoristas.py --csv data/motoristas/motoristas.csv
 
+Siglas de rede no início do nome da loja (sem diferença de maiúsculas): ATC = Atacadão, SAMS/SAMs = Sam's Club, CRFO = Carrefour.
+Para os nomes que as siglas não resolvem: --exportar-apelidos data/motoristas/apelidos.csv escreve um modelo só com os nomes de
+loja não encontrados ou ambíguos (nome_na_planilha, motoristas, sugestoes, nome_da_loja); preencha nome_da_loja com o nome exato
+de uma loja cadastrada e rode com --apelidos data/motoristas/apelidos.csv (linhas em branco são ignoradas; o arquivo não tem
+dado pessoal e fica em data/motoristas/, ignorada pelo git). --listar-todas mostra todas as lojas não encontradas no resumo.
+
 Passo 2 — gravar (mostra a previsão e pede a confirmação digitada; string do banco só na sessão):
     python scripts/carregar_motoristas.py --csv data/motoristas/motoristas.csv --gravar
     Remove-Item Env:DATABASE_URL
@@ -44,7 +50,7 @@ RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ))
 
 from backend.carga_motoristas import (  # noqa: E402
-    ROTULOS_DAS_COLUNAS, conferir_lojas, gravar_carga, ler_csv_motoristas, ler_lojas, para_gravar, prever_carga, resumir,
+    ROTULOS_DAS_COLUNAS, conferir_lojas, exportar_apelidos, gravar_carga, ler_apelidos, ler_csv_motoristas, ler_lojas, para_gravar, prever_carga, resumir,
 )
 from backend.db_url import dsn_asyncpg, mascarar_senha  # noqa: E402
 from backend.item_pesos import esta_protegido_do_git  # noqa: E402
@@ -100,8 +106,9 @@ def _numeros(linhas, limite) -> str:
     return ", ".join(nomes) + (f" ... e mais {len(linhas) - limite}" if len(linhas) > limite else "")
 
 
-def imprimir_resumo(caminho: Path, resultado, resumo: dict) -> None:
+def imprimir_resumo(caminho: Path, resultado, resumo: dict, listar_todas: bool = False) -> None:
     ex = resumo["exemplos"]
+    corte = None if listar_todas else ex
     print(f"Arquivo: {caminho}")
     print(f"  separador: '{resultado.delimitador}' | codificação: {resultado.codificacao}")
     reconhecidas = [f"{ROTULOS_DAS_COLUNAS[c]} <- \"{resultado.colunas[c]}\"" for c in CAMPOS if c in resultado.colunas]
@@ -127,14 +134,21 @@ def imprimir_resumo(caminho: Path, resultado, resumo: dict) -> None:
     if resumo["lojas_conferidas"]:
         nao = resumo["lojas_nao_encontradas"]
         print(f"  LOJAS NÃO ENCONTRADAS (a linha vale, sem esse vínculo): {len(nao)}")
-        for nome, quantas in nao.most_common(ex):
+        for nome, quantas in nao.most_common(corte):
             print(f"      \"{nome}\": {quantas} motorista(s)")
-        if len(nao) > ex:
-            print(f"      ... e mais {len(nao) - ex}")
+        if corte is not None and len(nao) > corte:
+            print(f"      ... e mais {len(nao) - corte} (use --listar-todas para ver todas)")
         amb = resumo["lojas_ambiguas"]
         print(f"  LOJAS AMBÍGUAS (o nome casa com mais de uma loja; o vínculo NÃO é gravado): {len(amb)}")
-        for nome, quantas in amb.most_common(ex):
+        for nome, quantas in amb.most_common(corte):
             print(f"      \"{nome}\": {quantas} motorista(s)")
+        if corte is not None and len(amb) > corte:
+            print(f"      ... e mais {len(amb) - corte} (use --listar-todas para ver todas)")
+        if resumo["apelidos_invalidos"] or resumo["ligados_por_apelido"]:
+            print(f"  APELIDOS: motoristas ligados a alguma loja por apelido: {resumo['ligados_por_apelido']}")
+            print(f"  APELIDOS INVÁLIDOS (ignorados): {len(resumo['apelidos_invalidos'])}")
+            for planilha, loja, motivo in resumo["apelidos_invalidos"]:
+                print(f"      \"{planilha}\" -> \"{loja}\": {motivo}")
         print(f"  MOTORISTAS que serão gravados SEM algum vínculo de loja (loja não encontrada ou ambígua): {resumo['sem_algum_vinculo']}")
     else:
         print("  LOJAS: não conferi os nomes (veja o aviso abaixo)")
@@ -173,6 +187,9 @@ def main(argv=None):
     parser.add_argument("--csv", required=True, help="CSV de motoristas (em data/motoristas/, fora do git)")
     parser.add_argument("--gravar", action="store_true", help="grava no banco (DATABASE_URL) depois de mostrar a previsão e pedir confirmação")
     parser.add_argument("--sim", action="store_true", help="com --gravar, não pede a confirmação digitada")
+    parser.add_argument("--apelidos", help="CSV de apelidos (nome_na_planilha, nome_da_loja) para os nomes de loja que as siglas não resolvem")
+    parser.add_argument("--exportar-apelidos", help="escreve o modelo de apelidos (só os nomes de loja não encontrados ou ambíguos) neste CSV e não sobrescreve arquivo existente")
+    parser.add_argument("--listar-todas", action="store_true", help="mostra no resumo TODAS as lojas não encontradas e ambíguas (por padrão, só as primeiras)")
     parser.add_argument("--sobrescrever-editados", action="store_true", help="permite sobrescrever motoristas que um operador editou na tela")
     args = parser.parse_args(argv)
 
@@ -192,6 +209,15 @@ def main(argv=None):
     except ValueError as erro:
         sys.exit(f"ERRO: {erro}")
 
+    apelidos = None
+    if args.apelidos:
+        try:
+            apelidos = ler_apelidos(args.apelidos)
+        except (OSError, ValueError) as erro:
+            sys.exit(f"ERRO: arquivo de apelidos: {erro}")
+    if args.exportar_apelidos and Path(args.exportar_apelidos).exists():
+        sys.exit(f"ERRO: {args.exportar_apelidos} já existe: escolha outro nome para não perder o que já foi preenchido.")
+
     dsn = _dsn_ou_none(os.getenv("DATABASE_URL"))
     aviso_lojas = None
     precisa_conferir_lojas = any(l.lojas_nomes for l in resultado.linhas)
@@ -203,11 +229,17 @@ def main(argv=None):
             )
         else:
             cadastradas = asyncio.run(com_conexao(dsn, _ler_lojas_so_leitura))
-            conferir_lojas(resultado, cadastradas)
+            conferir_lojas(resultado, cadastradas, apelidos)
     resumo = resumir(resultado)
-    imprimir_resumo(caminho, resultado, resumo)
+    imprimir_resumo(caminho, resultado, resumo, args.listar_todas)
     if aviso_lojas:
         print(f"\nAVISO: {aviso_lojas}")
+
+    if args.exportar_apelidos:
+        if not resultado.lojas_conferidas:
+            sys.exit("\nERRO: para exportar o modelo de apelidos é preciso conferir as lojas no banco (defina DATABASE_URL; só leitura).")
+        quantas = exportar_apelidos(args.exportar_apelidos, resultado, cadastradas)
+        print(f"\nModelo de apelidos escrito em {args.exportar_apelidos} ({quantas} nome(s) de loja). Preencha a coluna nome_da_loja com o nome exato de uma loja cadastrada e use --apelidos.")
 
     linhas = para_gravar(resultado)
     if not args.gravar:

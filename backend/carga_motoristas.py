@@ -51,6 +51,7 @@ class LinhaMotorista:
     lojas_ids: list = field(default_factory=list)
     lojas_nao_encontradas: list = field(default_factory=list)
     lojas_ambiguas: list = field(default_factory=list)  # nome que casa com mais de uma loja: o vínculo não é gravado
+    lojas_por_apelido: list = field(default_factory=list)  # nomes da planilha ligados pela tabela de apelidos
     valor: Optional[Decimal] = None
     telefone: Optional[str] = field(default=None, repr=False)  # só dígitos; nunca impresso
     status: str = "valida"  # valida | invalida | duplicada_ignorada
@@ -80,6 +81,7 @@ class ResultadoCsvMotoristas:
     linhas: list = field(default_factory=list)
     avisos: list = field(default_factory=list)
     lojas_conferidas: bool = False
+    apelidos_invalidos: list = field(default_factory=list)  # [(nome na planilha, nome da loja, motivo)]
 
 
 def reconhecer_tipo(valor) -> Optional[str]:
@@ -95,16 +97,23 @@ def reconhecer_tipo(valor) -> Optional[str]:
 
 
 _ABREVIACOES = {"av": "avenida"}
+# Siglas de rede só valem como PRIMEIRA palavra do nome (sem diferença de maiúsculas): ATC = Atacadão, SAMS = Sam's Club, CRFO = Carrefour.
+_SIGLAS_DE_REDE = {"atc": ["atacadao"], "sams": ["sams", "club"], "crfo": ["carrefour"]}
 
 
 def chave_da_loja(nome) -> str:
     """
-    Chave de comparação do nome da loja: sem acentos, minúsculas, sem hífens nem pontuação, espaços simples; "ATC" no início
-    vale "Atacadão" e "Av" vale "Avenida" ("ATC Av das Torres" casa com "Atacadão Avenida das Torres").
+    Chave de comparação do nome da loja: sem acentos, minúsculas, sem hífens, apóstrofos nem pontuação, espaços simples;
+    siglas de rede no início valem o nome inteiro (ATC = Atacadão, SAMS/SAMs = Sam's Club, CRFO = Carrefour) e "Av" vale
+    "Avenida" ("ATC Av das Torres" casa com "Atacadão Avenida das Torres"; "SAMS Campinas" com "Sam's Club Campinas").
     """
-    palavras = re.sub(r"[^a-z0-9]+", " ", _sem_acento(nome).lower()).split()
-    if palavras and palavras[0] == "atc":
-        palavras[0] = "atacadao"
+    texto = re.sub(r"['\u2019`]", "", _sem_acento(nome).lower())
+    palavras = re.sub(r"[^a-z0-9]+", " ", texto).split()
+    if palavras and palavras[0] in _SIGLAS_DE_REDE:
+        expandido = list(_SIGLAS_DE_REDE[palavras[0]])
+        if expandido[-1] == "club" and palavras[1:2] == ["club"]:  # "Sams Club Campinas": o "club" já veio escrito
+            expandido = expandido[:-1]
+        palavras = expandido + palavras[1:]
     return " ".join(_ABREVIACOES.get(p, p) for p in palavras)
 
 
@@ -212,19 +221,75 @@ def ler_csv_motoristas(caminho) -> ResultadoCsvMotoristas:
     return resultado
 
 
-def conferir_lojas(resultado: ResultadoCsvMotoristas, lojas_cadastradas: list) -> None:
+PALAVRAS_SEM_VALOR = {"de", "da", "do", "das", "dos", "e"}
+
+
+def ler_apelidos(caminho) -> dict:
     """
-    Casa os nomes de loja de cada linha com as lojas cadastradas (chave normalizada, com ATC = Atacadão e Av = Avenida).
-    Nome que casa com mais de uma loja ativa é AMBÍGUO e não vira vínculo; loja só desativada conta como não achada.
+    Lê o CSV de apelidos (colunas nome_na_planilha e nome_da_loja; as outras são ignoradas). Devolve
+    {chave do nome na planilha: nome da loja}; linhas com nome_da_loja vazio são ignoradas (o motorista fica sem vínculo).
     """
+    texto, _ = _ler_texto(caminho)
+    linhas = list(csv.reader(texto.splitlines(), delimiter=";" if texto.splitlines()[:1] and texto.splitlines()[0].count(";") > texto.splitlines()[0].count(",") else ","))
+    if not linhas:
+        raise ValueError("o arquivo de apelidos está vazio")
+    cabecalho = {_chave_do_cabecalho(c): i for i, c in enumerate(linhas[0])}
+    if "nomenaplanilha" not in cabecalho or "nomedaloja" not in cabecalho:
+        raise ValueError("o arquivo de apelidos precisa das colunas nome_na_planilha e nome_da_loja")
+    a, b = cabecalho["nomenaplanilha"], cabecalho["nomedaloja"]
+    apelidos = {}
+    for linha in linhas[1:]:
+        planilha = linha[a].strip() if a < len(linha) else ""
+        loja = linha[b].strip() if b < len(linha) else ""
+        if planilha and loja:
+            apelidos[chave_da_loja(planilha)] = (planilha, loja)
+    return apelidos
+
+
+def _por_chave(lojas_cadastradas: list) -> dict:
     por_chave = {}
     for l in lojas_cadastradas:
         por_chave.setdefault(chave_da_loja(l["nome"]), []).append(l)
+    return por_chave
+
+
+def validar_apelidos(apelidos: dict, lojas_cadastradas: list) -> tuple:
+    """({chave do nome na planilha: id da loja}, [(nome na planilha, nome da loja, motivo)]): a loja precisa existir, estar ativa e ser única."""
+    por_chave = _por_chave(lojas_cadastradas)
+    validos, invalidos = {}, []
+    for chave, (planilha, loja) in (apelidos or {}).items():
+        candidatas = por_chave.get(chave_da_loja(loja), [])
+        ativas = [l for l in candidatas if l.get("ativo", True)]
+        if len(ativas) == 1:
+            validos[chave] = int(ativas[0]["id"])
+        elif len(ativas) > 1:
+            invalidos.append((planilha, loja, "o nome da loja casa com mais de uma loja"))
+        elif candidatas:
+            invalidos.append((planilha, loja, "loja desativada"))
+        else:
+            invalidos.append((planilha, loja, "loja inexistente"))
+    return validos, invalidos
+
+
+def conferir_lojas(resultado: ResultadoCsvMotoristas, lojas_cadastradas: list, apelidos: Optional[dict] = None) -> None:
+    """
+    Casa os nomes de loja de cada linha com as lojas cadastradas (chave normalizada: siglas de rede, Av = Avenida, sem
+    hífen nem apóstrofo). Um apelido válido (nome na planilha -> loja) vale antes do casamento automático. Nome que casa com
+    mais de uma loja ativa é AMBÍGUO e não vira vínculo; loja só desativada conta como não achada.
+    """
+    por_chave = _por_chave(lojas_cadastradas)
+    validos, resultado.apelidos_invalidos = validar_apelidos(apelidos, lojas_cadastradas)
     resultado.lojas_conferidas = True
     for reg in resultado.linhas:
-        reg.lojas_ids, reg.lojas_nao_encontradas, reg.lojas_ambiguas = [], [], []
+        reg.lojas_ids, reg.lojas_nao_encontradas, reg.lojas_ambiguas, reg.lojas_por_apelido = [], [], [], []
         for nome in reg.lojas_nomes:
-            candidatas = por_chave.get(chave_da_loja(nome), [])
+            chave = chave_da_loja(nome)
+            if chave in validos:
+                if validos[chave] not in reg.lojas_ids:
+                    reg.lojas_ids.append(validos[chave])
+                reg.lojas_por_apelido.append(nome)
+                continue
+            candidatas = por_chave.get(chave, [])
             ativas = [l for l in candidatas if l.get("ativo", True)]
             if len(ativas) > 1:
                 reg.lojas_ambiguas.append(nome)
@@ -235,6 +300,50 @@ def conferir_lojas(resultado: ResultadoCsvMotoristas, lojas_cadastradas: list) -
                 reg.lojas_nao_encontradas.append(f"{nome} (desativada)")
             else:
                 reg.lojas_nao_encontradas.append(nome)
+
+
+def _sem_sufixo(nome: str) -> str:
+    return nome[: -len(" (desativada)")] if nome.endswith(" (desativada)") else nome
+
+
+def sugerir_lojas(nome: str, lojas_cadastradas: list, maximo: int = 3) -> list:
+    """Até `maximo` lojas ativas parecidas com o nome, pelas palavras em comum (sem artigos); sem palavra em comum, nenhuma."""
+    palavras = {p for p in chave_da_loja(nome).split() if p not in PALAVRAS_SEM_VALOR and len(p) > 1}
+    pontuadas = []
+    for l in lojas_cadastradas:
+        if not l.get("ativo", True):
+            continue
+        comum = len(palavras & {p for p in chave_da_loja(l["nome"]).split() if p not in PALAVRAS_SEM_VALOR})
+        # "atacadao" (ou outra sigla de rede) sozinho não diz nada: precisa de pelo menos uma palavra a mais em comum
+        especificas = len((palavras - {"atacadao", "sams", "club", "carrefour"}) & set(chave_da_loja(l["nome"]).split()))
+        if comum > 0 and especificas > 0:
+            pontuadas.append((-comum, -especificas, l["nome"]))
+    return [nome_loja for _, _, nome_loja in sorted(pontuadas)[:maximo]]
+
+
+def exportar_apelidos(caminho, resultado: ResultadoCsvMotoristas, lojas_cadastradas: list) -> int:
+    """
+    Escreve o modelo de apelidos (UTF-8, vírgula) só com os nomes de loja não encontrados ou ambíguos: nome_na_planilha,
+    motoristas (quantidade), sugestoes (até 3 lojas parecidas, separadas por " | ") e nome_da_loja (vazia, para preencher).
+    Não contém dado pessoal. Recusa sobrescrever um arquivo que já existe (ele pode já estar preenchido). Devolve quantas linhas.
+    """
+    caminho = Path(caminho)
+    if caminho.exists():
+        raise ValueError(f"{caminho} já existe: escolha outro nome para não perder o que já foi preenchido")
+    contagem = Counter()
+    for l in resultado.linhas:
+        if l.status == "valida":
+            for n in l.lojas_nao_encontradas:
+                contagem[_sem_sufixo(n)] += 1
+            for n in l.lojas_ambiguas:
+                contagem[n] += 1
+    caminho.parent.mkdir(parents=True, exist_ok=True)
+    with open(caminho, "w", encoding="utf-8", newline="") as f:
+        escritor = csv.writer(f)
+        escritor.writerow(["nome_na_planilha", "motoristas", "sugestoes", "nome_da_loja"])
+        for nome, quantas in sorted(contagem.items(), key=lambda x: (-x[1], x[0])):
+            escritor.writerow([nome, quantas, " | ".join(sugerir_lojas(nome, lojas_cadastradas)), ""])
+    return len(contagem)
 
 
 def resumir(resultado: ResultadoCsvMotoristas, exemplos: int = 10) -> dict:
@@ -253,6 +362,8 @@ def resumir(resultado: ResultadoCsvMotoristas, exemplos: int = 10) -> dict:
         "lojas_conferidas": resultado.lojas_conferidas,
         "lojas_nao_encontradas": Counter(n for l in validas for n in l.lojas_nao_encontradas),
         "lojas_ambiguas": Counter(n for l in validas for n in l.lojas_ambiguas),
+        "apelidos_invalidos": list(resultado.apelidos_invalidos),
+        "ligados_por_apelido": sum(1 for l in validas if l.lojas_por_apelido),
         "sem_algum_vinculo": sum(1 for l in validas if l.lojas_nao_encontradas or l.lojas_ambiguas),
         "repetidos": [(l.codigo, por_codigo[frota.chave_do_codigo(l.codigo)]) for l in linhas if l.status == "duplicada_ignorada"],
         "invalidas": [l for l in linhas if l.status == "invalida"],

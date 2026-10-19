@@ -7,11 +7,12 @@ Usa asyncpg (o psycopg2 pode estar bloqueado no Windows) e lê a conexão SOMENT
 As tabelas e colunas são criadas antes pelo Alembic (dentro de backend/):  python -m alembic upgrade head   (revisão 0008)
 As lojas precisam estar cadastradas antes (scripts/carregar_lojas.py).
 
-Colunas aceitas (reconhecidas pelo NOME do cabeçalho, em qualquer ordem, sem diferença de maiúsculas, acentos ou espaços):
-    Código (obrigatória: é a chave da carga); Nome; Tipo de veículo (Passeio, Carro de passeio, Utilitário, Fiorino,
-    Fiorino/Utilitário e variações); Lojas (nomes separados por ';' ou '|', exatamente como estão cadastradas; se o CSV
+Colunas aceitas (reconhecidas pelo NOME do cabeçalho, em qualquer ordem, sem diferença de maiúsculas, acentos ou espaços; o resumo
+mostra qual cabeçalho foi reconhecido para cada campo):
+    Código, Codigo ou ID (obrigatória: é a chave da carga); Nome, Nome Motorista ou Motorista; Tipo de veículo, Veículo ou Tipo (Passeio, Carro de passeio, Utilitário, Fiorino,
+    Fiorino/Utilitário e variações); Lojas ou Loja (nomes separados por ';' ou '|'; o casamento ignora hífens, pontuação, acentos e maiúsculas, e trata "ATC" no início como "Atacadão" e "Av" como "Avenida"; nome que casa com mais de uma loja é ambíguo e não vira vínculo; se o CSV
     usa ';' como separador, use '|' entre as lojas ou coloque a célula entre aspas); Diária (opcional; vírgula ou ponto
-    decimal); Telefone (opcional; com DDD).
+    decimal); Telefone, Número, Celular ou Fone (opcional; com DDD; o 55 do país na frente é removido).
 
 Passo 1 — resumo. Para conferir os nomes das lojas o script lê as lojas do banco (SÓ LEITURA); se DATABASE_URL não estiver
 definida, o resumo avisa e segue sem conferir as lojas:
@@ -130,6 +131,11 @@ def imprimir_resumo(caminho: Path, resultado, resumo: dict) -> None:
             print(f"      \"{nome}\": {quantas} motorista(s)")
         if len(nao) > ex:
             print(f"      ... e mais {len(nao) - ex}")
+        amb = resumo["lojas_ambiguas"]
+        print(f"  LOJAS AMBÍGUAS (o nome casa com mais de uma loja; o vínculo NÃO é gravado): {len(amb)}")
+        for nome, quantas in amb.most_common(ex):
+            print(f"      \"{nome}\": {quantas} motorista(s)")
+        print(f"  MOTORISTAS que serão gravados SEM algum vínculo de loja (loja não encontrada ou ambígua): {resumo['sem_algum_vinculo']}")
     else:
         print("  LOJAS: não conferi os nomes (veja o aviso abaixo)")
 

@@ -102,7 +102,7 @@ def test_cabecalhos_por_nome_sem_diferenca_de_maiusculas_acentos_ou_espacos(tmp_
 def test_sem_a_coluna_codigo_o_arquivo_e_recusado_com_mensagem_clara(tmp_path):
     with pytest.raises(ValueError, match="Código"):
         carga.ler_csv_motoristas(_escrever(tmp_path, "Nome;Tipo de veículo\nAna;Passeio\n"))
-    with pytest.raises(ValueError, match="colunas de motoristas"):
+    with pytest.raises(ValueError, match="coluna do nome"):
         carga.ler_csv_motoristas(_escrever(tmp_path, "A;B\n1;2\n", "x.csv"))
 
 
@@ -321,3 +321,115 @@ def test_arquivo_inexistente_e_mensagem_clara(tmp_path):
 
 def test_pasta_de_dados_dos_motoristas_esta_no_gitignore():
     assert "data/motoristas/" in (RAIZ / ".gitignore").read_text(encoding="utf-8")
+
+
+# ----------------------------------------------------------------------------------------------------------
+# Planilha real: cabeçalhos alternativos, lojas abreviadas (ATC, Av, hífen) e telefone com 55
+# ----------------------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("cabecalho, campo, esperado", [
+    ("NOME MOTORISTA;NÚMERO;LOJA;ID;VEÍCULO", None, None),
+    ("Motorista;Celular;Lojas;Codigo;Tipo", None, None),
+    ("nome;fone;loja;código;tipo de veiculo", None, None),
+])
+def test_cabecalhos_alternativos_sao_reconhecidos(tmp_path, cabecalho, campo, esperado):
+    campos = cabecalho.split(";")
+    linha = ";".join(["Ana", "(11) 91234-5678", "Loja X", "MOT-1", "Passeio"])
+    r = carga.ler_csv_motoristas(_escrever(tmp_path, cabecalho + "\n" + linha + "\n"))
+    assert set(r.colunas) == {"nome", "telefone", "lojas", "codigo", "tipo"}
+    assert [r.colunas[c] for c in ("nome", "telefone", "lojas", "codigo", "tipo")] == [campos[0], campos[1], campos[2], campos[3], campos[4]]
+    l = r.linhas[0]
+    assert (l.nome, l.telefone, l.lojas_nomes, l.codigo, l.tipo) == ("Ana", "11912345678", ["Loja X"], "MOT-1", "Carro de passeio")
+
+
+def test_resumo_mostra_o_cabecalho_reconhecido_para_cada_campo(tmp_path, monkeypatch, capsys):
+    _sem_banco(monkeypatch)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    script.main(["--csv", _escrever(tmp_path, "NOME MOTORISTA;NÚMERO;LOJA;ID;VEÍCULO\nAna;11 91234-5678;;MOT-1;Passeio\n")])
+    texto = capsys.readouterr().out
+    for esperado in ('Código <- "ID"', 'Nome <- "NOME MOTORISTA"', 'Tipo de veículo <- "VEÍCULO"', 'Lojas <- "LOJA"', 'Telefone <- "NÚMERO"'):
+        assert esperado in texto, esperado
+    assert "91234" not in texto
+
+
+def test_planilha_sem_codigo_ou_tipo_diz_o_que_falta(tmp_path):
+    with pytest.raises(ValueError) as erro:
+        carga.ler_csv_motoristas(_escrever(tmp_path, "NOME MOTORISTA;NÚMERO;LOJA\nAna;11912345678;Loja X\n"))
+    assert "Código" in str(erro.value) and "Tipo de veículo" in str(erro.value)
+    assert "11912345678" not in str(erro.value)
+
+
+LOJAS_CADASTRADAS = [
+    {"id": 1, "nome": "Atacadão América", "ativo": True},
+    {"id": 2, "nome": "Atacadão Avenida das Torres", "ativo": True},
+    {"id": 3, "nome": "Atacadão - Porto Alegre Humaitá", "ativo": True},
+    {"id": 4, "nome": "Atacadão Duplicado", "ativo": True},
+    {"id": 5, "nome": "Atacadão  - Duplicado", "ativo": True},
+    {"id": 6, "nome": "Atacadão Fechada", "ativo": False},
+]
+
+
+@pytest.mark.parametrize("nome_da_planilha, esperado", [
+    ("ATC America", [1]), ("atc  américa", [1]), ("ATC Av das Torres", [2]), ("ATC Avenida das Torres", [2]),
+    ("ATC - Av. das Torres", [2]), ("Atacadão - Porto Alegre Humaitá", [3]), ("ATC Porto Alegre   Humaita", [3]),
+    ("Atacadão América", [1]),
+])
+def test_lojas_abreviadas_casam_com_o_cadastro(nome_da_planilha, esperado):
+    assert carga.chave_da_loja(nome_da_planilha) in {carga.chave_da_loja(l["nome"]) for l in LOJAS_CADASTRADAS}
+    r = carga.ResultadoCsvMotoristas(delimitador=";", codificacao="utf-8")
+    r.linhas.append(carga.LinhaMotorista(numero=2, codigo="M-1", nome="Ana", tipo="Carro de passeio", lojas_nomes=[nome_da_planilha]))
+    carga.conferir_lojas(r, LOJAS_CADASTRADAS)
+    assert r.linhas[0].lojas_ids == esperado and r.linhas[0].lojas_nao_encontradas == [] and r.linhas[0].lojas_ambiguas == []
+
+
+def test_atc_so_vale_no_inicio_e_av_e_palavra_inteira():
+    assert carga.chave_da_loja("ATC America") == "atacadao america"
+    assert carga.chave_da_loja("Loja ATC Sul") == "loja atc sul"
+    assert carga.chave_da_loja("Avaré Centro") == "avare centro"
+
+
+def test_nome_que_casa_com_mais_de_uma_loja_e_ambiguo_e_nao_vira_vinculo():
+    r = carga.ResultadoCsvMotoristas(delimitador=";", codificacao="utf-8")
+    r.linhas.append(carga.LinhaMotorista(numero=2, codigo="M-1", nome="Ana", tipo="Carro de passeio", lojas_nomes=["ATC Duplicado", "ATC America", "ATC Inexistente", "Atacadão Fechada"]))
+    carga.conferir_lojas(r, LOJAS_CADASTRADAS)
+    l = r.linhas[0]
+    assert l.lojas_ids == [1] and l.lojas_ambiguas == ["ATC Duplicado"]
+    assert l.lojas_nao_encontradas == ["ATC Inexistente", "Atacadão Fechada (desativada)"]
+    resumo = carga.resumir(r)
+    assert resumo["lojas_ambiguas"]["ATC Duplicado"] == 1 and resumo["sem_algum_vinculo"] == 1
+
+
+def test_resumo_lista_lojas_nao_encontradas_com_quantidade_e_grava_o_motorista_sem_o_vinculo(tmp_path, banco_falso, capsys):
+    banco_falso.db.execute("INSERT INTO lojas (nome, lat, lng) VALUES ('Atacadão América', -23.9, -46.2)")
+    banco_falso.db.execute("INSERT INTO lojas (nome, lat, lng) VALUES ('Atacadão Dup A', -23.9, -46.2)")
+    banco_falso.db.execute("INSERT INTO lojas (nome, lat, lng) VALUES ('Atacadão - Dup A', -23.9, -46.2)")
+    caminho = _escrever(tmp_path, "NOME MOTORISTA;NÚMERO;LOJA;ID;VEÍCULO\n"
+                        "Ana;5517996641565;ATC America|ATC Sumida;M-1;Passeio\n"
+                        "Beto;;ATC Sumida;M-2;Utilitário\n"
+                        "Carla;;ATC Dup A;M-3;Passeio\n")
+    script.main(["--csv", caminho, "--gravar", "--sim"])
+    texto = capsys.readouterr().out
+    assert '"ATC Sumida": 2 motorista(s)' in texto
+    assert "LOJAS AMBÍGUAS" in texto and '"ATC Dup A": 1 motorista(s)' in texto
+    assert "SEM algum vínculo de loja (loja não encontrada ou ambígua): 3" in texto
+    assert "Gravado: 3 motorista(s) novo(s)" in texto and "1 vínculo(s)" in texto
+    assert banco_falso.db.execute("SELECT COUNT(*) FROM motoristas").fetchone()[0] == 3
+    assert [tuple(v) for v in banco_falso.db.execute("SELECT m.codigo, l.nome FROM motorista_lojas ml JOIN motoristas m ON m.id = ml.motorista_id JOIN lojas l ON l.id = ml.loja_id")] == [("M-1", "Atacadão América")]
+    assert "5517996641565" not in texto and "996641565" not in texto
+
+
+@pytest.mark.parametrize("entrada, esperado", [
+    ("5517996641565", "17996641565"), ("55 (17) 99664-1565", "17996641565"), ("+55 17 99664-1565", "17996641565"),
+    ("551733221100", "1733221100"), ("17996641565", "17996641565"), ("55996641565", "55996641565"),  # DDD 55 (RS) sem o 55 do país
+])
+def test_telefone_com_55_do_pais_guarda_so_ddd_e_numero(tmp_path, entrada, esperado):
+    r = carga.ler_csv_motoristas(_escrever(tmp_path, f"Código;Nome;Tipo;Telefone\nM-1;Ana;Passeio;{entrada}\n"))
+    assert r.linhas[0].status == "valida" and r.linhas[0].telefone == esperado
+
+
+def test_telefone_com_55_nunca_aparece_no_resumo(tmp_path, monkeypatch, capsys):
+    _sem_banco(monkeypatch)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    script.main(["--csv", _escrever(tmp_path, "Código;Nome;Tipo;Telefone\nM-1;Ana;Passeio;5517996641565\nM-2;Beto;Passeio;55 17 9966\n")])
+    texto = capsys.readouterr().out
+    assert "com telefone: 1" in texto and "M-2" in texto and "TELEFONES INVÁLIDOS (linha recusada): 1" in texto
+    assert "996641565" not in texto and "17996" not in texto and "9966" not in texto

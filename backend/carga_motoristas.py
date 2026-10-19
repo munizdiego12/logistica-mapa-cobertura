@@ -11,6 +11,7 @@ Regras:
       existe não é reativado; os vínculos com lojas só são acrescentados, nunca removidos.
 """
 import csv
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -25,12 +26,12 @@ TIPO_UTILITARIO = "Fiorino/Utilitário"
 
 # Cabeçalhos reconhecidos POR NOME (a ordem não importa), sem diferença de maiúsculas, acentos, espaços ou separadores.
 _ALIASES = {
-    "codigo": ("codigo", "cod", "codmotorista", "codigomotorista", "codigodomotorista", "idmotorista"),
-    "nome": ("nome", "motorista", "nomedomotorista", "name"),
+    "codigo": ("codigo", "cod", "id", "codmotorista", "codigomotorista", "codigodomotorista", "idmotorista"),
+    "nome": ("nome", "nomemotorista", "motorista", "nomedomotorista", "name"),
     "tipo": ("tipodeveiculo", "tipoveiculo", "tipo", "veiculo", "modal"),
     "lojas": ("lojas", "loja", "lojasdomotorista", "lojasatendidas"),
     "diaria": ("diaria", "diariadomotorista", "valor", "valorrota", "valordiaria"),
-    "telefone": ("telefone", "celular", "fone", "tel", "whatsapp"),
+    "telefone": ("telefone", "numero", "celular", "fone", "tel", "whatsapp"),
 }
 ROTULOS_DAS_COLUNAS = {
     "codigo": "Código", "nome": "Nome", "tipo": "Tipo de veículo", "lojas": "Lojas", "diaria": "Diária", "telefone": "Telefone",
@@ -49,6 +50,7 @@ class LinhaMotorista:
     lojas_nomes: list = field(default_factory=list)
     lojas_ids: list = field(default_factory=list)
     lojas_nao_encontradas: list = field(default_factory=list)
+    lojas_ambiguas: list = field(default_factory=list)  # nome que casa com mais de uma loja: o vínculo não é gravado
     valor: Optional[Decimal] = None
     telefone: Optional[str] = field(default=None, repr=False)  # só dígitos; nunca impresso
     status: str = "valida"  # valida | invalida | duplicada_ignorada
@@ -92,9 +94,22 @@ def reconhecer_tipo(valor) -> Optional[str]:
     return TIPO_UTILITARIO if tem_utilitario else TIPO_PASSEIO
 
 
+_ABREVIACOES = {"av": "avenida"}
+
+
 def chave_da_loja(nome) -> str:
-    """Nome da loja sem acentos, em minúsculas e com espaços simples (o casamento com as lojas cadastradas)."""
-    return " ".join(_sem_acento(nome).lower().split())
+    """
+    Chave de comparação do nome da loja: sem acentos, minúsculas, sem hífens nem pontuação, espaços simples; "ATC" no início
+    vale "Atacadão" e "Av" vale "Avenida" ("ATC Av das Torres" casa com "Atacadão Avenida das Torres").
+    """
+    palavras = re.sub(r"[^a-z0-9]+", " ", _sem_acento(nome).lower()).split()
+    if palavras and palavras[0] == "atc":
+        palavras[0] = "atacadao"
+    return " ".join(_ABREVIACOES.get(p, p) for p in palavras)
+
+
+def _chave_simples(texto) -> str:
+    return " ".join(_sem_acento(texto).lower().split())
 
 
 def separar_lojas(texto) -> list:
@@ -133,13 +148,17 @@ def ler_csv_motoristas(caminho) -> ResultadoCsvMotoristas:
     for delimitador in (";", ","):
         cabecalho = next(csv.reader([primeira], delimiter=delimitador), [])
         candidatos = _indices(cabecalho)
-        if {"nome", "tipo"} <= set(candidatos):
+        if "nome" in candidatos:
             escolhido, indices, cabecalho_original = delimitador, candidatos, cabecalho
             break
     if escolhido is None:
-        raise ValueError("não achei as colunas de motoristas no cabeçalho: use Código, Nome e Tipo de veículo (e, se quiser, Lojas, Diária e Telefone)")
-    if "codigo" not in indices:
-        raise ValueError("não achei a coluna Código no cabeçalho: o código é a chave da carga e é obrigatório")
+        raise ValueError("não achei a coluna do nome no cabeçalho: use Nome (ou Nome Motorista, Motorista), além de Código e Tipo de veículo")
+    faltam = [rotulo for campo, rotulo in (("codigo", "Código (ou Codigo, ID)"), ("tipo", "Tipo de veículo (ou Veículo, Tipo)")) if campo not in indices]
+    if faltam:
+        raise ValueError(
+            "faltam colunas obrigatórias no cabeçalho: " + "; ".join(faltam)
+            + ". O código é a chave da carga e o tipo de veículo define a diária base; acrescente as colunas na planilha"
+        )
 
     resultado = ResultadoCsvMotoristas(delimitador=escolhido, codificacao=codificacao)
     resultado.colunas = {campo: cabecalho_original[i].strip() for campo, i in indices.items()}
@@ -194,21 +213,28 @@ def ler_csv_motoristas(caminho) -> ResultadoCsvMotoristas:
 
 
 def conferir_lojas(resultado: ResultadoCsvMotoristas, lojas_cadastradas: list) -> None:
-    """Casa os nomes de loja de cada linha com as lojas cadastradas (nome normalizado). Loja desativada conta como não achada."""
+    """
+    Casa os nomes de loja de cada linha com as lojas cadastradas (chave normalizada, com ATC = Atacadão e Av = Avenida).
+    Nome que casa com mais de uma loja ativa é AMBÍGUO e não vira vínculo; loja só desativada conta como não achada.
+    """
     por_chave = {}
     for l in lojas_cadastradas:
-        por_chave.setdefault(chave_da_loja(l["nome"]), l)
+        por_chave.setdefault(chave_da_loja(l["nome"]), []).append(l)
     resultado.lojas_conferidas = True
     for reg in resultado.linhas:
-        reg.lojas_ids, reg.lojas_nao_encontradas = [], []
+        reg.lojas_ids, reg.lojas_nao_encontradas, reg.lojas_ambiguas = [], [], []
         for nome in reg.lojas_nomes:
-            loja = por_chave.get(chave_da_loja(nome))
-            if loja is None:
-                reg.lojas_nao_encontradas.append(nome)
-            elif not loja.get("ativo", True):
+            candidatas = por_chave.get(chave_da_loja(nome), [])
+            ativas = [l for l in candidatas if l.get("ativo", True)]
+            if len(ativas) > 1:
+                reg.lojas_ambiguas.append(nome)
+            elif len(ativas) == 1:
+                if int(ativas[0]["id"]) not in reg.lojas_ids:
+                    reg.lojas_ids.append(int(ativas[0]["id"]))
+            elif candidatas:
                 reg.lojas_nao_encontradas.append(f"{nome} (desativada)")
-            elif int(loja["id"]) not in reg.lojas_ids:
-                reg.lojas_ids.append(int(loja["id"]))
+            else:
+                reg.lojas_nao_encontradas.append(nome)
 
 
 def resumir(resultado: ResultadoCsvMotoristas, exemplos: int = 10) -> dict:
@@ -226,6 +252,8 @@ def resumir(resultado: ResultadoCsvMotoristas, exemplos: int = 10) -> dict:
         "tipos_nao_reconhecidos": Counter(l.tipo_original or "(em branco)" for l in linhas if "tipo" in l.problemas),
         "lojas_conferidas": resultado.lojas_conferidas,
         "lojas_nao_encontradas": Counter(n for l in validas for n in l.lojas_nao_encontradas),
+        "lojas_ambiguas": Counter(n for l in validas for n in l.lojas_ambiguas),
+        "sem_algum_vinculo": sum(1 for l in validas if l.lojas_nao_encontradas or l.lojas_ambiguas),
         "repetidos": [(l.codigo, por_codigo[frota.chave_do_codigo(l.codigo)]) for l in linhas if l.status == "duplicada_ignorada"],
         "invalidas": [l for l in linhas if l.status == "invalida"],
         "com_telefone": sum(1 for l in validas if l.tem_telefone),
@@ -233,7 +261,7 @@ def resumir(resultado: ResultadoCsvMotoristas, exemplos: int = 10) -> dict:
         "telefone_invalido": [l for l in linhas if "telefone" in l.problemas],
         "com_valor": sum(1 for l in validas if l.valor is not None),
         "com_lojas": sum(1 for l in validas if l.lojas_nomes),
-        "nomes_repetidos": sum(1 for q in Counter(chave_da_loja(l.nome) for l in validas).values() if q > 1),
+        "nomes_repetidos": sum(1 for q in Counter(_chave_simples(l.nome) for l in validas).values() if q > 1),
         "exemplos": exemplos,
     }
 

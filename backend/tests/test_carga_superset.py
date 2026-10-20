@@ -620,3 +620,46 @@ def test_script_de_motoristas_mostra_quantos_foram_ligados_por_nome_de_operacao(
     texto = capsys.readouterr().out
     assert "LIGADOS POR NOME DE OPERAÇÃO (ou código externo da loja): 1 motorista(s)" in texto
     assert banco.db.execute("SELECT count(*) FROM motorista_lojas").fetchone()[0] == 2
+
+
+# ----------------------------------------------------------------------------------------------------------
+# Apóstrofo inicial do Superset (proteção contra injeção de fórmula)
+# ----------------------------------------------------------------------------------------------------------
+def test_store_point_com_e_sem_apostrofo_inicial(tmp_path):
+    caminho = _escrever(tmp_path / "ap.csv", [
+        _linha("A-1", "SDA Com", "'-23.013996;-43.462358"),
+        _linha("A-2", "SDA Sem", "-23.013996;-43.462358"),
+        _linha("A-3", "SDA Espaco", "  ' -23,5;-46,6  "),
+    ])
+    r = superset.ler_superset(caminho)
+    assert r.sem_coordenada == [] and r.linhas_invalidas == []
+    assert [(l.lat, l.lng) for l in r.lojas] == [(-23.013996, -43.462358), (-23.013996, -43.462358), (-23.5, -46.6)]
+
+
+def test_apostrofo_inicial_sai_de_todas_as_celulas_e_o_do_meio_fica(tmp_path):
+    linha = _linha("'-77", "Sam's Club Campinas", "'-22,9;-47,0", cidade="D'Ouro", estado="'Sao Paulo", endereco="'-Rua Um, 1")
+    r = superset.ler_superset(_escrever(tmp_path / "t.csv", [linha, _linha("B-2", "'+SDA Mais", "-23,5;-46,6", endereco="@Rua")]))
+    por_id = {l.codigo_externo: l for l in r.lojas}
+    assert set(por_id) == {"-77", "B-2"}  # store_id também perde o apóstrofo inicial
+    loja = por_id["-77"]
+    assert loja.nome_operacao == "Sam's Club Campinas" and loja.cidade == "D'Ouro"
+    assert loja.uf == "SP" and loja.endereco == "-Rua Um, 1"
+    assert por_id["B-2"].nome_operacao == "+SDA Mais" and por_id["B-2"].endereco == "@Rua"
+    assert superset.limpar_celula("''-1") == "'-1"  # só UM apóstrofo
+    assert superset.limpar_celula(" D'Ouro ") == "D'Ouro"
+
+
+def test_caso_real_46_linhas_35_lojas_3_estados(tmp_path):
+    estados = ["Sao Paulo"] * 20 + ["Rio de Janeiro"] * 10 + ["Minas Gerais"] * 5
+    linhas = []
+    for i, estado in enumerate(estados, start=1):
+        ponto = f"'-{20 + i * 0.1:.6f};-{44 + i * 0.1:.6f}"
+        linhas.append(_linha(f"R-{i}", f"SDA Loja {i}", ponto, estado=estado))
+    for i in range(1, 12):  # 11 linhas repetidas (uma por operação) = 46 linhas
+        linhas.append(_linha(f"R-{i}", f"SDA Loja {i}", f"'-{20 + i * 0.1:.6f};-{44 + i * 0.1:.6f}", estado=estados[i - 1]))
+    r = superset.ler_superset(_escrever(tmp_path / "real.csv", linhas))
+    resumo = superset.resumir(r)
+    assert resumo["linhas"] == 46 and len(r.lojas) == 35 and resumo["repetidas"] == 11
+    assert resumo["sem_coordenada"] == [] and resumo["linhas_invalidas"] == []
+    assert sorted({l.uf for l in r.lojas}) == ["MG", "RJ", "SP"]
+    assert sum(1 for l in r.lojas if l.uf == "SP") == 20 and resumo["estados_nao_reconhecidos"] == {}

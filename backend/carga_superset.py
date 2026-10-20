@@ -107,6 +107,18 @@ def e_exportacao_superset(caminho) -> bool:
     return detectar(texto) is not None
 
 
+def limpar_celula(valor) -> str:
+    """
+    Texto da célula sem espaços nas pontas e com UM apóstrofo inicial removido. O Superset põe esse apóstrofo antes de
+    células que começam com "-", "+", "=" ou "@" (proteção contra injeção de fórmula): '-23.01;-43.46 vira -23.01;-43.46.
+    Apóstrofos no meio do texto ("Sam's Club", "D'Ouro") não são tocados.
+    """
+    texto = " ".join(str(valor or "").split())
+    if texto.startswith("'"):
+        texto = texto[1:].strip()
+    return texto
+
+
 def interpretar_ativo(valor) -> Optional[bool]:
     """TRUE/FALSE (ou 1/0, sim/não); vazio vale ativo; outra coisa é None (ilegível)."""
     texto = " ".join(str(valor or "").split()).lower().replace("ã", "a")
@@ -164,7 +176,7 @@ def ler_superset(caminho) -> ResultadoSuperset:
 
     def celula(linha, campo):
         i = indices.get(campo)
-        return " ".join(linha[i].split()) if i is not None and i < len(linha) else ""
+        return limpar_celula(linha[i]) if i is not None and i < len(linha) else ""
 
     grupos = {}  # chave do código -> dict com o que veio de cada linha
     ids_inativos = set()

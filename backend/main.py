@@ -1351,6 +1351,8 @@ class LojaRequest(BaseModel):
     uf: Optional[str] = None
     endereco: Optional[str] = None
     cidade: Optional[str] = None
+    codigo_externo: Optional[str] = None  # código da loja no sistema de origem (Superset); único
+    nome_operacao: Optional[str] = None  # nome da loja usado na operação; único
     lat: Optional[Union[float, str]] = None
     lng: Optional[Union[float, str]] = None
     ativo: bool = True
@@ -1378,7 +1380,11 @@ async def criar_loja(dados: LojaRequest, operador: Operador = Depends(obter_oper
 @app.put("/api/lojas/{id_loja}")
 async def atualizar_loja(id_loja: int, dados: LojaRequest, operador: Operador = Depends(obter_operador_atual)):
     """Edita a loja inteira, inclusive ativar/desativar. Não existe exclusão: a loja é desativada."""
-    loja = await _com_conexao_lojas(lambda c: lojas.atualizar(c, id_loja, dados.model_dump(), _rotulo_do_operador(operador)))
+    corpo = dados.model_dump()
+    for campo in ("codigo_externo", "nome_operacao"):  # cliente que não os envia não pode apagá-los
+        if campo not in dados.model_fields_set:
+            corpo.pop(campo)
+    loja = await _com_conexao_lojas(lambda c: lojas.atualizar(c, id_loja, corpo, _rotulo_do_operador(operador)))
     if loja is None:
         raise HTTPException(status_code=404, detail=lojas.MSG_NAO_ENCONTRADA)
     return loja

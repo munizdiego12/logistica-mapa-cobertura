@@ -144,6 +144,7 @@ def imprimir_resumo(caminho: Path, resultado, resumo: dict, listar_todas: bool =
             print(f"      \"{nome}\": {quantas} motorista(s)")
         if corte is not None and len(amb) > corte:
             print(f"      ... e mais {len(amb) - corte} (use --listar-todas para ver todas)")
+        print(f"  LIGADOS POR NOME DE OPERAÇÃO (ou código externo da loja): {resumo['ligados_por_operacao']} motorista(s)")
         if resumo["apelidos_invalidos"] or resumo["ligados_por_apelido"]:
             print(f"  APELIDOS: motoristas ligados a alguma loja por apelido: {resumo['ligados_por_apelido']}")
             print(f"  APELIDOS INVÁLIDOS (ignorados): {len(resumo['apelidos_invalidos'])}")

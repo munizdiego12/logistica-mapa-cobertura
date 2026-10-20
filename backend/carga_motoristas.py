@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 from backend import frota
-from backend.lojas import OPERADOR_CARGA_INICIAL, _chave_do_cabecalho, _ler_texto, _sem_acento
+from backend.lojas import OPERADOR_CARGA_INICIAL, _chave_do_cabecalho, _ler_texto, _sem_acento, chave_da_operacao
 
 TIPO_PASSEIO = "Carro de passeio"
 TIPO_UTILITARIO = "Fiorino/Utilitário"
@@ -52,6 +52,7 @@ class LinhaMotorista:
     lojas_nao_encontradas: list = field(default_factory=list)
     lojas_ambiguas: list = field(default_factory=list)  # nome que casa com mais de uma loja: o vínculo não é gravado
     lojas_por_apelido: list = field(default_factory=list)  # nomes da planilha ligados pela tabela de apelidos
+    lojas_por_operacao: list = field(default_factory=list)  # nomes da planilha ligados pelo nome de operação ou código externo da loja
     valor: Optional[Decimal] = None
     telefone: Optional[str] = field(default=None, repr=False)  # só dígitos; nunca impresso
     status: str = "valida"  # valida | invalida | duplicada_ignorada
@@ -271,32 +272,63 @@ def validar_apelidos(apelidos: dict, lojas_cadastradas: list) -> tuple:
     return validos, invalidos
 
 
+def _por_operacao(lojas_cadastradas: list) -> dict:
+    """{chave (sem maiúsculas, acentos nem espaços): lojas} pelo nome de operação e pelo código externo."""
+    por_chave = {}
+    for l in lojas_cadastradas:
+        for valor in (l.get("nome_operacao"), l.get("codigo_externo")):
+            chave = chave_da_operacao(valor)
+            if chave and l not in por_chave.setdefault(chave, []):
+                por_chave[chave].append(l)
+    return por_chave
+
+
 def conferir_lojas(resultado: ResultadoCsvMotoristas, lojas_cadastradas: list, apelidos: Optional[dict] = None) -> None:
     """
-    Casa os nomes de loja de cada linha com as lojas cadastradas (chave normalizada: siglas de rede, Av = Avenida, sem
-    hífen nem apóstrofo). Um apelido válido (nome na planilha -> loja) vale antes do casamento automático. Nome que casa com
-    mais de uma loja ativa é AMBÍGUO e não vira vínculo; loja só desativada conta como não achada.
+    Casa os nomes de loja de cada linha com as lojas cadastradas, nesta ordem: 1) nome de operação e código externo
+    (sem diferença de maiúsculas, acentos nem espaços); 2) nome da loja (chave normalizada: siglas de rede, Av = Avenida,
+    sem hífen nem apóstrofo); 3) apelidos válidos (nome na planilha -> loja), só para o que os passos anteriores não
+    resolveram. Nome que casa com mais de uma loja ativa em um passo é AMBÍGUO nesse passo (um apelido válido ainda pode
+    resolver) e não vira vínculo; loja só desativada conta como não achada.
     """
     por_chave = _por_chave(lojas_cadastradas)
+    por_operacao = _por_operacao(lojas_cadastradas)
     validos, resultado.apelidos_invalidos = validar_apelidos(apelidos, lojas_cadastradas)
     resultado.lojas_conferidas = True
     for reg in resultado.linhas:
-        reg.lojas_ids, reg.lojas_nao_encontradas, reg.lojas_ambiguas, reg.lojas_por_apelido = [], [], [], []
+        reg.lojas_ids, reg.lojas_nao_encontradas, reg.lojas_ambiguas = [], [], []
+        reg.lojas_por_apelido, reg.lojas_por_operacao = [], []
+
+        def ligar(id_loja):
+            if int(id_loja) not in reg.lojas_ids:
+                reg.lojas_ids.append(int(id_loja))
+
         for nome in reg.lojas_nomes:
-            chave = chave_da_loja(nome)
-            if chave in validos:
-                if validos[chave] not in reg.lojas_ids:
-                    reg.lojas_ids.append(validos[chave])
-                reg.lojas_por_apelido.append(nome)
+            # 1) nome de operação ou código externo
+            candidatas_op = por_operacao.get(chave_da_operacao(nome), [])
+            ativas_op = [l for l in candidatas_op if l.get("ativo", True)]
+            if len(ativas_op) == 1:
+                ligar(ativas_op[0]["id"])
+                reg.lojas_por_operacao.append(nome)
                 continue
+            # 2) nome da loja (com as siglas de rede)
+            chave = chave_da_loja(nome)
             candidatas = por_chave.get(chave, [])
             ativas = [l for l in candidatas if l.get("ativo", True)]
-            if len(ativas) > 1:
-                reg.lojas_ambiguas.append(nome)
+            if len(ativas_op) > 1 or len(ativas) > 1:
+                ambigua = True
             elif len(ativas) == 1:
-                if int(ativas[0]["id"]) not in reg.lojas_ids:
-                    reg.lojas_ids.append(int(ativas[0]["id"]))
-            elif candidatas:
+                ligar(ativas[0]["id"])
+                continue
+            else:
+                ambigua = False
+            # 3) apelidos
+            if chave in validos:
+                ligar(validos[chave])
+                reg.lojas_por_apelido.append(nome)
+            elif ambigua:
+                reg.lojas_ambiguas.append(nome)
+            elif candidatas or candidatas_op:
                 reg.lojas_nao_encontradas.append(f"{nome} (desativada)")
             else:
                 reg.lojas_nao_encontradas.append(nome)
@@ -364,6 +396,7 @@ def resumir(resultado: ResultadoCsvMotoristas, exemplos: int = 10) -> dict:
         "lojas_ambiguas": Counter(n for l in validas for n in l.lojas_ambiguas),
         "apelidos_invalidos": list(resultado.apelidos_invalidos),
         "ligados_por_apelido": sum(1 for l in validas if l.lojas_por_apelido),
+        "ligados_por_operacao": sum(1 for l in validas if l.lojas_por_operacao),
         "sem_algum_vinculo": sum(1 for l in validas if l.lojas_nao_encontradas or l.lojas_ambiguas),
         "repetidos": [(l.codigo, por_codigo[frota.chave_do_codigo(l.codigo)]) for l in linhas if l.status == "duplicada_ignorada"],
         "invalidas": [l for l in linhas if l.status == "invalida"],
@@ -383,9 +416,12 @@ def para_gravar(resultado: ResultadoCsvMotoristas) -> list:
 
 
 async def ler_lojas(conn) -> list:
-    """Lojas cadastradas (id, nome, ativo) para conferir os nomes da planilha. Só leitura."""
-    linhas = await conn.fetch("SELECT id, nome, ativo FROM lojas")
-    return [{"id": int(l["id"]), "nome": l["nome"], "ativo": bool(l["ativo"])} for l in linhas]
+    """Lojas cadastradas (id, nome, nome de operação, código externo, ativo) para conferir os nomes da planilha. Só leitura."""
+    linhas = await conn.fetch("SELECT id, nome, nome_operacao, codigo_externo, ativo FROM lojas")
+    return [
+        {"id": int(l["id"]), "nome": l["nome"], "nome_operacao": l["nome_operacao"], "codigo_externo": l["codigo_externo"], "ativo": bool(l["ativo"])}
+        for l in linhas
+    ]
 
 
 async def _existente(conn, codigo: str):

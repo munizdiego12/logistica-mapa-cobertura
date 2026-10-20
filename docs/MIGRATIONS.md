@@ -14,6 +14,7 @@ Revisões atuais:
 | `0006` | Cria `rotas_realizadas` (rotas confirmadas: `execucao_id`, `numero_rota`, `motorista_id`, `data` no dia de Brasília, `loja_hub`, `turno`, `qtd_pedidos`, `distancia_km`, `status` `confirmada`/`cancelada`, `criado_em`, `criado_por`), com chave única `execucao_id` + `numero_rota` (confirmar de novo não duplica). Idempotente; o `downgrade` não apaga nada. |
 | `0007` | Cria `lojas` (nome já com a filial, `uf` e `endereco` opcionais, `lat`/`lng` com CHECK do Brasil, `ativo`, capacidades opcionais, janelas manhã/tarde/noite, `atualizado_em`/`atualizado_por`), com índice único no nome (sem diferença de maiúsculas e espaços) e sem coluna filial. Idempotente; o `downgrade` não apaga nada. |
 | `0008` | Cria `motorista_lojas` (motorista e loja, chave composta, `atualizado_em`/`atualizado_por`, índice por loja) e acrescenta `motoristas.codigo` (índice único parcial em `lower(btrim(codigo))` onde o código existe; aceita NULL só para os motoristas antigos) e `motoristas.telefone` (opcional, `CHECK` de 10 ou 11 dígitos). `ADD COLUMN IF NOT EXISTS`/`IF NOT EXISTS`: idempotente; não altera dados; o `downgrade` não apaga nada. |
+| `0009` | Acrescenta `lojas.codigo_externo` (índice único parcial em `lower(btrim(codigo_externo))`), `lojas.nome_operacao` e `lojas.nome_operacao_chave` (chave sem acento, espaço nem maiúscula, calculada pelo app; o índice único parcial fica nela). `ADD COLUMN IF NOT EXISTS`/`IF NOT EXISTS`: idempotente; não altera dados; o `downgrade` não apaga nada. |
 
 Não existe tabela `geocache`: esse nome aparece em notas antigas por causa do arquivo de teste `geocache.db`. O cache de geocodificação é a tabela `geocode_cache`.
 
@@ -47,7 +48,7 @@ cd backend
 $env:DATABASE_URL = "<string direta do Neon>"
 python -m alembic current
 python -m alembic upgrade head
-python -m alembic current          # deve mostrar o head (hoje 0008)
+python -m alembic current          # deve mostrar o head (hoje 0009)
 Remove-Item Env:DATABASE_URL
 cd ..
 ```

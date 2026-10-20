@@ -121,6 +121,21 @@ test('cidade é opcional no formulário e vai (ou não) no corpo enviado', () =>
   assert.equal(formularioDaLoja({ nome: 'L', cidade: null, lat: -23.9, lng: -46.3 }).cidade, '');
 });
 
+test('nome de operação e código externo: opcionais, com limite, enviados e preservados na edição', () => {
+  assert.equal(validarFormularioLoja(formulario({ nome_operacao: 'SDA Mooca', codigo_externo: 'S-1' })).ok, true);
+  assert.match(validarFormularioLoja(formulario({ nome_operacao: 'x'.repeat(121) })).erros.nome_operacao, /nome de operação/);
+  assert.match(validarFormularioLoja(formulario({ codigo_externo: 'x'.repeat(41) })).erros.codigo_externo, /código externo/);
+  const corpo = corpoDaLoja(formulario({ nome_operacao: ' SDA Mooca ', codigo_externo: '  ' }));
+  assert.equal(corpo.nome_operacao, 'SDA Mooca');
+  assert.equal(corpo.codigo_externo, null);
+  // editar uma loja que já tem os dois campos não pode apagá-los ao salvar (nem ao desativar)
+  const form = formularioDaLoja({ nome: 'L', nome_operacao: 'SDA Mooca', codigo_externo: 'S-1', lat: -23.9, lng: -46.3 });
+  assert.deepEqual([form.nome_operacao, form.codigo_externo], ['SDA Mooca', 'S-1']);
+  const corpoSalvo = corpoDaLoja(form);
+  assert.deepEqual([corpoSalvo.nome_operacao, corpoSalvo.codigo_externo], ['SDA Mooca', 'S-1']);
+  assert.deepEqual([formularioDaLoja({ nome: 'L', lat: -23.9, lng: -46.3 }).nome_operacao, FORMULARIO_VAZIO.codigo_externo], ['', '']);
+});
+
 // ---------------------------------------------------------------- pesquisa de lojas (campo com lista)
 const LOJAS = [
   { id: 1, nome: 'Atacadão Guarujá', cidade: 'Guarujá', uf: 'SP' },

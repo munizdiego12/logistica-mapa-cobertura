@@ -134,6 +134,11 @@ export default function Lojas({ api, onFechar, onMudou }) {
     <div key={`${loja.id}|${loja.atualizado_em ?? ''}`} className={`p-3 rounded-lg border flex flex-wrap items-center gap-2 justify-between ${loja.ativo ? 'bg-slate-900/70 border-slate-800' : 'bg-slate-950/60 border-slate-800/60 opacity-75'}`}>
       <div className="min-w-0">
         <p className="text-sm font-semibold text-slate-100 truncate">{loja.nome}{loja.uf ? ` - ${loja.uf}` : ''}</p>
+        {(loja.nome_operacao || loja.codigo_externo) && (
+          <p className="text-[11px] text-blue-300 truncate">
+            {loja.nome_operacao ? `Operação: ${loja.nome_operacao}` : ''}{loja.nome_operacao && loja.codigo_externo ? ' · ' : ''}{loja.codigo_externo ? `Código: ${loja.codigo_externo}` : ''}
+          </p>
+        )}
         {loja.cidade && <p className="text-[11px] text-slate-300 truncate">{loja.cidade}</p>}
         {loja.endereco && <p className="text-[11px] text-slate-400 truncate">{loja.endereco}</p>}
         <p className="text-[10px] text-slate-500 font-mono">{loja.lat.toLocaleString('pt-BR', { maximumFractionDigits: 6 })}, {loja.lng.toLocaleString('pt-BR', { maximumFractionDigits: 6 })}</p>
@@ -192,6 +197,16 @@ export default function Lojas({ api, onFechar, onMudou }) {
                   {UFS.map((uf) => <option key={uf} value={uf}>{uf}</option>)}
                 </select>
                 <Erro texto={errosForm.uf} />
+              </label>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <label className="text-[11px] text-slate-400">Nome de operação (opcional, único; ex.: "SDA Mooca")
+                <input type="text" value={form.nome_operacao} maxLength={120} onChange={(e) => mudar('nome_operacao', e.target.value)} placeholder="ex.: SDA Mooca" className={campo} />
+                <Erro texto={errosForm.nome_operacao} />
+              </label>
+              <label className="text-[11px] text-slate-400">Código externo (opcional, único)
+                <input type="text" value={form.codigo_externo} maxLength={40} onChange={(e) => mudar('codigo_externo', e.target.value)} className={campo} />
+                <Erro texto={errosForm.codigo_externo} />
               </label>
             </div>
             <label className="block text-[11px] text-slate-400">Endereço (opcional)

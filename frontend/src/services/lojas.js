@@ -17,7 +17,7 @@ export const UFS = [
 ];
 
 export const FORMULARIO_VAZIO = {
-  nome: '', uf: '', endereco: '', cidade: '', lat: '', lng: '', capacidade_peso: '', capacidade_volume: '',
+  nome: '', nome_operacao: '', codigo_externo: '', uf: '', endereco: '', cidade: '', lat: '', lng: '', capacidade_peso: '', capacidade_volume: '',
   janela_manha_inicio: '08:00', janela_manha_fim: '13:00', janela_tarde_inicio: '13:00', janela_tarde_fim: '18:00',
   usa_noite: true, janela_noite_inicio: '18:00', janela_noite_fim: '21:00', ativo: true,
 };
@@ -93,6 +93,8 @@ const HORA = /^([01]?\d|2[0-3]):[0-5]\d$/;
 export function validarFormularioLoja(form) {
   const erros = {};
   if (!String(form.nome ?? '').trim()) erros.nome = 'Informe o nome da loja.';
+  if (String(form.nome_operacao ?? '').trim().length > 120) erros.nome_operacao = 'O nome de operação pode ter até 120 letras.';
+  if (String(form.codigo_externo ?? '').trim().length > 40) erros.codigo_externo = 'O código externo pode ter até 40 caracteres.';
   if (String(form.cidade ?? '').trim().length > 120) erros.cidade = 'O nome da cidade pode ter até 120 letras.';
   if (String(form.uf ?? '').trim() && !UFS.includes(String(form.uf).trim().toUpperCase())) erros.uf = 'Estado inválido. Use a sigla (ex.: SP).';
   const coordenadas = validarCoordenadas(form.lat, form.lng);
@@ -123,6 +125,8 @@ export function corpoDaLoja(form) {
   const vazioParaNulo = (v) => (String(v ?? '').trim() === '' ? null : String(v).trim());
   return {
     nome: String(form.nome ?? '').trim(),
+    nome_operacao: vazioParaNulo(form.nome_operacao),
+    codigo_externo: vazioParaNulo(form.codigo_externo),
     uf: vazioParaNulo(form.uf) ? String(form.uf).trim().toUpperCase() : null,
     endereco: vazioParaNulo(form.endereco),
     cidade: vazioParaNulo(form.cidade),
@@ -145,7 +149,7 @@ export function corpoDaLoja(form) {
 export function formularioDaLoja(loja) {
   const texto = (v) => (v === null || v === undefined ? '' : String(v).replace('.', ','));
   return {
-    nome: loja.nome ?? '', uf: loja.uf ?? '', endereco: loja.endereco ?? '', cidade: loja.cidade ?? '', lat: texto(loja.lat), lng: texto(loja.lng),
+    nome: loja.nome ?? '', nome_operacao: loja.nome_operacao ?? '', codigo_externo: loja.codigo_externo ?? '', uf: loja.uf ?? '', endereco: loja.endereco ?? '', cidade: loja.cidade ?? '', lat: texto(loja.lat), lng: texto(loja.lng),
     capacidade_peso: texto(loja.capacidade_peso), capacidade_volume: texto(loja.capacidade_volume),
     janela_manha_inicio: loja.janela_manha_inicio ?? '08:00', janela_manha_fim: loja.janela_manha_fim ?? '13:00',
     janela_tarde_inicio: loja.janela_tarde_inicio ?? '13:00', janela_tarde_fim: loja.janela_tarde_fim ?? '18:00',

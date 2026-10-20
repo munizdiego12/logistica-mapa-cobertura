@@ -22,6 +22,7 @@ LNG_MIN, LNG_MAX = -74.0, -34.0
 TAMANHO_NOME = 120
 TAMANHO_ENDERECO = 250
 TAMANHO_CIDADE = 120
+TAMANHO_CODIGO_EXTERNO = 40
 OPERADOR_CARGA_INICIAL = "carga inicial (script)"
 
 UFS = (
@@ -38,6 +39,8 @@ NOMES_DOS_ESTADOS = {
 
 MSG_NOME_VAZIO = "Informe o nome da loja."
 MSG_NOME_REPETIDO = "Já existe uma loja com esse nome."
+MSG_CODIGO_EXTERNO_REPETIDO = "Já existe uma loja com esse código externo."
+MSG_OPERACAO_REPETIDA = "Já existe uma loja com esse nome de operação."
 MSG_NAO_ENCONTRADA = "Loja não encontrada."
 MSG_INATIVA = "Essa loja está desativada. Ative-a na tela \"Lojas\" ou escolha outra."
 MSG_COORDENADAS_TROCADAS = (
@@ -66,6 +69,11 @@ def normalizar_cabecalho(texto) -> str:
 def chave_do_nome(nome) -> str:
     """Chave de comparação do nome (sem diferença de maiúsculas nem de espaços), a mesma regra do índice único."""
     return " ".join(str(nome or "").split()).lower()
+
+
+def chave_da_operacao(texto) -> str:
+    """Chave do nome de operação e do código externo: sem diferença de maiúsculas, acentos nem espaços ("SDA  Mooca" = "sdamooca")."""
+    return "".join(_sem_acento(texto).lower().split())
 
 
 # ----------------------------------------------------------------------------------------------------------
@@ -100,6 +108,24 @@ def normalizar_cidade(valor) -> Optional[str]:
     if len(cidade) > TAMANHO_CIDADE:
         raise ValueError(f"O nome da cidade pode ter até {TAMANHO_CIDADE} letras.")
     return cidade
+
+
+def normalizar_nome_operacao(valor) -> Optional[str]:
+    nome = " ".join(str(valor or "").split())
+    if not nome:
+        return None
+    if len(nome) > TAMANHO_NOME:
+        raise ValueError(f"O nome de operação pode ter até {TAMANHO_NOME} letras.")
+    return nome
+
+
+def normalizar_codigo_externo(valor) -> Optional[str]:
+    codigo = " ".join(str(valor or "").split())
+    if not codigo:
+        return None
+    if len(codigo) > TAMANHO_CODIGO_EXTERNO:
+        raise ValueError(f"O código externo pode ter até {TAMANHO_CODIGO_EXTERNO} caracteres.")
+    return codigo
 
 
 _RE_PAIS_NO_FIM = re.compile(r"(^|\s*,)\s*(brasil|brazil)\s*\.?\s*$", re.IGNORECASE)  # só o país depois de vírgula (ou sozinho)
@@ -229,10 +255,13 @@ def validar_loja(dados: dict) -> dict:
         "uf": normalizar_uf(dados.get("uf")),
         "endereco": normalizar_endereco(dados.get("endereco")),
         "cidade": normalizar_cidade(dados.get("cidade")),
+        "codigo_externo": normalizar_codigo_externo(dados.get("codigo_externo")),
+        "nome_operacao": normalizar_nome_operacao(dados.get("nome_operacao")),
         "ativo": bool(dados.get("ativo", True)),
         "capacidade_peso": interpretar_capacidade(dados.get("capacidade_peso"), "peso"),
         "capacidade_volume": interpretar_capacidade(dados.get("capacidade_volume"), "volume"),
     }
+    campos["nome_operacao_chave"] = chave_da_operacao(campos["nome_operacao"]) or None
     campos["lat"], campos["lng"] = validar_coordenadas(dados.get("lat"), dados.get("lng"))
     campos.update(montar_janelas(dados))
     return campos
@@ -242,12 +271,12 @@ def validar_loja(dados: dict) -> dict:
 # Banco (conexão asyncpg)
 # ----------------------------------------------------------------------------------------------------------
 _COLUNAS = (
-    "id, nome, uf, endereco, cidade, lat, lng, ativo, capacidade_peso, capacidade_volume, "
+    "id, nome, uf, endereco, cidade, codigo_externo, nome_operacao, lat, lng, ativo, capacidade_peso, capacidade_volume, "
     "janela_manha_inicio, janela_manha_fim, janela_tarde_inicio, janela_tarde_fim, janela_noite_inicio, janela_noite_fim, "
     "atualizado_em, atualizado_por"
 )
 _CAMPOS_GRAVAVEIS = (
-    "nome", "uf", "endereco", "cidade", "lat", "lng", "ativo", "capacidade_peso", "capacidade_volume",
+    "nome", "uf", "endereco", "cidade", "codigo_externo", "nome_operacao", "nome_operacao_chave", "lat", "lng", "ativo", "capacidade_peso", "capacidade_volume",
     "janela_manha_inicio", "janela_manha_fim", "janela_tarde_inicio", "janela_tarde_fim", "janela_noite_inicio", "janela_noite_fim",
 )
 
@@ -300,14 +329,46 @@ async def _nome_ja_existe(conn, nome: str, ignorar_id: Optional[int] = None) -> 
     return achou is not None
 
 
+async def _codigo_externo_ja_existe(conn, codigo: str, ignorar_id: Optional[int] = None) -> bool:
+    achou = await conn.fetchval(
+        "SELECT id FROM lojas WHERE lower(btrim(codigo_externo)) = lower($1) AND ($2::integer IS NULL OR id <> $2)", codigo, ignorar_id,
+    )
+    return achou is not None
+
+
+async def _operacao_ja_existe(conn, chave: str, ignorar_id: Optional[int] = None) -> bool:
+    achou = await conn.fetchval(
+        "SELECT id FROM lojas WHERE nome_operacao_chave = $1 AND ($2::integer IS NULL OR id <> $2)", chave, ignorar_id,
+    )
+    return achou is not None
+
+
+async def _conferir_unicidade(conn, campos: dict, ignorar_id: Optional[int] = None) -> None:
+    if await _nome_ja_existe(conn, campos["nome"], ignorar_id):
+        raise ValueError(MSG_NOME_REPETIDO)
+    if campos["codigo_externo"] and await _codigo_externo_ja_existe(conn, campos["codigo_externo"], ignorar_id):
+        raise ValueError(MSG_CODIGO_EXTERNO_REPETIDO)
+    if campos["nome_operacao_chave"] and await _operacao_ja_existe(conn, campos["nome_operacao_chave"], ignorar_id):
+        raise ValueError(MSG_OPERACAO_REPETIDA)
+
+
 def _e_violacao_de_unicidade(erro: Exception) -> bool:
     return type(erro).__name__ == "UniqueViolationError" or "UNIQUE" in str(erro).upper()
 
 
+def _mensagem_de_unicidade(erro: Exception) -> str:
+    """Qual regra de unicidade foi violada (dois cadastros iguais ao mesmo tempo), pelo nome do índice ou da coluna."""
+    texto = str(erro).lower()
+    if "codigo_externo" in texto:
+        return MSG_CODIGO_EXTERNO_REPETIDO
+    if "nome_operacao" in texto:
+        return MSG_OPERACAO_REPETIDA
+    return MSG_NOME_REPETIDO
+
+
 async def criar(conn, dados: dict, rotulo_operador: str) -> dict:
     campos = validar_loja(dados)
-    if await _nome_ja_existe(conn, campos["nome"]):
-        raise ValueError(MSG_NOME_REPETIDO)
+    await _conferir_unicidade(conn, campos)
     colunas = ", ".join(_CAMPOS_GRAVAVEIS)
     marcadores = ", ".join(f"${i + 1}" for i in range(len(_CAMPOS_GRAVAVEIS) + 1))
     try:
@@ -317,18 +378,22 @@ async def criar(conn, dados: dict, rotulo_operador: str) -> dict:
         )
     except Exception as erro:  # dois cadastros do mesmo nome ao mesmo tempo
         if _e_violacao_de_unicidade(erro):
-            raise ValueError(MSG_NOME_REPETIDO) from None
+            raise ValueError(_mensagem_de_unicidade(erro)) from None
         raise
     return para_dict(linha)
 
 
 async def atualizar(conn, id_loja: int, dados: dict, rotulo_operador: str) -> Optional[dict]:
-    """Edita a loja inteira (inclusive ativar/desativar). None se a loja não existe. Nunca apaga."""
-    campos = validar_loja(dados)
-    if await conn.fetchval("SELECT id FROM lojas WHERE id = $1", int(id_loja)) is None:
+    """
+    Edita a loja inteira (inclusive ativar/desativar). None se a loja não existe. Nunca apaga. Código externo e nome de
+    operação ausentes de `dados` (cliente antigo) mantêm o valor cadastrado; enviados em branco, limpam o campo.
+    """
+    atual = await conn.fetchrow("SELECT codigo_externo, nome_operacao FROM lojas WHERE id = $1", int(id_loja))
+    if atual is None:
         return None
-    if await _nome_ja_existe(conn, campos["nome"], int(id_loja)):
-        raise ValueError(MSG_NOME_REPETIDO)
+    dados = {**{c: atual[c] for c in ("codigo_externo", "nome_operacao") if c not in dados}, **dados}
+    campos = validar_loja(dados)
+    await _conferir_unicidade(conn, campos, int(id_loja))
     atribuicoes = ", ".join(f"{c} = ${i + 2}" for i, c in enumerate(_CAMPOS_GRAVAVEIS))
     n = len(_CAMPOS_GRAVAVEIS)
     try:
@@ -338,7 +403,7 @@ async def atualizar(conn, id_loja: int, dados: dict, rotulo_operador: str) -> Op
         )
     except Exception as erro:
         if _e_violacao_de_unicidade(erro):
-            raise ValueError(MSG_NOME_REPETIDO) from None
+            raise ValueError(_mensagem_de_unicidade(erro)) from None
         raise
     return None if linha is None else para_dict(linha)
 

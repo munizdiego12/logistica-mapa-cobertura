@@ -72,7 +72,7 @@ class FakePool:
 
 # ----------------------------------------------------------------------------------------------------------
 # Banco SQLite em memória com a interface da conexão asyncpg (fetch/fetchrow/fetchval/transaction) e as tabelas
-# das migrations 0004 a 0008. Testa o SQL de verdade (contagens, upsert, status), sem Postgres.
+# das migrations 0004 a 0009. Testa o SQL de verdade (contagens, upsert, status), sem Postgres.
 # ----------------------------------------------------------------------------------------------------------
 import importlib.util
 import re
@@ -155,14 +155,15 @@ class ConexaoSqlite:
 
 
 def criar_banco_sqlite():
-    """Cria o banco em memória aplicando as migrations 0004 a 0008 (SQL traduzido do Postgres para o SQLite)."""
+    """Cria o banco em memória aplicando as migrations 0004 a 0009 (SQL traduzido do Postgres para o SQLite)."""
     conn = ConexaoSqlite()
-    for arquivo in ("0004_tipos_veiculo_motoristas.py", "0005_motoristas_valor_rota.py", "0006_rotas_realizadas.py", "0007_lojas.py", "0008_motorista_lojas.py"):
+    for arquivo in ("0004_tipos_veiculo_motoristas.py", "0005_motoristas_valor_rota.py", "0006_rotas_realizadas.py", "0007_lojas.py", "0008_motorista_lojas.py", "0009_lojas_codigo_externo_nome_operacao.py"):
         for comando in _migracao(arquivo).COMANDOS:
-            colunas = {l[1] for l in conn.db.execute("PRAGMA table_info(motoristas)")}
-            adicionada = re.search(r"ADD COLUMN IF NOT EXISTS (\w+)", comando)
-            if adicionada and adicionada.group(1) in colunas:
-                continue
+            adicionada = re.search(r"ALTER TABLE (\w+)\s+ADD COLUMN IF NOT EXISTS (\w+)", comando)
+            if adicionada:
+                colunas = {l[1] for l in conn.db.execute(f"PRAGMA table_info({adicionada.group(1)})")}
+                if adicionada.group(2) in colunas:
+                    continue
             comando = (comando.replace("SERIAL PRIMARY KEY", "INTEGER PRIMARY KEY").replace("TIMESTAMPTZ", "TIMESTAMP")
                        .replace("NOW()", "CURRENT_TIMESTAMP").replace("length(btrim(nome))", "length(trim(nome))")
                        .replace("ADD COLUMN IF NOT EXISTS", "ADD COLUMN"))

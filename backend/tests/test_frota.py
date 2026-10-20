@@ -615,7 +615,7 @@ def test_migration_0005_valor_vazio_ou_zero_pode_mas_negativo_nao():
 
 
 # ----------------------------------------------------------------------------------------------------------
-# Rotas de motoristas com um banco SQLite de verdade (as tabelas das migrations 0004 a 0008)
+# Rotas de motoristas com um banco SQLite de verdade (as tabelas das migrations 0004 a 0009)
 # ----------------------------------------------------------------------------------------------------------
 OPERADOR = "Maria Souza (maria@zubale.com)"
 

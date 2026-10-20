@@ -25,6 +25,7 @@ import cobertura
 import item_pesos
 import frota
 import lojas
+import pedidos_fonte
 import rotas_realizadas
 from logistica.costs import calcular_custo_rota
 from database import get_db, Operador, init_db
@@ -37,6 +38,10 @@ from auth import (
 )
 
 app = FastAPI(title="Zubale Routing Core - Dynamic National Engine")
+
+# O httpx registra a URL de cada chamada (com o endereço do pedido na busca) quando o nível é INFO: mantém em WARNING.
+for _nome_log in ("httpx", "httpcore"):
+    logging.getLogger(_nome_log).setLevel(logging.WARNING)
 
 # Respostas a partir de ~1 KB saem compactadas (a cobertura de milhares de faixas cai de ~1,2 MB para ~60 KB). Fica ANTES do CORS
 # na pilha, então o CORS continua sendo a camada de fora e os cabeçalhos dele seguem em todas as respostas.
@@ -739,71 +744,36 @@ class OtimizarRequest(BaseModel):
 def get_modais():
     return MODAIS_PADRAO_DEFAULT
 
+MSG_ARQUIVO_ILEGIVEL = "Não consegui ler o arquivo. Confira se é um .csv ou .xlsx válido ou use o modelo padrão."
+
+
+@app.post("/api/pedidos/validar", dependencies=[Depends(obter_operador_atual)])
+async def validar_pedidos(file: UploadFile = File(...)):
+    """
+    Lê o CSV/XLSX de pedidos (modelo padrão, modelo antigo ou variações de cabeçalho) e devolve o RELATÓRIO de validação linha a
+    linha (válidas, erros, avisos) para o operador conferir antes de aceitar o lote. Nada é guardado: o lote é temporário.
+    Cliente e endereço nunca vão para log nem para mensagem de erro.
+    """
+    try:
+        conteudo = await file.read(pedidos_fonte.MAX_BYTES + 1)
+        bruto = pedidos_fonte.FonteArquivo(conteudo, file.filename or "").ler()
+        cadastradas = await _com_conexao_lojas(lambda c: lojas.listar(c)) if bruto.tem_lojas else None
+        return pedidos_fonte.validar_lote(bruto, cadastradas).para_dict()
+    except pedidos_fonte.ErroDeArquivo as erro:
+        raise HTTPException(status_code=400, detail=str(erro))
+    except HTTPException:
+        raise
+    except Exception as erro:  # só a classe: a mensagem do erro pode trazer um pedaço do arquivo
+        print(f"[pedidos] Falha ao ler o arquivo de pedidos: {type(erro).__name__}")
+        raise HTTPException(status_code=400, detail=MSG_ARQUIVO_ILEGIVEL)
+
+
 @app.post("/api/upload", dependencies=[Depends(obter_operador_atual)])
 async def upload_planilha(file: UploadFile = File(...)):
-    try:
-        contents = await file.read()
-        filename = file.filename.lower()
-
-        if filename.endswith(".csv"):
-            try:
-                df = pd.read_csv(io.BytesIO(contents), sep=",")
-                if len(df.columns) <= 1:
-                    df = pd.read_csv(io.BytesIO(contents), sep=";")
-            except Exception:
-                df = pd.read_csv(io.BytesIO(contents), sep=";", encoding="latin-1")
-        elif filename.endswith((".xlsx", ".xls")):
-            df = pd.read_excel(io.BytesIO(contents))
-        else:
-            raise HTTPException(status_code=400, detail="Formato de arquivo inválido.")
-
-        df.columns = [str(c).strip().lower() for c in df.columns]
-
-        col_map = {
-            'endereco': ['endereco', 'rua', 'logradouro', 'address', 'street'],
-            'numero': ['numero', 'num', 'nro', 'number'],
-            'bairro': ['bairro', 'neighborhood', 'district'],
-            'cidade': ['cidade', 'city', 'municipio'],
-            'uf': ['uf', 'estado', 'state'],
-            'cep': ['cep', 'zipcode', 'postal_code'],
-            'volume': ['volume', 'vol', 'quantidade', 'pedidos', 'qtd']
-        }
-
-        pedidos = []
-        for idx, row in df.iterrows():
-            def get_val(keys, default=""):
-                for k in keys:
-                    if k in row and pd.notna(row[k]):
-                        return str(row[k]).strip()
-                return default
-
-            rua = get_val(col_map['endereco'])
-            numero = get_val(col_map['numero'], "S/N")
-            bairro = get_val(col_map['bairro'])
-            cep = get_val(col_map['cep'])
-            cidade = get_val(col_map['cidade'])
-            uf = get_val(col_map['uf'])
-            volume = 1
-            try:
-                volume = int(float(get_val(col_map['volume'], 1)))
-            except:
-                volume = 1
-
-            if rua or cep:
-                pedidos.append({
-                    "id": idx + 1,
-                    "Endereco": rua,
-                    "Numero": numero,
-                    "Bairro": bairro,
-                    "Cidade": cidade,
-                    "UF": uf,
-                    "CEP": cep,
-                    "Volume": volume
-                })
-
-        return {"pedidos": pedidos, "total": len(pedidos)}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    """Nome antigo de /api/pedidos/validar (mesma resposta, mais o campo `total` com as linhas válidas)."""
+    relatorio = await validar_pedidos(file)
+    relatorio["total"] = len(relatorio["pedidos"])
+    return relatorio
 
 # ==========================================================================
 # SISTEMA DE JOB COM PROGRESSO
@@ -899,7 +869,7 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar:
                 pedidos_sem_geocodificacao.append({
                     "id": pedido_id, "Endereco": rua, "Numero": num, "Bairro": bairro,
                     "CEP": cep, "Volume": vol,
-                    "motivo": "CEP/endereço não localizado em nenhuma fonte (BrasilAPI, ViaCEP, Nominatim)."
+                    "motivo": "Erro ao tentar encontrar endereço do pedido."
                 })
                 continue
 
@@ -1019,7 +989,9 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar:
 
     except Exception as e:
         job["status"] = "erro"
-        job["erro"] = f"Erro interno no algoritmo de roteirização: {str(e)}"
+        # só a classe do erro: a mensagem pode trazer endereço de pedido (dado pessoal)
+        print(f"[otimizar] Falha na roteirização: {type(e).__name__}")
+        job["erro"] = f"Erro interno no algoritmo de roteirização ({type(e).__name__}). Tente de novo; se persistir, avise o administrador."
 
 
 @app.post("/api/otimizar", dependencies=[Depends(obter_operador_atual)])
@@ -1061,67 +1033,24 @@ def status_otimizacao(job_id: str):
 
 @app.get("/api/modelo-xlsx", dependencies=[Depends(obter_operador_atual)])
 def download_modelo_xlsx():
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Modelo_Pedidos"
-    
-    headers = ["id", "endereco", "numero", "bairro", "cidade", "uf", "cep", "volume"]
-    ws.append(headers)
-    
-    exemplos = [
-        [101, "Avenida Paulista", "1500", "Bela Vista", "Sao Paulo", "SP", "01310-100", 1],
-        [102, "Rua Augusta", "1500", "Consolacao", "Sao Paulo", "SP", "01304-001", 1],
-        [103, "Rua Oscar Freire", "850", "Cerqueira Cesar", "Sao Paulo", "SP", "01426-000", 2],
-        [104, "Rua dos Pinheiros", "600", "Pinheiros", "Sao Paulo", "SP", "05422-001", 1],
-        [105, "Alameda dos Maracatins", "650", "Moema", "Sao Paulo", "SP", "04089-001", 1],
-    ]
-    for row in exemplos:
-        ws.append(row)
-        
-    header_fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
-    header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
-    header_align = Alignment(horizontal="center", vertical="center")
-    thin_border = Border(
-        left=Side(style='thin', color='CBD5E1'),
-        right=Side(style='thin', color='CBD5E1'),
-        top=Side(style='thin', color='CBD5E1'),
-        bottom=Side(style='thin', color='CBD5E1')
-    )
-
-    for col_num in range(1, len(headers) + 1):
-        cell = ws.cell(row=1, column=col_num)
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.alignment = header_align
-
-    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
-        fill_color = "F8FAFC" if row[0].row % 2 == 0 else "FFFFFF"
-        for cell in row:
-            cell.fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type="solid")
-            cell.border = thin_border
-            if cell.column in [1, 3, 6, 7, 8]:
-                cell.alignment = Alignment(horizontal="center", vertical="center")
-            else:
-                cell.alignment = Alignment(horizontal="left", vertical="center")
-
-    for col in ws.columns:
-        max_len = max(len(str(cell.value or '')) for cell in col)
-        col_letter = openpyxl.utils.get_column_letter(col[0].column)
-        ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
-
-    output = io.BytesIO()
-    wb.save(output)
-    output.seek(0)
-    
-    headers_resp = {
-        'Content-Disposition': 'attachment; filename="modelo_pedidos_zubale.xlsx"'
-    }
+    """Modelo padrão de pedidos em XLSX (aba Pedidos com exemplos e aba Instruções)."""
     return StreamingResponse(
-        output, 
-        headers=headers_resp, 
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        io.BytesIO(pedidos_fonte.gerar_modelo_xlsx()),
+        headers={'Content-Disposition': 'attachment; filename="modelo_pedidos_zubale.xlsx"'},
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-    
+
+
+@app.get("/api/modelo-csv", dependencies=[Depends(obter_operador_atual)])
+def download_modelo_csv():
+    """Modelo padrão de pedidos em CSV (UTF-8 com BOM e ponto e vírgula)."""
+    return StreamingResponse(
+        io.BytesIO(pedidos_fonte.gerar_modelo_csv()),
+        headers={'Content-Disposition': 'attachment; filename="modelo_pedidos_zubale.csv"'},
+        media_type="text/csv; charset=utf-8",
+    )
+
+
 # ---------------------------------------------------------------------------------------------
 # Pesos dos itens (SKUs): manutenção e fila "sem peso". Todas as rotas exigem operador logado.
 # O peso é apenas informativo: aqui só se guarda e se edita o peso de cada item.

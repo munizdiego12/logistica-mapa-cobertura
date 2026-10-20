@@ -15,6 +15,11 @@ import Motoristas from './components/Motoristas';
 import SeletorMotoristas from './components/SeletorMotoristas';
 import Lojas from './components/Lojas';
 import SeletorLoja from './components/SeletorLoja';
+import ListaPedidos from './components/ListaPedidos';
+import RelatorioImportacao from './components/RelatorioImportacao';
+import {
+  pedidosParaRoteirizar, pedidoParaRoteirizacao, idsSemEndereco, corrigirEndereco, TODAS_AS_DATAS, MSG_ERRO_ENDERECO
+} from './services/pedidos';
 import { interpretarRaio, nomeDoHub, RAIO_PADRAO_KM } from './services/lojas';
 import { API_BASE } from './config';
 import { instalarTratamento401, MENSAGEM_SESSAO_EXPIRADA } from './services/sessao';
@@ -143,12 +148,19 @@ export default function App() {
   const hubDefinido = lojaHubId !== null || (modoEndereco && Boolean(origem.rua));
 
   // Lista de Múltiplos Arquivos/Lotes de Pedidos
+  // Cada lote: { id, nome, pedidos, marcados (Set de ids), comErro (Set de ids sem endereço localizado), data (filtro) }. Só vive na memória.
   const [lotes, setLotes] = useState([]);
   const [loteAtivoId, setLoteAtivoId] = useState(null);
   const [resultado, setResultado] = useState(null);
+  const [relatorioPendente, setRelatorioPendente] = useState(null); // { nome, relatorio } à espera de o operador aceitar
 
   const loteSelecionado = lotes.find(l => l.id === loteAtivoId);
-  const pedidosAtivos = loteSelecionado ? loteSelecionado.pedidos : [];
+  // Só os pedidos MARCADOS, da loja e da data escolhidas, e sem erro de endereço, entram na roteirização.
+  const pedidosAtivos = loteSelecionado
+    ? pedidosParaRoteirizar(loteSelecionado.pedidos, loteSelecionado.marcados, { lojaId: lojaHubId, data: loteSelecionado.data, comErro: loteSelecionado.comErro })
+    : [];
+
+  const alterarLote = (id, mudanca) => setLotes((prev) => prev.map((l) => (l.id === id ? { ...l, ...(typeof mudanca === 'function' ? mudanca(l) : mudanca) } : l)));
 
   // Capacidade por Viagem Simultânea: só dos motoristas marcados
   const marcados = motoristasMarcados(motoristas, selecionados);
@@ -174,23 +186,33 @@ export default function App() {
     formData.append('file', file);
     try {
       setLoading(true);
-      const res = await apiAuth.post(`/upload`, formData);
-
-      const novoLote = {
-        id: Date.now(),
-        nome: file.name,
-        pedidos: res.data.pedidos,
-        dataUpload: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      };
-
-      setLotes(prev => [...prev, novoLote]);
-      setLoteAtivoId(novoLote.id);
+      // Valida linha a linha e devolve o relatório; o lote só entra depois de o operador aceitar (só as válidas).
+      const res = await apiAuth.post(`/pedidos/validar`, formData);
+      setRelatorioPendente({ nome: file.name, relatorio: res.data });
     } catch (err) {
-      alert('Erro ao importar arquivo. Certifique-se de que é uma planilha válida (.csv ou .xlsx).');
+      if (err?.response?.status === 401) return; // já voltou para o login, com o aviso
+      const detalhe = err?.response?.data?.detail;
+      alert((typeof detalhe === 'string' && detalhe) || 'Erro ao importar arquivo. Certifique-se de que é uma planilha válida (.csv ou .xlsx).');
     } finally {
       setLoading(false);
       e.target.value = '';
     }
+  };
+
+  const aceitarLote = () => {
+    const { nome, relatorio } = relatorioPendente;
+    const novoLote = {
+      id: Date.now(),
+      nome,
+      pedidos: relatorio.pedidos,
+      marcados: new Set(relatorio.pedidos.map((p) => p.id)),
+      comErro: new Set(),
+      data: TODAS_AS_DATAS,
+      dataUpload: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
+    setLotes(prev => [...prev, novoLote]);
+    setLoteAtivoId(novoLote.id);
+    setRelatorioPendente(null);
   };
 
   const removerLote = (id, e) => {
@@ -276,7 +298,7 @@ export default function App() {
       return;
     }
     if (pedidosAtivos.length === 0) {
-      alert('Selecione um lote com pedidos válidos antes de otimizar.');
+      alert('Marque pelo menos um pedido na lista (da loja e da data escolhidas) antes de gerar as rotas.');
       return;
     }
 
@@ -293,6 +315,7 @@ export default function App() {
 
     setLoading(true);
     setProgresso({ etapa: 'Iniciando...', atual: 0, total: pedidosAtivos.length });
+    const loteDaExecucao = loteAtivoId;
 
     try {
       // 1. Inicia o job em segundo plano — a resposta chega na hora, com um job_id.
@@ -302,7 +325,7 @@ export default function App() {
           : { origem_rua: origem.rua, origem_num: origem.numero, origem_bairro: origem.bairro, origem_cep: origem.cep }),
         modais_config: modais,
         motorista_ids: selecionados,
-        pedidos: pedidosAtivos
+        pedidos: pedidosAtivos.map(pedidoParaRoteirizacao)
       });
 
       const jobId = inicio.data.job_id;
@@ -319,6 +342,14 @@ export default function App() {
             if (dados.status === 'concluido') {
               clearInterval(intervalo);
               setResultado(dados.resultado);
+              // pedido cujo endereço não foi localizado sai da seleção e fica travado na lista até ser corrigido
+              const semEndereco = idsSemEndereco(dados.resultado);
+              if (semEndereco.size > 0) {
+                alterarLote(loteDaExecucao, (l) => ({
+                  comErro: new Set([...l.comErro, ...semEndereco]),
+                  marcados: new Set([...l.marcados].filter((id) => !semEndereco.has(id)))
+                }));
+              }
               setConfirmacao({ confirmada: false, linhas: [], enviando: false, erro: '' });
               resolve();
             } else if (dados.status === 'erro') {
@@ -380,23 +411,15 @@ export default function App() {
     }
   };
 
-  const baixarPlanilhaModelo = () => {
-    const cabecalho = "id,endereco,numero,bairro,cidade,uf,cep,volume\n";
-    const linhasExemplo = [
-      "101,Avenida Brigadeiro Luis Antonio,2000,Bela Vista,Sao Paulo,SP,01318-002,1",
-      "102,Rua Augusta,1500,Consolacao,Sao Paulo,SP,01304-001,1",
-      "103,Rua Oscar Freire,800,Cerqueira Cesar,Sao Paulo,SP,01426-000,1",
-      "104,Rua da Consolacao,2400,Consolacao,Sao Paulo,SP,01301-100,1",
-      "105,Alameda Santos,1800,Cerqueira Cesar,Sao Paulo,SP,01418-102,1"
-    ].join("\n");
-
-    const csvContent = "data:text/csv;charset=utf-8," + encodeURIComponent(cabecalho + linhasExemplo);
-    const downloadAnchor = document.createElement('a');
-    downloadAnchor.setAttribute('href', csvContent);
-    downloadAnchor.setAttribute('download', 'modelo_pedidos_zubale.csv');
-    document.body.appendChild(downloadAnchor);
-    downloadAnchor.click();
-    downloadAnchor.remove();
+  // Modelo padrão de pedidos em CSV (o mesmo do XLSX, mantido pelo servidor).
+  const baixarPlanilhaModelo = async () => {
+    try {
+      const resposta = await apiAuth.get('/modelo-csv', { responseType: 'blob' });
+      baixarBlob(resposta.data, 'modelo_pedidos_zubale.csv');
+    } catch (err) {
+      if (err?.response?.status === 401) return; // já voltou para o login, com o aviso
+      alert('Não foi possível baixar o modelo agora. Tente novamente.');
+    }
   };
 
   const baixarModeloXLSX = async () => {
@@ -601,6 +624,14 @@ export default function App() {
         </div>
       </header>
 
+      {relatorioPendente && (
+        <RelatorioImportacao
+          nomeArquivo={relatorioPendente.nome}
+          relatorio={relatorioPendente.relatorio}
+          onAceitar={aceitarLote}
+          onCancelar={() => setRelatorioPendente(null)}
+        />
+      )}
       {mostrarLojas && (
         <Lojas api={apiAuth} onFechar={() => setMostrarLojas(false)} onMudou={carregarLojas} />
       )}
@@ -780,7 +811,7 @@ export default function App() {
             <label className="border border-dashed border-slate-800 hover:border-blue-500/60 transition-all rounded-xl p-3.5 flex flex-col items-center justify-center cursor-pointer bg-slate-900/40 group">
               <Upload className="w-4 h-4 text-slate-400 group-hover:text-blue-400 transition-colors mb-1" />
               <span className="text-xs font-semibold text-slate-200">Anexar Planilha de Entregas</span>
-              <span className="text-[10px] text-slate-500">Formatos aceitos: .csv ou .xlsx</span>
+              <span className="text-[10px] text-slate-500">Use o modelo padrão (.csv ou .xlsx); você confere o arquivo antes de aceitar</span>
               <input type="file" accept=".csv,.xlsx" onChange={handleFileUpload} className="hidden" />
             </label>
 
@@ -829,11 +860,29 @@ export default function App() {
             )}
 
             <div className="flex items-center justify-between text-[11px] px-1">
-              <span className="text-slate-400">Lote Selecionado:</span>
+              <span className="text-slate-400">Pedidos marcados:</span>
               <span className={`font-mono font-semibold ${pedidosAtivos.length > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>
                 {pedidosAtivos.length} pedidos
               </span>
             </div>
+
+            {loteSelecionado && (
+              <ListaPedidos
+                key={loteSelecionado.id}
+                pedidos={loteSelecionado.pedidos}
+                marcados={loteSelecionado.marcados}
+                comErro={loteSelecionado.comErro}
+                lojaId={lojaHubId}
+                lojaNome={lojaHub?.nome}
+                data={loteSelecionado.data}
+                aoMudarData={(data) => alterarLote(loteSelecionado.id, { data })}
+                aoMudarMarcados={(marcados) => alterarLote(loteSelecionado.id, { marcados })}
+                aoCorrigir={(id, campos) => alterarLote(loteSelecionado.id, (l) => {
+                  const corrigido = corrigirEndereco(l.pedidos, l.comErro, id, campos);
+                  return { pedidos: corrigido.pedidos, comErro: corrigido.comErro, marcados: new Set([...l.marcados, id]) };
+                })}
+              />
+            )}
           </div>
 
           {/* 3. Configuração de Capacidades Variáveis por Loja */}
@@ -1076,7 +1125,7 @@ export default function App() {
             <div className="bg-red-950/30 border border-red-500/30 rounded-xl p-4 space-y-2">
               <div className="flex items-center gap-2 text-red-400 font-bold text-xs uppercase tracking-wider">
                 <AlertTriangle className="w-4 h-4" />
-                {resultado.pedidos_sem_geocodificacao.length} pedido(s) fora da roteirização — CEP/endereço não localizado
+                {resultado.pedidos_sem_geocodificacao.length} pedido(s) fora da roteirização — {MSG_ERRO_ENDERECO}
               </div>
               <div className="space-y-1 max-h-40 overflow-y-auto">
                 {resultado.pedidos_sem_geocodificacao.map((p) => (
@@ -1086,7 +1135,7 @@ export default function App() {
                   </div>
                 ))}
               </div>
-              <p className="text-[10px] text-red-400/70">Corrija o endereço/CEP desses pedidos e rode a roteirização novamente para incluí-los.</p>
+              <p className="text-[10px] text-red-400/70">Corrija o endereço desses pedidos na lista (botão "Corrigir") e rode a roteirização novamente para incluí-los.</p>
             </div>
           )}
 

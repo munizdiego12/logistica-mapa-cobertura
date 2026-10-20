@@ -110,7 +110,7 @@ def test_download_da_tabela_xlsx_com_milhares_de_faixas_continua_funcionando_com
 def test_csv_da_tabela_e_gerado_na_propria_tela_entao_nao_passa_pelo_servidor():
     """A exportação CSV é montada no navegador (App.jsx); no servidor só existem os downloads XLSX, cobertos acima."""
     rotas = [r.path for r in main.app.routes if "csv" in getattr(r, "path", "").lower()]
-    assert rotas == []
+    assert rotas == ["/api/modelo-csv"]  # só o modelo de pedidos; a tabela de frete em CSV continua sendo gerada no navegador
 
 
 def test_cors_continua_funcionando_na_resposta_comum_na_compactada_e_no_preflight(api):

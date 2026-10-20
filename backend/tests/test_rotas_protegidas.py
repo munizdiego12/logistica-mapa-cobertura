@@ -19,9 +19,11 @@ ROTAS = [
     ("post", "/api/exportar-tabela-frete-xlsx", {"json": {}}, 422),
     ("get", "/api/modais", {}, 200),
     ("post", "/api/upload", {}, 422),
+    ("post", "/api/pedidos/validar", {}, 422),
     ("post", "/api/otimizar", {"json": {}}, 422),
     ("get", "/api/otimizar/status/inexistente", {}, 404),
     ("get", "/api/modelo-xlsx", {}, 200),
+    ("get", "/api/modelo-csv", {}, 200),
     # Etapa 5: com token válido a rota passa da autenticação (aqui sem banco de verdade, então responde 503 claro)
     ("get", "/api/tipos-veiculo", {}, 503),
     ("put", "/api/tipos-veiculo/1", {"json": {"custo_rota": 130}}, 503),

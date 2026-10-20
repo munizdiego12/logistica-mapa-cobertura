@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 from backend import frota
+from backend.casamento_lojas import chave_da_loja  # noqa: F401 (o casamento mora em casamento_lojas, compartilhado com os pedidos)
 from backend.lojas import OPERADOR_CARGA_INICIAL, _chave_do_cabecalho, _ler_texto, _sem_acento, chave_da_operacao
 
 TIPO_PASSEIO = "Carro de passeio"
@@ -95,27 +96,6 @@ def reconhecer_tipo(valor) -> Optional[str]:
     if tem_utilitario == tem_passeio:  # os dois ou nenhum: não dá para decidir
         return None
     return TIPO_UTILITARIO if tem_utilitario else TIPO_PASSEIO
-
-
-_ABREVIACOES = {"av": "avenida"}
-# Siglas de rede só valem como PRIMEIRA palavra do nome (sem diferença de maiúsculas): ATC = Atacadão, SAMS = Sam's Club, CRFO = Carrefour.
-_SIGLAS_DE_REDE = {"atc": ["atacadao"], "sams": ["sams", "club"], "crfo": ["carrefour"]}
-
-
-def chave_da_loja(nome) -> str:
-    """
-    Chave de comparação do nome da loja: sem acentos, minúsculas, sem hífens, apóstrofos nem pontuação, espaços simples;
-    siglas de rede no início valem o nome inteiro (ATC = Atacadão, SAMS/SAMs = Sam's Club, CRFO = Carrefour) e "Av" vale
-    "Avenida" ("ATC Av das Torres" casa com "Atacadão Avenida das Torres"; "SAMS Campinas" com "Sam's Club Campinas").
-    """
-    texto = re.sub(r"['\u2019`]", "", _sem_acento(nome).lower())
-    palavras = re.sub(r"[^a-z0-9]+", " ", texto).split()
-    if palavras and palavras[0] in _SIGLAS_DE_REDE:
-        expandido = list(_SIGLAS_DE_REDE[palavras[0]])
-        if expandido[-1] == "club" and palavras[1:2] == ["club"]:  # "Sams Club Campinas": o "club" já veio escrito
-            expandido = expandido[:-1]
-        palavras = expandido + palavras[1:]
-    return " ".join(_ABREVIACOES.get(p, p) for p in palavras)
 
 
 def _chave_simples(texto) -> str:

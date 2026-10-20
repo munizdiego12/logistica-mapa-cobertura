@@ -663,3 +663,137 @@ def test_caso_real_46_linhas_35_lojas_3_estados(tmp_path):
     assert resumo["sem_coordenada"] == [] and resumo["linhas_invalidas"] == []
     assert sorted({l.uf for l in r.lojas}) == ["MG", "RJ", "SP"]
     assert sum(1 for l in r.lojas if l.uf == "SP") == 20 and resumo["estados_nao_reconhecidos"] == {}
+
+
+# ----------------------------------------------------------------------------------------------------------
+# Desempate por rede e --somente-de-motoristas
+# ----------------------------------------------------------------------------------------------------------
+def _cad(id_, nome, lat=-23.0, lng=-46.0, **extra):
+    base = {"id": id_, "nome": nome, "uf": "SP", "endereco": None, "cidade": None, "lat": lat, "lng": lng, "codigo_externo": None, "nome_operacao": None}
+    base.update(extra)
+    return base
+
+
+def _loja_rede(codigo, rede, nome="SDA Op", lat=-23.0001, lng=-46.0):
+    return superset.LojaSuperset(codigo, nome, lat=lat, lng=lng, rede=rede)
+
+
+@pytest.mark.parametrize("rede, esperada", [
+    ("Atacadao", "Atacadão Centro"), ("ATACADÃO", "Atacadão Centro"), ("  atacadao ", "Atacadão Centro"),
+    ("Sam's Club BR", "Sam's Club Centro"), ("SAMS CLUB BR", "Sam's Club Centro"), ("Sam's Club", "Sam's Club Centro"),
+    ("Carrefour", "Carrefour Centro"), ("carrefour", "Carrefour Centro"),
+])
+def test_desempate_por_rede_escolhe_a_unica_candidata_da_mesma_rede(rede, esperada):
+    cad = [_cad(1, "Atacadão Centro"), _cad(2, "Sam's Club Centro"), _cad(3, "Carrefour Centro")]
+    plano = superset.planejar(cad, [_loja_rede("X-1", rede)])
+    assert plano.ambiguas == [] and len(plano.por_proximidade) == 1
+    acao = plano.por_proximidade[0]
+    assert acao.destino["nome"] == esperada and acao.por_rede
+    # preenche código e nome de operação, sem mudar nome, endereço nem coordenadas
+    assert acao.preencher == {"codigo_externo": "X-1", "nome_operacao": "SDA Op", "nome_operacao_chave": "sdaop"}
+
+
+def test_continua_ambigua_com_duas_da_mesma_rede_nenhuma_ou_rede_em_branco():
+    duas = [_cad(1, "Atacadão Centro"), _cad(2, "Atacadão Norte"), _cad(3, "Carrefour Centro")]
+    plano = superset.planejar(duas, [_loja_rede("X-1", "Atacadao")])  # duas Atacadão: ainda ambígua
+    assert [a.loja.codigo_externo for a in plano.ambiguas] == ["X-1"] and not plano.por_proximidade
+    assert {n for n, _ in plano.ambiguas[0].candidatas} == {"Atacadão Centro", "Atacadão Norte", "Carrefour Centro"}  # lista todas
+    nenhuma = superset.planejar(duas, [_loja_rede("X-2", "Sam's Club BR")])  # nenhuma Sam's: ambígua
+    assert len(nenhuma.ambiguas) == 1 and not nenhuma.por_proximidade
+    em_branco = superset.planejar(duas, [_loja_rede("X-3", "")])
+    assert len(em_branco.ambiguas) == 1 and not em_branco.por_proximidade
+
+
+def test_rede_nao_casa_com_nome_que_so_contem_a_palavra():
+    cad = [_cad(1, "Loja do Atacadão Norte"), _cad(2, "Carrefour Centro")]
+    plano = superset.planejar(cad, [_loja_rede("X-1", "Atacadao")])
+    assert len(plano.ambiguas) == 1  # "começa com", não "contém"
+
+
+def test_desempate_por_rede_respeita_as_outras_regras():
+    cad = [_cad(1, "Atacadão Centro", codigo_externo="OUTRO"), _cad(2, "Carrefour Centro")]
+    plano = superset.planejar(cad, [_loja_rede("X-1", "Atacadao")])  # a escolhida já tem outro código: ambígua
+    assert len(plano.ambiguas) == 1 and "outro código externo" in plano.ambiguas[0].motivo
+    cad = [_cad(1, "Atacadão Centro"), _cad(2, "Carrefour Centro")]
+    plano = superset.planejar(cad, [_loja_rede("X-1", "Atacadao", nome="Op A"), _loja_rede("X-2", "Atacadao", nome="Op B", lat=-23.0002)])
+    assert len(plano.ambiguas) == 2 and not plano.por_proximidade  # duas do arquivo na mesma cadastrada
+
+
+def _nova(codigo, nome, lat=-12.0):
+    return superset.LojaSuperset(codigo, nome, lat=lat, lng=-48.0)
+
+
+def test_somente_de_motoristas_cria_so_as_novas_que_aparecem_na_lista():
+    permitidas = {superset.chave_de_lista(n) for n in ("ATC Mooca", "SAMS Campinas", "ATC Av Brasil Norte")}
+    lojas_novas = [_nova("N-1", "Atacadão Mooca"), _nova("N-2", "Sam's Club Campinas", -13.0), _nova("N-3", "Atacadão Avenida Brasil Norte", -14.0),
+                   _nova("N-4", "SDA Fora da Lista", -15.0)]
+    plano = superset.planejar([], lojas_novas, permitidas)
+    assert [a.loja.codigo_externo for a in plano.novas] == ["N-1", "N-2", "N-3"]
+    assert [a.loja.codigo_externo for a in plano.fora_da_lista] == ["N-4"] and plano.nome_em_conflito == []
+    assert superset.resumir(superset.ResultadoSuperset(), plano)["fora_da_lista"] == 1
+    sem_filtro = superset.planejar([], lojas_novas)  # sem a opção, todas as novas valem
+    assert len(sem_filtro.novas) == 4 and sem_filtro.fora_da_lista == []
+
+
+def test_a_lista_de_motoristas_ignora_maiusculas_acentos_e_espacos():
+    assert superset.chave_de_lista("  sda   MOÓCA ") == superset.chave_de_lista("SDA Mooca") == superset.chave_de_lista("SDAMooca")
+    assert superset.chave_de_lista("CRFO Osasco") == superset.chave_de_lista("Carrefour Osasco")
+
+
+def test_ligacao_por_proximidade_vale_para_todas_mesmo_fora_da_lista():
+    cad = [_cad(1, "Atacadão Centro")]
+    plano = superset.planejar(cad, [_loja_rede("X-1", "Atacadao", nome="SDA Fora")], permitidas={"outranome"})
+    assert len(plano.por_proximidade) == 1 and plano.fora_da_lista == []
+
+
+def _csv_motoristas(tmp_path, lojas):
+    caminho = tmp_path / "mot.csv"
+    caminho.write_text("Código,Nome,Tipo de veículo,Loja\n" + "".join(f"M-{i},Ana {i},Passeio,{l}\n" for i, l in enumerate(lojas, 1)), encoding="utf-8")
+    return str(caminho)
+
+
+def test_lojas_dos_motoristas_le_a_coluna_lojas_com_varias_lojas_por_celula(tmp_path):
+    caminho = tmp_path / "mot.csv"
+    caminho.write_text('Código,Nome,Tipo de veículo,Lojas\nM-1,Ana,Passeio,"SDA Mooca; ATC Santos"\nM-2,Bia,Passeio,\n', encoding="utf-8")
+    assert superset.lojas_dos_motoristas(caminho) == {"sdamooca", "atacadaosantos"}
+    sem_coluna = tmp_path / "sem.csv"
+    sem_coluna.write_text("Código,Nome,Tipo de veículo\nM-1,Ana,Passeio\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="coluna Lojas"):
+        superset.lojas_dos_motoristas(sem_coluna)
+
+
+def test_script_somente_de_motoristas_conta_e_nao_cria_as_de_fora(arquivo, banco_falso, tmp_path, monkeypatch, capsys):
+    # das candidatas a nova do arquivo (S-3 SDA Mooca, S-8 SDA Atlantida e S-4 SDA Conflito) só a Mooca tem motorista
+    mot = _csv_motoristas(tmp_path, ["SDA Mooca"])
+    script.main(["--csv", arquivo, "--somente-de-motoristas", mot])
+    texto = capsys.readouterr().out
+    assert "NOVAS (serão criadas): 1" in texto and "FORA DA LISTA DE MOTORISTAS (não criadas): 2" in texto
+    assert "NOME EM CONFLITO (NÃO gravadas): 0" in texto  # a fora da lista não conta como conflito
+    assert "Ana" not in texto and "M-1" not in texto  # nenhum dado de motorista no resumo
+
+    monkeypatch.setattr("builtins.input", lambda _: "GRAVAR")
+    script.main(["--csv", arquivo, "--somente-de-motoristas", mot, "--gravar"])
+    assert _linha_banco(banco_falso, "SDA Mooca") is not None and _linha_banco(banco_falso, "SDA Atlantida") is None
+    assert _linha_banco(banco_falso, "Atacadão Guarujá")["codigo_externo"] == "S-1"  # proximidade vale para todas
+
+
+def test_script_mostra_o_desempate_por_rede(tmp_path, banco_falso, capsys):
+    banco_falso.db.execute("INSERT INTO lojas (nome, lat, lng) VALUES ('Carrefour Perto', -23.9930, -46.2565)")
+    banco_falso.db.execute("DELETE FROM lojas WHERE nome IN ('Atacadão Santos A', 'Atacadão Santos B')")
+    caminho = _escrever(tmp_path / "r.csv", [_linha("R-1", "SDA Guarujá Rede", "'-23.9931;-46.2564", rede="Atacadao")])
+    script.main(["--csv", caminho])
+    texto = capsys.readouterr().out
+    assert '"SDA Guarujá Rede" (arquivo) = "Atacadão Guarujá" (cadastrada)' in texto and "(desempate por rede)" in texto
+    assert "AMBÍGUAS (NÃO aplicadas): 0" in texto
+
+
+def test_script_recusa_opcao_de_motoristas_no_formato_antigo_e_csv_sem_lojas(tmp_path, capsys):
+    antigo = tmp_path / "antigo.csv"
+    antigo.write_text("Nome;Estado;Endereço;Latitude;Longitude\nA;SP;;-23,5;-46,6\n", encoding="utf-8")
+    with pytest.raises(SystemExit, match="só vale para a exportação do Superset"):
+        script.main(["--csv", str(antigo), "--somente-de-motoristas", _csv_motoristas(tmp_path, ["X"])])
+    sem = tmp_path / "sem.csv"
+    sem.write_text("Código,Nome,Tipo de veículo\nM-1,Ana,Passeio\n", encoding="utf-8")
+    exportacao = _escrever(tmp_path / "s.csv", [_linha("Z-1", "SDA Z", "-23,5;-46,6")])
+    with pytest.raises(SystemExit, match="coluna Lojas"):
+        script.main(["--csv", exportacao, "--somente-de-motoristas", str(sem)])

@@ -22,6 +22,11 @@ Exportação do Superset (reconhecida pelas colunas store_id, store_name e store
     nome, endereço nem coordenadas); (c) listada como ambígua, se houver mais de uma a até 150 m; (d) criada, se for nova.
     Com DATABASE_URL definida, o resumo consulta o cadastro (só leitura) e mostra o plano; sem ela, só o que o arquivo diz.
     Nada sobrescreve o que já está preenchido.
+    Desempate por rede: com mais de uma loja cadastrada a até 150 m, retailer_name escolhe (Atacadao = lojas "Atacadão ...",
+    Sam's Club BR = "Sam's Club ...", Carrefour = "Carrefour ..."); se exatamente UMA for da rede, é a escolhida.
+    --somente-de-motoristas CSV: lojas NOVAS só são criadas se o nome de operação estiver na coluna Lojas desse CSV de motoristas
+    (mesmas siglas ATC/SAMS/CRFO e Av = Avenida do casamento de motoristas); as demais são contadas e não criadas.
+    A ligação por proximidade das lojas já cadastradas vale para todas.
 
 Passo 1 — só o resumo (não conecta no banco):
     python scripts/carregar_lojas.py --csv data/lojas/lojas.csv
@@ -151,7 +156,7 @@ ROTULOS_SUPERSET = {
 }
 
 
-def imprimir_resumo_superset(caminho: Path, resultado, resumo: dict, plano, exemplos: int = 10) -> None:
+def imprimir_resumo_superset(caminho: Path, resultado, resumo: dict, plano, exemplos: int = 10, permitidas=None) -> None:
     print(f"Arquivo: {caminho}")
     print(f"  formato: exportação do Superset | separador: '{resultado.delimitador}' | codificação: {resultado.codificacao}")
     reconhecidas = [f"{ROTULOS_SUPERSET[c]} <- \"{resultado.colunas[c]}\"" for c in carga_superset.CAMPOS if c in resultado.colunas]
@@ -184,8 +189,11 @@ def imprimir_resumo_superset(caminho: Path, resultado, resumo: dict, plano, exem
     print(f"  JÁ CADASTRADAS, ligadas pelo código externo (só completa o que está vazio): {resumo['ja_cadastradas']}")
     _lista(f"  JÁ CADASTRADAS, ligadas por proximidade (até 150 m; nome, endereço e coordenadas não mudam): {resumo['por_proximidade']}",
            plano.por_proximidade, exemplos,
-           lambda a: f"\"{a.loja.nome_operacao}\" (arquivo) = \"{a.destino['nome']}\" (cadastrada), a {a.distancia_m:.0f} m")
+           lambda a: f"\"{a.loja.nome_operacao}\" (arquivo) = \"{a.destino['nome']}\" (cadastrada), a {a.distancia_m:.0f} m"
+           + (" (desempate por rede)" if a.por_rede else ""))
     print(f"  NOVAS (serão criadas): {resumo['novas']}")
+    if permitidas is not None:
+        print(f"  FORA DA LISTA DE MOTORISTAS (não criadas): {resumo['fora_da_lista']}")
 
     def ambigua(a):
         candidatas = "; ".join(f"\"{n}\" a {d:.0f} m" for n, d in a.candidatas[:3])
@@ -205,6 +213,13 @@ def carregar_superset(caminho: Path, args) -> None:
         resultado = carga_superset.ler_superset(caminho)
     except ValueError as erro:
         sys.exit(f"ERRO: {erro}")
+    permitidas = None
+    if args.somente_de_motoristas:
+        try:
+            permitidas = carga_superset.lojas_dos_motoristas(args.somente_de_motoristas)
+        except (OSError, ValueError) as erro:
+            sys.exit(f"ERRO: CSV de motoristas: {erro}")
+        print(f"Lojas novas só serão criadas se estiverem na coluna Lojas de {args.somente_de_motoristas} ({len(permitidas)} nome(s) distinto(s)).\n")
     url = os.getenv("DATABASE_URL")
     dsn = None
     if url:
@@ -215,8 +230,8 @@ def carregar_superset(caminho: Path, args) -> None:
     plano = None
     if dsn is not None:
         cadastradas = asyncio.run(com_conexao(dsn, _ler_cadastradas_so_leitura))
-        plano = carga_superset.planejar(cadastradas, resultado.lojas)
-    imprimir_resumo_superset(caminho, resultado, carga_superset.resumir(resultado, plano), plano)
+        plano = carga_superset.planejar(cadastradas, resultado.lojas, permitidas)
+    imprimir_resumo_superset(caminho, resultado, carga_superset.resumir(resultado, plano), plano, permitidas=permitidas)
 
     if not args.gravar:
         print("\nNada foi gravado. Se o resumo estiver certo, rode de novo com --gravar.")
@@ -237,7 +252,7 @@ def carregar_superset(caminho: Path, args) -> None:
             print("Cancelado: nada foi gravado.")
             return
     try:
-        feito = asyncio.run(com_conexao(dsn, lambda c: carga_superset.gravar_carga(c, resultado.lojas)))
+        feito = asyncio.run(com_conexao(dsn, lambda c: carga_superset.gravar_carga(c, resultado.lojas, permitidas)))
     except asyncpg.UniqueViolationError:
         sys.exit("\nERRO: alguém cadastrou uma loja com o mesmo nome, código ou nome de operação enquanto a carga rodava. Nada foi gravado: rode de novo.")
     print(f"Gravado: {feito['novas']} loja(s) nova(s), {feito['ligadas']} ligada(s) por proximidade, {feito['completadas']} completada(s).")
@@ -254,6 +269,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Carga de lojas a partir de um CSV (mostra o resumo; só grava com --gravar).")
     parser.add_argument("--csv", required=True, help="CSV de lojas (em data/lojas/, fora do git)")
     parser.add_argument("--gravar", action="store_true", help="grava no banco (DATABASE_URL) depois de mostrar a previsão e pedir confirmação")
+    parser.add_argument("--somente-de-motoristas", metavar="CSV_DE_MOTORISTAS",
+                        help="exportação do Superset: só cria as lojas NOVAS cujo nome de operação aparece na coluna Lojas deste CSV de motoristas")
     parser.add_argument("--sim", action="store_true", help="com --gravar, não pede a confirmação digitada")
     parser.add_argument("--sobrescrever-editados", action="store_true", help="permite sobrescrever lojas que um operador editou na tela")
     args = parser.parse_args(argv)
@@ -271,6 +288,8 @@ def main(argv=None):
 
     if carga_superset.e_exportacao_superset(caminho):
         return carregar_superset(caminho, args)
+    if args.somente_de_motoristas:
+        sys.exit("ERRO: --somente-de-motoristas só vale para a exportação do Superset.")
 
     try:
         resultado = ler_csv_lojas(caminho)

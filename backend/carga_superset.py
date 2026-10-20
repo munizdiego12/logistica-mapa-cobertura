@@ -17,6 +17,14 @@ Regras de cada loja do arquivo, nesta ordem:
     d) senão, é nova (nome = store_name como veio); se o nome (ou o nome de operação) já existir em outra loja distante,
        não é gravada e vai para o resumo.
 Nada sobrescreve o que já está preenchido (nem o que um operador editou na tela): só campos vazios são completados.
+
+Desempate por rede: com mais de uma loja cadastrada a até 150 m, `retailer_name` escolhe; "Atacadao" combina com as lojas cujo
+nome começa com "Atacadão", "Sam's Club BR" com "Sam's Club", "Carrefour" com "Carrefour" (sem diferença de maiúsculas nem
+acentos). Se exatamente UMA candidata for da mesma rede, é a escolhida; se restar mais de uma ou nenhuma, continua ambígua.
+
+`--somente-de-motoristas CSV`: as lojas NOVAS só são criadas se o nome de operação (normalizado como no casamento dos motoristas:
+sem acento, maiúsculas nem espaços, com ATC/SAMS/CRFO e Av = Avenida) aparecer na coluna Lojas desse CSV. A ligação por
+proximidade das lojas já cadastradas vale para todas.
 """
 import csv
 import math
@@ -24,6 +32,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Optional
 
+from backend.carga_motoristas import chave_da_loja, ler_csv_motoristas
 from backend.lojas import (
     OPERADOR_CARGA_INICIAL,
     _ler_texto,
@@ -268,6 +277,7 @@ class Acao:
     destino: Optional[dict] = None  # loja cadastrada (a, b)
     distancia_m: Optional[float] = None
     preencher: dict = field(default_factory=dict)  # coluna -> valor, só campos que estão vazios no cadastro
+    por_rede: bool = False  # escolhida entre várias lojas próximas pelo desempate de rede
     motivo: str = ""
     candidatas: list = field(default_factory=list)  # [(nome cadastrado, distância em m)] das ambíguas
 
@@ -279,6 +289,7 @@ class Plano:
     novas: list = field(default_factory=list)  # d)
     ambiguas: list = field(default_factory=list)  # c)
     nome_em_conflito: list = field(default_factory=list)  # d) nome (ou nome de operação) já usado por outra loja distante
+    fora_da_lista: list = field(default_factory=list)  # d) nova, mas fora da lista de lojas dos motoristas (--somente-de-motoristas)
     operacao_em_conflito: list = field(default_factory=list)  # a, b) nome de operação já é de outra loja: só esse campo fica de fora
 
     @property
@@ -290,10 +301,35 @@ def _vazio(valor) -> bool:
     return valor is None or not str(valor).strip()
 
 
-def planejar(cadastradas: list, lojas: list) -> Plano:
+def chave_da_rede(rede) -> str:
+    """'Atacadao' -> 'atacadao'; "Sam's Club BR" -> 'sams club' (sem o 'BR' do fim, acentos, apóstrofo nem maiúsculas)."""
+    chave = chave_da_loja(rede)
+    return chave[:-3] if chave.endswith(" br") else chave
+
+
+def _da_rede(rede_chave: str, cadastrada: dict) -> bool:
+    nome = chave_da_loja(cadastrada["nome"])
+    return bool(rede_chave) and (nome == rede_chave or nome.startswith(rede_chave + " "))
+
+
+def chave_de_lista(nome) -> str:
+    """Chave do nome de operação para a lista dos motoristas: as regras do casamento (siglas, Av), sem espaços."""
+    return chave_da_loja(nome).replace(" ", "")
+
+
+def lojas_dos_motoristas(caminho) -> set:
+    """Chaves (`chave_de_lista`) dos nomes na coluna Lojas do CSV de motoristas. ValueError se o CSV não tiver essa coluna."""
+    resultado = ler_csv_motoristas(caminho)
+    if "lojas" not in resultado.colunas:
+        raise ValueError("o CSV de motoristas não tem a coluna Lojas (ou Loja)")
+    return {chave_de_lista(n) for l in resultado.linhas for n in l.lojas_nomes if chave_de_lista(n)}
+
+
+def planejar(cadastradas: list, lojas: list, permitidas: Optional[set] = None) -> Plano:
     """
     Decide o que fazer com cada loja do arquivo. `cadastradas`: dicts com id, nome, uf, endereco, cidade, lat, lng,
-    codigo_externo, nome_operacao (e, se houver, nome_operacao_chave). Função pura: não mexe no banco.
+    codigo_externo, nome_operacao (e, se houver, nome_operacao_chave). `permitidas`: se informado, as lojas novas só são criadas
+    se a `chave_de_lista` do nome de operação estiver nele. Função pura: não mexe no banco.
     """
     plano = Plano()
     por_codigo = {_chave_codigo(c["codigo_externo"]): c for c in cadastradas if not _vazio(c.get("codigo_externo"))}
@@ -307,6 +343,7 @@ def planejar(cadastradas: list, lojas: list) -> Plano:
     # 1ª passada: classifica; guarda quem reivindica cada loja cadastrada (duas do arquivo na mesma = ambíguas)
     classificadas = []
     reivindicacoes = {}
+    por_rede = set()
     for loja in lojas:
         cadastrada = por_codigo.get(_chave_codigo(loja.codigo_externo))
         if cadastrada is not None:
@@ -322,7 +359,14 @@ def planejar(cadastradas: list, lojas: list) -> Plano:
             classificadas.append(("proxima", loja, c, d, []))
             reivindicacoes.setdefault(c["id"], []).append(loja)
         elif len(proximas) > 1:
-            classificadas.append(("ambigua", loja, None, None, [(c["nome"], d) for d, c in proximas]))
+            da_rede = [(d, c) for d, c in proximas if _da_rede(chave_da_rede(loja.rede), c)]
+            if len(da_rede) == 1:  # desempate por rede
+                d, c = da_rede[0]
+                classificadas.append(("proxima", loja, c, d, []))
+                reivindicacoes.setdefault(c["id"], []).append(loja)
+                por_rede.add(loja.codigo_externo)
+            else:
+                classificadas.append(("ambigua", loja, None, None, [(c["nome"], d) for d, c in proximas]))
         else:
             classificadas.append(("nova", loja, None, None, []))
 
@@ -339,7 +383,7 @@ def planejar(cadastradas: list, lojas: list) -> Plano:
                 plano.ambiguas.append(Acao(loja, motivo=f"a loja cadastrada a {d:.0f} m já tem outro código externo", candidatas=[(cadastrada["nome"], d)]))
                 continue
         if tipo in ("codigo", "proxima"):
-            acao = Acao(loja, destino=cadastrada, distancia_m=d)
+            acao = Acao(loja, destino=cadastrada, distancia_m=d, por_rede=loja.codigo_externo in por_rede)
             if tipo == "proxima":
                 acao.preencher["codigo_externo"] = loja.codigo_externo
             else:  # a) completa só o que está vazio
@@ -359,6 +403,9 @@ def planejar(cadastradas: list, lojas: list) -> Plano:
             (plano.ja_cadastradas if tipo == "codigo" else plano.por_proximidade).append(acao)
             continue
         # nova
+        if permitidas is not None and chave_de_lista(loja.nome_operacao) not in permitidas:
+            plano.fora_da_lista.append(Acao(loja, motivo="fora da lista de motoristas"))
+            continue
         nome = normalizar_nome(loja.nome_operacao)
         chave_op = chave_da_operacao(loja.nome_operacao)
         if chave_do_nome(nome) in nomes_usados:
@@ -395,6 +442,8 @@ def resumir(resultado: ResultadoSuperset, plano: Optional[Plano] = None) -> dict
             "novas": len(plano.novas),
             "ambiguas": len(plano.ambiguas),
             "nome_em_conflito": len(plano.nome_em_conflito),
+            "fora_da_lista": len(plano.fora_da_lista),
+            "por_rede": sum(1 for a in plano.por_proximidade if a.por_rede),
             "operacao_em_conflito": len(plano.operacao_em_conflito),
         })
     return resumo
@@ -436,13 +485,13 @@ async def _aplicar(conn, plano: Plano) -> None:
         )
 
 
-async def gravar_carga(conn, lojas: list) -> dict:
+async def gravar_carga(conn, lojas: list, permitidas: Optional[set] = None) -> dict:
     """
     Lê o cadastro, refaz o plano e grava numa única transação (ou grava tudo, ou nada). Repetir é seguro: na segunda
     vez as lojas já têm o código externo e nada novo é feito. Devolve as contagens do que foi gravado.
     """
     async with conn.transaction():
-        plano = planejar(await ler_cadastradas(conn), lojas)
+        plano = planejar(await ler_cadastradas(conn), lojas, permitidas)
         await _aplicar(conn, plano)
     return {
         "novas": len(plano.novas),

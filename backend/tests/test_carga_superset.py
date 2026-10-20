@@ -688,7 +688,7 @@ def test_desempate_por_rede_escolhe_a_unica_candidata_da_mesma_rede(rede, espera
     plano = superset.planejar(cad, [_loja_rede("X-1", rede)])
     assert plano.ambiguas == [] and len(plano.por_proximidade) == 1
     acao = plano.por_proximidade[0]
-    assert acao.destino["nome"] == esperada and acao.por_rede
+    assert acao.destino["nome"] == esperada and not acao.por_rede  # a rede compatível já deixou uma só candidata
     # preenche código e nome de operação, sem mudar nome, endereço nem coordenadas
     assert acao.preencher == {"codigo_externo": "X-1", "nome_operacao": "SDA Op", "nome_operacao_chave": "sdaop"}
 
@@ -697,24 +697,25 @@ def test_continua_ambigua_com_duas_da_mesma_rede_nenhuma_ou_rede_em_branco():
     duas = [_cad(1, "Atacadão Centro"), _cad(2, "Atacadão Norte"), _cad(3, "Carrefour Centro")]
     plano = superset.planejar(duas, [_loja_rede("X-1", "Atacadao")])  # duas Atacadão: ainda ambígua
     assert [a.loja.codigo_externo for a in plano.ambiguas] == ["X-1"] and not plano.por_proximidade
-    assert {n for n, _ in plano.ambiguas[0].candidatas} == {"Atacadão Centro", "Atacadão Norte", "Carrefour Centro"}  # lista todas
-    nenhuma = superset.planejar(duas, [_loja_rede("X-2", "Sam's Club BR")])  # nenhuma Sam's: ambígua
+    assert {n for n, _ in plano.ambiguas[0].candidatas} == {"Atacadão Centro", "Atacadão Norte"}  # a Carrefour (outra rede) nem é listada
+    desconhecidas = [_cad(1, "Sonda Centro"), _cad(2, "Imec Centro")]
+    nenhuma = superset.planejar(desconhecidas, [_loja_rede("X-2", "Atacadao")])  # duas de rede desconhecida, nenhuma Atacadão: ambígua
     assert len(nenhuma.ambiguas) == 1 and not nenhuma.por_proximidade
     em_branco = superset.planejar(duas, [_loja_rede("X-3", "")])
     assert len(em_branco.ambiguas) == 1 and not em_branco.por_proximidade
 
 
 def test_rede_nao_casa_com_nome_que_so_contem_a_palavra():
-    cad = [_cad(1, "Loja do Atacadão Norte"), _cad(2, "Carrefour Centro")]
+    cad = [_cad(1, "Loja do Atacadão Norte"), _cad(2, "Sonda Centro")]  # as duas de rede desconhecida
     plano = superset.planejar(cad, [_loja_rede("X-1", "Atacadao")])
-    assert len(plano.ambiguas) == 1  # "começa com", não "contém"
+    assert len(plano.ambiguas) == 1  # "começa com", não "contém": o desempate não escolhe a primeira
 
 
 def test_desempate_por_rede_respeita_as_outras_regras():
-    cad = [_cad(1, "Atacadão Centro", codigo_externo="OUTRO"), _cad(2, "Carrefour Centro")]
+    cad = [_cad(1, "Atacadão Centro", codigo_externo="OUTRO"), _cad(2, "Sonda Centro")]  # o desempate escolhe a Atacadão, que já tem código
     plano = superset.planejar(cad, [_loja_rede("X-1", "Atacadao")])  # a escolhida já tem outro código: ambígua
     assert len(plano.ambiguas) == 1 and "outro código externo" in plano.ambiguas[0].motivo
-    cad = [_cad(1, "Atacadão Centro"), _cad(2, "Carrefour Centro")]
+    cad = [_cad(1, "Atacadão Centro"), _cad(2, "Sonda Centro")]
     plano = superset.planejar(cad, [_loja_rede("X-1", "Atacadao", nome="Op A"), _loja_rede("X-2", "Atacadao", nome="Op B", lat=-23.0002)])
     assert len(plano.ambiguas) == 2 and not plano.por_proximidade  # duas do arquivo na mesma cadastrada
 
@@ -778,7 +779,7 @@ def test_script_somente_de_motoristas_conta_e_nao_cria_as_de_fora(arquivo, banco
 
 
 def test_script_mostra_o_desempate_por_rede(tmp_path, banco_falso, capsys):
-    banco_falso.db.execute("INSERT INTO lojas (nome, lat, lng) VALUES ('Carrefour Perto', -23.9930, -46.2565)")
+    banco_falso.db.execute("INSERT INTO lojas (nome, lat, lng) VALUES ('Sonda Perto', -23.9930, -46.2565)")
     banco_falso.db.execute("DELETE FROM lojas WHERE nome IN ('Atacadão Santos A', 'Atacadão Santos B')")
     caminho = _escrever(tmp_path / "r.csv", [_linha("R-1", "SDA Guarujá Rede", "'-23.9931;-46.2564", rede="Atacadao")])
     script.main(["--csv", caminho])
@@ -797,3 +798,99 @@ def test_script_recusa_opcao_de_motoristas_no_formato_antigo_e_csv_sem_lojas(tmp
     exportacao = _escrever(tmp_path / "s.csv", [_linha("Z-1", "SDA Z", "-23,5;-46,6")])
     with pytest.raises(SystemExit, match="coluna Lojas"):
         script.main(["--csv", exportacao, "--somente-de-motoristas", str(sem)])
+
+
+# ----------------------------------------------------------------------------------------------------------
+# Só rede compatível é candidata na ligação por proximidade
+# ----------------------------------------------------------------------------------------------------------
+def _metros_ao_norte(lat, metros):
+    return lat + metros / 111195.0
+
+
+GOIANIA = (-16.7000, -49.2500)
+MACEIO = (-9.6500, -35.7300)
+CRISTAL = (-30.0900, -51.2400)
+
+
+def _cadastro_real():
+    return [
+        _cad(1, "Sam's Club Goiânia", *GOIANIA),
+        _cad(2, "Sam's Club Maceió", *MACEIO),
+        _cad(3, "Sam's Club Shopping Barra Cristal", *CRISTAL),
+    ]
+
+
+def _arquivo_real():
+    def loja(codigo, nome, rede, base, metros):
+        return superset.LojaSuperset(codigo, nome, lat=_metros_ao_norte(base[0], metros), lng=base[1], rede=rede)
+
+    return [
+        loja("G-1", "Sams Goiania", "Sam's Club BR", GOIANIA, 0),
+        loja("G-2", "ATC Flamboyant", "Atacadao", GOIANIA, 4),
+        loja("M-1", "Sams Maceio", "Sam's Club BR", MACEIO, 0),
+        loja("M-2", "ATC Maceio Jatiuca", "Atacadao", MACEIO, 56),
+        loja("C-1", "Sams Shopping Barra Cristal", "Sam's Club BR", CRISTAL, 0),
+        loja("C-2", "CRFO Cristal", "Carrefour", CRISTAL, 72),
+    ]
+
+
+def test_casos_reais_sams_ligam_as_suas_lojas_e_as_de_outra_rede_sao_novas():
+    plano = superset.planejar(_cadastro_real(), _arquivo_real())
+    assert plano.ambiguas == []  # antes: falsas ambíguas, porque as duas do arquivo reivindicavam a mesma cadastrada
+    ligadas = {a.loja.nome_operacao: a.destino["nome"] for a in plano.por_proximidade}
+    assert ligadas == {
+        "Sams Goiania": "Sam's Club Goiânia", "Sams Maceio": "Sam's Club Maceió", "Sams Shopping Barra Cristal": "Sam's Club Shopping Barra Cristal",
+    }
+    assert sorted(a.loja.nome_operacao for a in plano.novas) == ["ATC Flamboyant", "ATC Maceio Jatiuca", "CRFO Cristal"]
+    assert all(not a.por_rede for a in plano.por_proximidade)  # era candidata única: não precisou do desempate
+
+
+def test_novas_de_outra_rede_respeitam_a_lista_de_motoristas():
+    permitidas = {superset.chave_de_lista(n) for n in ("ATC Flamboyant", "CRFO Cristal")}
+    plano = superset.planejar(_cadastro_real(), _arquivo_real(), permitidas)
+    assert sorted(a.loja.nome_operacao for a in plano.novas) == ["ATC Flamboyant", "CRFO Cristal"]
+    assert [a.loja.nome_operacao for a in plano.fora_da_lista] == ["ATC Maceio Jatiuca"]
+    assert len(plano.por_proximidade) == 3 and plano.ambiguas == []  # proximidade vale para todas
+
+
+def test_cadastrada_de_outra_rede_conhecida_nao_e_candidata_nem_a_zero_metro():
+    cad = [_cad(1, "Carrefour Centro")]
+    for rede in ("Atacadao", "Sam's Club BR"):
+        plano = superset.planejar(cad, [superset.LojaSuperset("X-1", "Op", lat=-23.0, lng=-46.0, rede=rede)])
+        assert plano.por_proximidade == [] and len(plano.novas) == 1, rede
+
+
+def test_cadastrada_de_rede_desconhecida_continua_candidata():
+    cad = [_cad(1, "Sonda Centro"), _cad(2, "Imec Norte", lat=-23.5, lng=-46.5)]
+    plano = superset.planejar(cad, [_loja_rede("X-1", "Atacadao")])
+    assert [a.destino["nome"] for a in plano.por_proximidade] == ["Sonda Centro"] and plano.novas == []
+
+
+def test_outra_rede_sai_da_conta_e_a_rede_desconhecida_fica_como_unica_candidata():
+    cad = [_cad(1, "Carrefour Centro"), _cad(2, "Super Lagoa")]  # as duas a ~0 m
+    plano = superset.planejar(cad, [_loja_rede("X-1", "Atacadao")])
+    assert plano.ambiguas == [] and [a.destino["nome"] for a in plano.por_proximidade] == ["Super Lagoa"]
+
+
+def test_continuam_ambiguas_duas_candidatas_compativeis_e_o_desempate_vale():
+    duas_atacadao = [_cad(1, "Atacadão Centro"), _cad(2, "Atacadão Norte"), _cad(3, "Carrefour Centro")]
+    plano = superset.planejar(duas_atacadao, [_loja_rede("X-1", "Atacadao")])
+    assert len(plano.ambiguas) == 1
+    assert {n for n, _ in plano.ambiguas[0].candidatas} == {"Atacadão Centro", "Atacadão Norte"}  # a Carrefour nem é listada
+    desconhecidas = [_cad(1, "Sonda Centro"), _cad(2, "Atacadão Centro"), _cad(3, "Imec Centro")]
+    plano = superset.planejar(desconhecidas, [_loja_rede("X-2", "Atacadao")])  # Sonda, Atacadão e Imec: o desempate escolhe a Atacadão
+    assert [a.destino["nome"] for a in plano.por_proximidade] == ["Atacadão Centro"] and plano.por_proximidade[0].por_rede
+
+
+def test_retailer_name_em_branco_nao_filtra_a_rede():
+    cad = [_cad(1, "Carrefour Centro")]
+    plano = superset.planejar(cad, [_loja_rede("X-1", "")])
+    assert [a.destino["nome"] for a in plano.por_proximidade] == ["Carrefour Centro"]
+
+
+@pytest.mark.parametrize("nome, rede", [
+    ("Atacadão Centro", "atacadao"), ("ATC Centro", "atacadao"), ("Sam's Club Centro", "sams club"), ("SAMS Centro", "sams club"),
+    ("CRFO Centro", "carrefour"), ("Carrefour Centro", "carrefour"), ("Sonda Centro", None), ("Loja do Atacadão", None),
+])
+def test_rede_da_cadastrada(nome, rede):
+    assert superset.rede_da_cadastrada({"nome": nome}) == rede

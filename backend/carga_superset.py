@@ -18,6 +18,11 @@ Regras de cada loja do arquivo, nesta ordem:
        não é gravada e vai para o resumo.
 Nada sobrescreve o que já está preenchido (nem o que um operador editou na tela): só campos vazios são completados.
 
+Rede compatível: só são candidatas à ligação por proximidade as lojas cadastradas de rede compatível com `retailer_name`. Uma
+cadastrada de OUTRA rede conhecida (Atacadão, Sam's Club ou Carrefour) não é candidata, mesmo a 0 m; cadastradas de rede
+desconhecida (ex.: "Sonda") continuam candidatas; `retailer_name` em branco não filtra. Se isso tirar todas as candidatas, a
+loja do arquivo é nova.
+
 Desempate por rede: com mais de uma loja cadastrada a até 150 m, `retailer_name` escolhe; "Atacadao" combina com as lojas cujo
 nome começa com "Atacadão", "Sam's Club BR" com "Sam's Club", "Carrefour" com "Carrefour" (sem diferença de maiúsculas nem
 acentos). Se exatamente UMA candidata for da mesma rede, é a escolhida; se restar mais de uma ou nenhuma, continua ambígua.
@@ -307,6 +312,23 @@ def chave_da_rede(rede) -> str:
     return chave[:-3] if chave.endswith(" br") else chave
 
 
+REDES_CONHECIDAS = ("atacadao", "sams club", "carrefour")
+
+
+def rede_da_cadastrada(cadastrada: dict) -> Optional[str]:
+    """Rede conhecida da loja cadastrada pelo começo do nome (ATC, SAMS e CRFO valem), ou None se for de rede desconhecida."""
+    nome = chave_da_loja(cadastrada["nome"])
+    return next((r for r in REDES_CONHECIDAS if nome == r or nome.startswith(r + " ")), None)
+
+
+def _rede_compativel(rede_chave: str, cadastrada: dict) -> bool:
+    """Sem retailer_name não há como filtrar; senão, a cadastrada é de rede desconhecida ou da mesma rede do arquivo."""
+    if not rede_chave:
+        return True
+    rede = rede_da_cadastrada(cadastrada)
+    return rede is None or rede == rede_chave
+
+
 def _da_rede(rede_chave: str, cadastrada: dict) -> bool:
     nome = chave_da_loja(cadastrada["nome"])
     return bool(rede_chave) and (nome == rede_chave or nome.startswith(rede_chave + " "))
@@ -353,7 +375,8 @@ def planejar(cadastradas: list, lojas: list, permitidas: Optional[set] = None) -
             ((distancia_m(loja.lat, loja.lng, float(c["lat"]), float(c["lng"])), c) for c in cadastradas),
             key=lambda x: x[0],
         )
-        proximas = [(d, c) for d, c in proximas if d <= RAIO_MESMA_LOJA_M]
+        rede_arquivo = chave_da_rede(loja.rede)
+        proximas = [(d, c) for d, c in proximas if d <= RAIO_MESMA_LOJA_M and _rede_compativel(rede_arquivo, c)]
         if len(proximas) == 1:
             d, c = proximas[0]
             classificadas.append(("proxima", loja, c, d, []))

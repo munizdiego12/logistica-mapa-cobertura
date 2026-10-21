@@ -427,3 +427,79 @@ async def gravar_carga(conn, com_peso: list, sem_peso: list, sobrescrever_editad
             )
         if sem_peso:
             await conn.executemany(SQL_INSERIR_SEM_PESO, [(l.id_sku, l.reference_code, l.nome, l.unidades) for l in sem_peso])
+
+
+# ----------------------------------------------------------------------------------------------------------
+# Novo item, um por vez (tela "Pesos dos itens" > "Novo item")
+# ----------------------------------------------------------------------------------------------------------
+MSG_ITEM_JA_EXISTE = "Já existe um item com este código. Edite-o na lista."
+MSG_CODIGO_VAZIO = "Informe o código do item."
+MSG_CODIGO_INVALIDO = "O código do item pode ter até 40 letras, números, ponto, hífen ou sublinhado (sem espaços)."
+MSG_NOME_VAZIO = "Informe o nome do item."
+MSG_PESO_INVALIDO = "O peso precisa ser um número em kg, maior que 0 e até 1000 (use vírgula ou ponto, ex.: 1,5)."
+MSG_CONFIANCA_INVALIDA = "Escolha a confiança: alta, média ou baixa."
+TAMANHO_NOME = 300
+TAMANHO_REFERENCIA = 60
+TAMANHO_FONTE = 100
+
+
+class ItemJaExiste(Exception):
+    """O código (id_sku) já existe, sem diferença de maiúsculas nem de espaços nas pontas. A rota responde 409."""
+
+
+def validar_novo_item(dados: dict) -> dict:
+    """Valida e normaliza o cadastro de UM item. ValueError com a mensagem em linguagem do operador."""
+    bruto = str(dados.get("id_sku") or "").strip()
+    if not bruto:
+        raise ValueError(MSG_CODIGO_VAZIO)
+    try:
+        id_sku = normalizar_id_sku(bruto)
+    except ValueError:
+        raise ValueError(MSG_CODIGO_INVALIDO) from None
+    nome = " ".join(str(dados.get("nome") or "").split())
+    if not nome:
+        raise ValueError(MSG_NOME_VAZIO)
+    if len(nome) > TAMANHO_NOME:
+        raise ValueError(f"O nome do item pode ter até {TAMANHO_NOME} caracteres.")
+    referencia = " ".join(str(dados.get("reference_code") or "").split()) or None
+    if referencia and len(referencia) > TAMANHO_REFERENCIA:
+        raise ValueError(f"O código de referência pode ter até {TAMANHO_REFERENCIA} caracteres.")
+    fonte = " ".join(str(dados.get("fonte") or "").split()) or None
+    if fonte and len(fonte) > TAMANHO_FONTE:
+        raise ValueError(f"A fonte pode ter até {TAMANHO_FONTE} caracteres.")
+    try:
+        peso = interpretar_peso(dados.get("peso_kg"))
+    except ValueError:
+        raise ValueError(MSG_PESO_INVALIDO) from None
+    try:
+        confianca = normalizar_confianca(dados.get("confianca")) or "media"
+    except ValueError:
+        raise ValueError(MSG_CONFIANCA_INVALIDA) from None
+    if peso is None:  # sem peso: o item entra na fila "sem peso"; confiança não faz sentido sem peso
+        return {"id_sku": id_sku, "reference_code": referencia, "nome": nome, "peso_kg": None, "fonte": fonte, "confianca": None}
+    return {"id_sku": id_sku, "reference_code": referencia, "nome": nome, "peso_kg": peso, "fonte": fonte or FONTE_MANUAL, "confianca": confianca}
+
+
+SQL_EXISTE_SEM_DIFERENCA = "SELECT id_sku FROM item_pesos WHERE lower(btrim(id_sku)) = lower($1)"
+SQL_CRIAR = f"""
+    INSERT INTO item_pesos (id_sku, reference_code, nome, peso_kg, fonte, confianca, unidades_vendidas, atualizado_em, atualizado_por)
+    VALUES ($1, $2, $3, $4, $5, $6, 0, CURRENT_TIMESTAMP, $7)
+    ON CONFLICT (id_sku) DO NOTHING
+    RETURNING {_COLUNAS}
+"""
+
+
+async def criar_item(conn, dados: dict, operador: str) -> dict:
+    """
+    Cria um item. Código já existente (sem diferença de maiúsculas e espaços nas pontas) levanta ItemJaExiste. Registra quem criou
+    e quando (atualizado_por/atualizado_em). Sem peso, o item aparece na fila "sem peso".
+    """
+    item = validar_novo_item(dados)
+    if await conn.fetchval(SQL_EXISTE_SEM_DIFERENCA, item["id_sku"]) is not None:
+        raise ItemJaExiste(MSG_ITEM_JA_EXISTE)
+    registro = await conn.fetchrow(
+        SQL_CRIAR, item["id_sku"], item["reference_code"], item["nome"], item["peso_kg"], item["fonte"], item["confianca"], operador
+    )
+    if registro is None:  # alguém criou o mesmo código no meio do caminho
+        raise ItemJaExiste(MSG_ITEM_JA_EXISTE)
+    return _para_dict(registro)

@@ -134,6 +134,10 @@ class ConexaoSqlite:
     async def execute(self, sql, *args):
         self._rodar(sql, args)
 
+    async def executemany(self, sql, linhas):
+        for args in linhas:
+            self._rodar(sql, args)
+
     async def close(self):
         pass
 

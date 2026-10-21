@@ -12,7 +12,7 @@ import pandas as pd
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, status
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import StreamingResponse
@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 import database
 import cobertura
 import item_pesos
+import item_pesos_importacao
 import frota
 import lojas
 import pedidos_fonte
@@ -1071,6 +1072,8 @@ async def _com_conexao_pesos(operacao):
             return await operacao(conn)
     except HTTPException:
         raise
+    except item_pesos.ItemJaExiste as erro:
+        raise HTTPException(status_code=409, detail=str(erro))
     except ValueError as erro:
         raise HTTPException(status_code=422, detail=str(erro))
     except Exception as erro:
@@ -1127,6 +1130,79 @@ async def atualizar_item_peso(id_sku: str, dados: AtualizarPesoRequest, operador
     if item is None:
         raise HTTPException(status_code=404, detail="Item não encontrado no cadastro de pesos.")
     return item
+
+
+class NovoItemRequest(BaseModel):
+    id_sku: Optional[str] = None
+    reference_code: Optional[str] = None
+    nome: Optional[str] = None
+    peso_kg: Optional[Union[float, str]] = None  # opcional; vírgula decimal aceita; maior que 0 e até 1000
+    fonte: Optional[str] = None
+    confianca: Optional[str] = None  # alta, media ou baixa (padrão media)
+
+
+@app.post("/api/item-pesos", status_code=201)
+async def criar_item_peso(dados: NovoItemRequest, operador: Operador = Depends(obter_operador_atual)):
+    """Cria um item (um por vez). Código repetido (sem diferença de maiúsculas e espaços) responde 409. Registra quem criou e quando."""
+    return await _com_conexao_pesos(lambda c: item_pesos.criar_item(c, dados.model_dump(), _rotulo_do_operador(operador)))
+
+
+MSG_ARQUIVO_DE_ITENS_ILEGIVEL = "Não consegui ler o arquivo. Confira se é um .csv ou .xlsx válido ou use o modelo (botão \"Baixar modelo\")."
+
+
+async def _ler_arquivo_de_itens(file: UploadFile):
+    """Lê e valida o arquivo (sem banco). Arquivo ruim vira 400 com texto fixo, sem detalhe técnico."""
+    try:
+        conteudo = await file.read(item_pesos_importacao.MAX_BYTES + 1)
+        lote = item_pesos_importacao.ler_arquivo(conteudo, file.filename or "")
+        validas, erros = item_pesos_importacao.validar_linhas(lote)
+        return lote, validas, erros
+    except item_pesos_importacao.ErroDeImportacao as erro:
+        raise HTTPException(status_code=400, detail=str(erro))
+    except Exception as erro:
+        print(f"[pesos] Falha ao ler o arquivo de itens: {type(erro).__name__}")
+        raise HTTPException(status_code=400, detail=MSG_ARQUIVO_DE_ITENS_ILEGIVEL)
+
+
+@app.get("/api/item-pesos/modelo")
+def baixar_modelo_de_itens(operador: Operador = Depends(obter_operador_atual)):
+    """Modelo de CSV para importar vários itens (colunas id_sku, reference_code, nome, peso_kg, fonte, confianca; 2 exemplos)."""
+    return StreamingResponse(
+        io.BytesIO(item_pesos_importacao.gerar_modelo_csv()),
+        headers={"Content-Disposition": 'attachment; filename="modelo_itens_pesos.csv"'},
+        media_type="text/csv; charset=utf-8",
+    )
+
+
+@app.post("/api/item-pesos/importar/validar")
+async def validar_importacao_de_itens(file: UploadFile = File(...), operador: Operador = Depends(obter_operador_atual)):
+    """
+    Etapa 1 da importação: valida o arquivo e devolve o RELATÓRIO (novos, já existentes, sem peso, inválidos, linha e motivo de cada
+    erro). Não grava nada e não guarda o arquivo. O banco só é consultado se houver linha válida.
+    """
+    lote, validas, erros = await _ler_arquivo_de_itens(file)
+    existentes = await _com_conexao_pesos(item_pesos_importacao.ler_existentes) if validas else None
+    return item_pesos_importacao.relatorio(lote, validas, erros, existentes)
+
+
+@app.post("/api/item-pesos/importar/confirmar")
+async def confirmar_importacao_de_itens(
+    file: UploadFile = File(...),
+    atualizar_existentes: bool = Form(False),
+    incluir_sem_peso: bool = Form(True),
+    operador: Operador = Depends(obter_operador_atual),
+):
+    """
+    Etapa 2: o arquivo vem de novo e é REVALIDADO aqui (nada ficou guardado); grava numa transação só as linhas válidas. Item que já
+    existe é ignorado, salvo "atualizar_existentes", que nunca sobrescreve um peso editado por operador. Registra quem importou e quando.
+    """
+    _, validas, erros = await _ler_arquivo_de_itens(file)
+    if not validas:
+        raise HTTPException(status_code=422, detail="Não há itens válidos para importar neste arquivo.")
+    rotulo = _rotulo_do_operador(operador)
+    resultado = await _com_conexao_pesos(lambda c: item_pesos_importacao.importar(c, validas, atualizar_existentes, incluir_sem_peso, rotulo))
+    resultado["invalidos"] = len(erros)
+    return resultado
 
 
 @app.post("/api/item-pesos/skus-vistos")

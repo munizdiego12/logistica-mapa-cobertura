@@ -2,7 +2,10 @@
 // Qualquer operador logado pode editar; o sistema guarda quem alterou e quando.
 // O peso é só uma informação para o operador: o sistema nunca bloqueia nem avisa por capacidade.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { X, Search, Loader2, Save, AlertCircle, CheckCircle2, Scale, RotateCcw } from 'lucide-react';
+import { X, Search, Loader2, Save, AlertCircle, CheckCircle2, Scale, RotateCcw, Plus, Download, Upload } from 'lucide-react';
+import NovoItemPeso from './NovoItemPeso';
+import ImportarPesos from './ImportarPesos';
+import { baixarBlob } from '../services/download';
 
 const POR_PAGINA = 50;
 const CONFIANCAS = [
@@ -136,6 +139,11 @@ export default function PesosItens({ api, onFechar, onSessaoExpirada }) {
   const [erro, setErro] = useState('');
   const [resumo, setResumo] = useState(null);
   const [aviso, setAviso] = useState('');
+  const [mostrarNovo, setMostrarNovo] = useState(false);
+  const [importacao, setImportacao] = useState(null); // { arquivo, relatorio } à espera de o operador confirmar
+  const [validando, setValidando] = useState(false);
+  const [versao, setVersao] = useState(0); // muda quando a lista precisa ser recarregada (depois de importar)
+  const entradaDoArquivo = useRef(null);
   const geracao = useRef(0); // identifica a consulta atual: respostas de consultas antigas são descartadas
 
   // O App recria o logout a cada renderização: guardá-lo numa ref mantém a carga estável (sem refazer a consulta).
@@ -155,12 +163,13 @@ export default function PesosItens({ api, onFechar, onSessaoExpirada }) {
   }, [api]);
 
   const buscarPagina = useCallback(async (deslocamento) => {
+    void versao; // a lista é recarregada quando `versao` muda (depois de importar)
     const params = { limite: POR_PAGINA, deslocamento };
     if (aba === 'fila' && !buscaAplicada) {
       return (await api.get('/item-pesos/fila-sem-peso', { params })).data;
     }
     return (await api.get('/item-pesos', { params: { ...params, busca: buscaAplicada || undefined, somente_sem_peso: aba === 'fila' } })).data;
-  }, [api, aba, buscaAplicada]);
+  }, [api, aba, buscaAplicada, versao]);
 
   // Resumo na abertura.
   useEffect(() => {
@@ -249,6 +258,57 @@ export default function PesosItens({ api, onFechar, onSessaoExpirada }) {
     }
   };
 
+  // Novo item: aparece na lista (busca pelo código) e, se não tiver peso, também na fila "sem peso".
+  const itemCriado = (item) => {
+    setMostrarNovo(false);
+    setItens([]);
+    setCarregando(true);
+    setAba('todos');
+    setBusca(item.id_sku);
+    setBuscaAplicada(item.id_sku);
+    atualizarResumo();
+    mostrarAviso(item.peso_kg === null ? `"${item.nome}" criado. Ele está na fila "sem peso".` : `"${item.nome}" criado.`);
+  };
+
+  const baixarModelo = async () => {
+    try {
+      const resposta = await api.get('/item-pesos/modelo', { responseType: 'blob' });
+      baixarBlob(resposta.data, 'modelo_itens_pesos.csv');
+    } catch (err) {
+      setErro(tratarErro(err, 'Não foi possível baixar o modelo agora. Tente de novo.'));
+    }
+  };
+
+  // Etapa 1 da importação: o servidor valida e devolve o relatório; nada é gravado nem guardado.
+  const escolherArquivo = async (e) => {
+    const arquivo = e.target.files?.[0];
+    e.target.value = '';
+    if (!arquivo) return;
+    setValidando(true);
+    setErro('');
+    setMostrarNovo(false);
+    try {
+      const corpo = new FormData();
+      corpo.append('file', arquivo);
+      const { data } = await api.post('/item-pesos/importar/validar', corpo);
+      setImportacao({ arquivo, relatorio: data });
+    } catch (err) {
+      setImportacao(null);
+      setErro(tratarErro(err, 'Não foi possível ler o arquivo. Use o modelo (botão "Baixar modelo").'));
+    } finally {
+      setValidando(false);
+    }
+  };
+
+  const importado = (texto) => {
+    setImportacao(null);
+    atualizarResumo();
+    setItens([]);
+    setCarregando(true);
+    setVersao((v) => v + 1);
+    mostrarAviso(texto);
+  };
+
   const trocarAba = (nova) => {
     if (nova === aba) return;
     setItens([]);
@@ -282,6 +342,28 @@ export default function PesosItens({ api, onFechar, onSessaoExpirada }) {
               <span className="px-2 py-1 rounded bg-emerald-950/40 border border-emerald-500/30 text-emerald-300">{resumo.com_peso.toLocaleString('pt-BR')} com peso</span>
               <span className="px-2 py-1 rounded bg-amber-950/40 border border-amber-500/30 text-amber-300">{resumo.sem_peso.toLocaleString('pt-BR')} sem peso</span>
             </div>
+          )}
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button onClick={() => { setMostrarNovo((v) => !v); setImportacao(null); }}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold">
+              <Plus className="w-3.5 h-3.5" /> Novo item
+            </button>
+            <button onClick={baixarModelo}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-700 text-slate-200 hover:bg-slate-800 text-xs font-semibold">
+              <Download className="w-3.5 h-3.5" /> Baixar modelo
+            </button>
+            <button onClick={() => entradaDoArquivo.current?.click()} disabled={validando} title="Aceita arquivos .csv e .xlsx"
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-700 text-slate-200 hover:bg-slate-800 disabled:opacity-40 text-xs font-semibold">
+              {validando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />} Importar CSV
+            </button>
+            <input ref={entradaDoArquivo} type="file" accept=".csv,.xlsx" onChange={escolherArquivo} className="hidden" aria-label="Arquivo de itens para importar" />
+          </div>
+
+          {mostrarNovo && <NovoItemPeso api={api} onCriado={itemCriado} onFechar={() => setMostrarNovo(false)} tratarErro={tratarErro} />}
+          {importacao && (
+            <ImportarPesos api={api} arquivo={importacao.arquivo} relatorio={importacao.relatorio} onImportado={importado}
+              onCancelar={() => setImportacao(null)} tratarErro={tratarErro} />
           )}
 
           <div className="flex flex-wrap items-center gap-2">

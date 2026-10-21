@@ -1,11 +1,9 @@
-// Lista de pedidos do lote (Etapa 7): filtro por loja e data, busca, seleção (caixa de marcar), paginação e o que vai para a
-// roteirização. Sem dependências, para ser testável com o `node --test`. O lote vive só na memória da tela (é temporário, descartado
+// Lista de pedidos do lote (Etapa 7): filtro por loja, busca, seleção (caixa de marcar), paginação e o que vai para a
+// roteirização. A data de entrega NÃO filtra nem muda nada (decisão do operador): é só informação opcional mostrada junto do pedido. Sem dependências, para ser testável com o `node --test`. O lote vive só na memória da tela (é temporário, descartado
 // depois do uso). Cliente e endereço nunca vão para console, log nem mensagem: aqui só se filtra e se separa.
 import { normalizarBusca } from './lojas.js';
 
 export const MSG_ERRO_ENDERECO = 'Erro ao tentar encontrar endereço do pedido';
-export const TODAS_AS_DATAS = '';
-export const SEM_DATA = '__sem_data__';
 export const TAMANHO_PAGINA = 50;
 
 /** O pedido vale para a loja escolhida? Sem loja escolhida, ou pedido sem loja no arquivo, vale para qualquer uma. */
@@ -13,22 +11,6 @@ export function pedidoDaLoja(pedido, lojaId) {
   if (lojaId === null || lojaId === undefined) return true;
   if (pedido.loja_id === null || pedido.loja_id === undefined) return true;
   return pedido.loja_id === lojaId;
-}
-
-/** Datas de entrega do lote (ISO), em ordem. Sem nenhuma data, devolve lista vazia (e a tela mostra tudo). */
-export function datasDoLote(pedidos) {
-  return [...new Set(pedidos.map((p) => p.data_entrega).filter(Boolean))].sort();
-}
-
-/** Há pedidos sem data de entrega neste lote? (a tela oferece "Sem data" quando também há datas) */
-export function temPedidoSemData(pedidos) {
-  return pedidos.some((p) => !p.data_entrega);
-}
-
-export function pedidoNaData(pedido, data) {
-  if (data === TODAS_AS_DATAS || data === null || data === undefined) return true;
-  if (data === SEM_DATA) return !pedido.data_entrega;
-  return pedido.data_entrega === data;
 }
 
 function textoDeBusca(pedido) {
@@ -44,13 +26,13 @@ export function pedidoCasaBusca(pedido, busca) {
 }
 
 /**
- * Aplica loja, data e busca. Devolve { visiveis, foraDaLoja, naLoja }: `foraDaLoja` conta os pedidos do lote que ficaram de fora
- * por serem de outra loja (para avisar o operador) e `naLoja` os que pertencem à loja escolhida.
+ * Aplica a loja e a busca (o único filtro é o da loja). Devolve { visiveis, foraDaLoja, naLoja }: `foraDaLoja` conta os pedidos do
+ * lote que ficaram de fora por serem de outra loja (para avisar o operador) e `naLoja` os que pertencem à loja escolhida.
  */
-export function filtrarPedidos(pedidos, { lojaId = null, data = TODAS_AS_DATAS, busca = '' } = {}) {
+export function filtrarPedidos(pedidos, { lojaId = null, busca = '' } = {}) {
   const daLoja = pedidos.filter((p) => pedidoDaLoja(p, lojaId));
   return {
-    visiveis: daLoja.filter((p) => pedidoNaData(p, data) && pedidoCasaBusca(p, busca)),
+    visiveis: daLoja.filter((p) => pedidoCasaBusca(p, busca)),
     foraDaLoja: pedidos.length - daLoja.length,
     naLoja: daLoja.length,
   };
@@ -86,11 +68,32 @@ export function todosVisiveisMarcados(marcados, visiveis, comErro = new Set()) {
 }
 
 /**
- * Pedidos que entram no mapa e na roteirização: SÓ os marcados que valem para a loja e a data escolhidas (a busca não conta) e que
- * não estão travados por erro de endereço. Mantém a ordem do lote.
+ * Pedidos que entram no mapa e na roteirização: SÓ os marcados que valem para a loja escolhida (a busca não conta, a data nunca conta)
+ * e que não estão travados por erro de endereço. Mantém a ordem do lote.
  */
-export function pedidosParaRoteirizar(pedidos, marcados, { lojaId = null, data = TODAS_AS_DATAS, comErro = new Set() } = {}) {
-  return pedidos.filter((p) => marcados.has(p.id) && pedidoDaLoja(p, lojaId) && pedidoNaData(p, data) && !temErroDeEndereco(p, comErro));
+export function pedidosParaRoteirizar(pedidos, marcados, { lojaId = null, comErro = new Set() } = {}) {
+  return pedidos.filter((p) => marcados.has(p.id) && pedidoDaLoja(p, lojaId) && !temErroDeEndereco(p, comErro));
+}
+
+/**
+ * Contador de marcados: `entram` (marcados que vão para a roteirização) e `foraDoFiltro` (marcados de OUTRA loja, que não entram).
+ * Pedido travado por erro de endereço não conta como marcado.
+ */
+export function contarMarcados(pedidos, marcados, { lojaId = null, comErro = new Set() } = {}) {
+  const marcadosValidos = pedidos.filter((p) => marcados.has(p.id) && !temErroDeEndereco(p, comErro));
+  const entram = marcadosValidos.filter((p) => pedidoDaLoja(p, lojaId)).length;
+  return { entram, foraDoFiltro: marcadosValidos.length - entram };
+}
+
+/** Texto do contador: "12 marcados" ou "12 marcados (3 fora do filtro atual)". */
+export function textoDoContador({ entram, foraDoFiltro }) {
+  return `${entram} marcado${entram === 1 ? '' : 's'}${foraDoFiltro > 0 ? ` (${foraDoFiltro} fora do filtro atual)` : ''}`;
+}
+
+/** Aviso curto antes de executar a roteirização quando há marcados de outra loja; null se não houver. */
+export function avisoAntesDeExecutar(foraDoFiltro) {
+  if (!foraDoFiltro) return null;
+  return `${foraDoFiltro} pedido(s) marcado(s) são de outra loja e não entram nas rotas desta loja. Continuar mesmo assim?`;
 }
 
 /** Formato que o servidor de roteirização espera. Não leva cliente, complemento nem observação: só o necessário para localizar a entrega. */

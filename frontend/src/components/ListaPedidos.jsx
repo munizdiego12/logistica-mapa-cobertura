@@ -1,12 +1,13 @@
-// Lista de pedidos do lote ativo, com caixa de marcar: filtrada pela loja escolhida e pela data de entrega, com busca por id, cliente ou
+// Lista de pedidos do lote ativo, com caixa de marcar: filtrada pela loja escolhida (o único filtro), com busca por id, cliente ou
 // endereço, marcar/desmarcar todos os visíveis e paginação de 50 (lotes grandes). SÓ os pedidos marcados entram na roteirização.
+// A data de entrega, quando vem no arquivo, aparece em letra pequena junto do pedido, só como informação: nunca filtra nem muda a roteirização.
 // Pedido cujo endereço não foi localizado fica desmarcado e travado, com a mensagem combinada, até o operador corrigir o endereço.
 // Cliente e endereço só existem na memória da tela: nada vai para console, log nem armazenamento do navegador.
 import { useMemo, useState } from 'react';
 import { Search, AlertTriangle, Pencil, ChevronLeft, ChevronRight, CheckSquare, Square, Save, X } from 'lucide-react';
 import {
-  filtrarPedidos, datasDoLote, temPedidoSemData, paginar, alternarMarca, marcarVisiveis, desmarcarVisiveis, todosVisiveisMarcados,
-  temErroDeEndereco, dataParaExibir, MSG_ERRO_ENDERECO, TODAS_AS_DATAS, SEM_DATA,
+  filtrarPedidos, paginar, alternarMarca, marcarVisiveis, desmarcarVisiveis, todosVisiveisMarcados, contarMarcados, textoDoContador,
+  temErroDeEndereco, dataParaExibir, MSG_ERRO_ENDERECO,
 } from '../services/pedidos';
 
 const campo = 'w-full px-2 py-1 rounded bg-slate-950 border border-slate-700 text-slate-100 text-[11px] focus:outline-none focus:border-blue-500';
@@ -44,14 +45,13 @@ function Correcao({ pedido, aoSalvar, aoCancelar }) {
   );
 }
 
-export default function ListaPedidos({ pedidos, marcados, comErro, lojaId, lojaNome, data, aoMudarData, aoMudarMarcados, aoCorrigir }) {
+export default function ListaPedidos({ pedidos, marcados, comErro, lojaId, lojaNome, aoMudarMarcados, aoCorrigir }) {
   const [busca, setBusca] = useState('');
   const [pagina, setPagina] = useState(1);
   const [corrigindo, setCorrigindo] = useState(null);
 
-  const datas = useMemo(() => datasDoLote(pedidos), [pedidos]);
-  const semData = useMemo(() => temPedidoSemData(pedidos), [pedidos]);
-  const { visiveis, foraDaLoja, naLoja } = useMemo(() => filtrarPedidos(pedidos, { lojaId, data, busca }), [pedidos, lojaId, data, busca]);
+  const { visiveis, foraDaLoja, naLoja } = useMemo(() => filtrarPedidos(pedidos, { lojaId, busca }), [pedidos, lojaId, busca]);
+  const contagem = useMemo(() => contarMarcados(pedidos, marcados, { lojaId, comErro }), [pedidos, marcados, lojaId, comErro]);
   const paginas = paginar(visiveis, pagina);
   const marcadosVisiveis = visiveis.filter((p) => marcados.has(p.id) && !temErroDeEndereco(p, comErro)).length;
   const todos = todosVisiveisMarcados(marcados, visiveis, comErro);
@@ -62,7 +62,7 @@ export default function ListaPedidos({ pedidos, marcados, comErro, lojaId, lojaN
     <div className="space-y-2.5">
       <div className="flex items-center justify-between text-[11px]">
         <span className="font-bold uppercase tracking-wider text-slate-400">Pedidos do lote</span>
-        <span className="font-mono text-slate-300">{marcadosVisiveis} marcados de {visiveis.length} visíveis</span>
+        <span className="font-mono text-slate-300">{textoDoContador(contagem)}</span>
       </div>
 
       {lojaId !== null && foraDaLoja > 0 && (
@@ -73,13 +73,6 @@ export default function ListaPedidos({ pedidos, marcados, comErro, lojaId, lojaN
       )}
 
       <div className="grid grid-cols-1 gap-1.5">
-        {(datas.length > 0) && (
-          <select value={data} onChange={(e) => mudarFiltro(aoMudarData)(e.target.value)} aria-label="Data de entrega" className={campo}>
-            <option value={TODAS_AS_DATAS}>Todas as datas ({datas.length})</option>
-            {datas.map((d) => <option key={d} value={d}>{dataParaExibir(d)}</option>)}
-            {semData && <option value={SEM_DATA}>Sem data</option>}
-          </select>
-        )}
         <label className="relative block">
           <Search className="w-3 h-3 text-slate-500 absolute left-2 top-1/2 -translate-y-1/2" />
           <input value={busca} onChange={(e) => mudarFiltro(setBusca)(e.target.value)} placeholder="Buscar por id, cliente ou endereço"
@@ -116,9 +109,9 @@ export default function ListaPedidos({ pedidos, marcados, comErro, lojaId, lojaN
                   <p className="text-slate-300 truncate">{p.endereco}, {p.numero}{p.bairro ? ` · ${p.bairro}` : ''}</p>
                   <p className="text-slate-500">
                     {p.cidade}/{p.uf}{p.cep ? ` · ${p.cep}` : ''} · vol. {p.volume}
-                    {p.data_entrega ? ` · ${dataParaExibir(p.data_entrega)}` : ''}
                     {p.janela_inicio ? ` · ${p.janela_inicio}-${p.janela_fim}` : ''}
                   </p>
+                  {p.data_entrega && <p className="text-[9px] text-slate-600">Entrega: {dataParaExibir(p.data_entrega)} (só informação)</p>}
                   {erro && (
                     <p className="flex items-center gap-1 text-red-300 mt-0.5">
                       <AlertTriangle className="w-3 h-3 shrink-0" /> {MSG_ERRO_ENDERECO}

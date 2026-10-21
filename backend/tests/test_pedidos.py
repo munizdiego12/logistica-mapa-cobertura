@@ -208,7 +208,7 @@ def test_xlsx_com_titulo_acima_do_cabecalho(api):
 def test_cada_tipo_de_erro_e_reportado_com_linha_e_motivo(api, mudanca, trecho):
     cliente, _ = api
     rel = _relatorio(cliente, [_pedido(id="9"), _pedido(**{"id": "10", **mudanca})])
-    assert rel["resumo"] == {"linhas": 2, "validas": 1, "com_erro": 1, "com_aviso": 0, "sem_data": 0, "sem_loja": 0} or rel["resumo"]["com_erro"] == 1
+    assert rel["resumo"] == {"linhas": 2, "validas": 1, "com_erro": 1, "com_aviso": 1, "sem_loja": 1}  # a válida tem a loja em branco (aviso)
     assert [e["linha"] for e in rel["erros"]] == [3]
     assert any(trecho in m for m in rel["erros"][0]["motivos"]), rel["erros"]
     assert [p["id"] for p in rel["pedidos"]] == ["9"]
@@ -253,10 +253,26 @@ def test_linhas_vazias_sao_ignoradas_e_numeros_de_linha_sao_do_arquivo(api):
     assert rel["resumo"]["linhas"] == 2 and rel["erros"][0]["linha"] == 4
 
 
-def test_datas_e_contagens_do_lote(api):
+def test_data_de_entrega_e_so_informacao_opcional_validada_e_preservada(api):
     cliente, _ = api
-    rel = _relatorio(cliente, [_pedido(id="1", data_entrega="2026-10-22"), _pedido(id="2", data_entrega="2026-10-21"), _pedido(id="3", data_entrega="")])
-    assert rel["datas"] == ["2026-10-21", "2026-10-22"] and rel["resumo"]["sem_data"] == 1
+    rel = _relatorio(cliente, [_pedido(id="1", data_entrega="22/10/2026"), _pedido(id="2", data_entrega="2026-10-21"), _pedido(id="3", data_entrega="")])
+    assert rel["resumo"]["validas"] == 3 and rel["resumo"]["com_erro"] == 0
+    assert [p["data_entrega"] for p in rel["pedidos"]] == ["2026-10-22", "2026-10-21", None]  # preservada, normalizada, sem filtrar nem descartar
+    assert "datas" not in rel and "sem_data" not in rel["resumo"]  # o relatório não oferece nada para filtrar por data
+    assert not any("data" in a["motivo"] for a in rel["avisos"])  # e a falta de data nem é aviso
+
+
+def test_data_invalida_continua_sendo_erro_de_linha_em_linguagem_do_operador(api):
+    cliente, _ = api
+    rel = _relatorio(cliente, [_pedido(id="1"), _pedido(id="2", data_entrega="31/02/2026")])
+    assert [e["linha"] for e in rel["erros"]] == [3] and rel["erros"][0]["motivos"] == ["data de entrega inválida (use dd/mm/aaaa ou aaaa-mm-dd)"]
+
+
+def test_lote_sem_coluna_data_entrega_e_aceito(api):
+    cliente, _ = api
+    cab = [c for c in CAB if c != "data_entrega"]
+    rel = _relatorio(cliente, [[_pedido()[i] for i, c in enumerate(CAB) if c != "data_entrega"]], cabecalho=cab)
+    assert rel["resumo"]["validas"] == 1 and rel["pedidos"][0]["data_entrega"] is None and "data_entrega" in rel["colunas_opcionais_ausentes"]
 
 
 # ----------------------------------------------------------------------------------------------------------

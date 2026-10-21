@@ -18,7 +18,7 @@ import SeletorLoja from './components/SeletorLoja';
 import ListaPedidos from './components/ListaPedidos';
 import RelatorioImportacao from './components/RelatorioImportacao';
 import {
-  pedidosParaRoteirizar, pedidoParaRoteirizacao, idsSemEndereco, corrigirEndereco, TODAS_AS_DATAS, MSG_ERRO_ENDERECO
+  pedidosParaRoteirizar, pedidoParaRoteirizacao, idsSemEndereco, corrigirEndereco, contarMarcados, avisoAntesDeExecutar, MSG_ERRO_ENDERECO
 } from './services/pedidos';
 import { interpretarRaio, nomeDoHub, RAIO_PADRAO_KM } from './services/lojas';
 import { API_BASE } from './config';
@@ -148,17 +148,20 @@ export default function App() {
   const hubDefinido = lojaHubId !== null || (modoEndereco && Boolean(origem.rua));
 
   // Lista de Múltiplos Arquivos/Lotes de Pedidos
-  // Cada lote: { id, nome, pedidos, marcados (Set de ids), comErro (Set de ids sem endereço localizado), data (filtro) }. Só vive na memória.
+  // Cada lote: { id, nome, pedidos, marcados (Set de ids), comErro (Set de ids sem endereço localizado) }. Só vive na memória.
   const [lotes, setLotes] = useState([]);
   const [loteAtivoId, setLoteAtivoId] = useState(null);
   const [resultado, setResultado] = useState(null);
   const [relatorioPendente, setRelatorioPendente] = useState(null); // { nome, relatorio } à espera de o operador aceitar
 
   const loteSelecionado = lotes.find(l => l.id === loteAtivoId);
-  // Só os pedidos MARCADOS, da loja e da data escolhidas, e sem erro de endereço, entram na roteirização.
+  // Só os pedidos MARCADOS, da loja escolhida e sem erro de endereço, entram na roteirização. A data de entrega nunca filtra.
   const pedidosAtivos = loteSelecionado
-    ? pedidosParaRoteirizar(loteSelecionado.pedidos, loteSelecionado.marcados, { lojaId: lojaHubId, data: loteSelecionado.data, comErro: loteSelecionado.comErro })
+    ? pedidosParaRoteirizar(loteSelecionado.pedidos, loteSelecionado.marcados, { lojaId: lojaHubId, comErro: loteSelecionado.comErro })
     : [];
+  const marcadosForaDoFiltro = loteSelecionado
+    ? contarMarcados(loteSelecionado.pedidos, loteSelecionado.marcados, { lojaId: lojaHubId, comErro: loteSelecionado.comErro }).foraDoFiltro
+    : 0;
 
   const alterarLote = (id, mudanca) => setLotes((prev) => prev.map((l) => (l.id === id ? { ...l, ...(typeof mudanca === 'function' ? mudanca(l) : mudanca) } : l)));
 
@@ -207,7 +210,6 @@ export default function App() {
       pedidos: relatorio.pedidos,
       marcados: new Set(relatorio.pedidos.map((p) => p.id)),
       comErro: new Set(),
-      data: TODAS_AS_DATAS,
       dataUpload: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
     setLotes(prev => [...prev, novoLote]);
@@ -298,7 +300,7 @@ export default function App() {
       return;
     }
     if (pedidosAtivos.length === 0) {
-      alert('Marque pelo menos um pedido na lista (da loja e da data escolhidas) antes de gerar as rotas.');
+      alert('Marque pelo menos um pedido na lista (da loja escolhida) antes de gerar as rotas.');
       return;
     }
 
@@ -312,6 +314,10 @@ export default function App() {
       alert(MSG_MARQUE_MOTORISTA);
       return;
     }
+
+    // Aviso curto: marcados de outra loja não entram nas rotas desta loja.
+    const aviso = avisoAntesDeExecutar(marcadosForaDoFiltro);
+    if (aviso && !window.confirm(aviso)) return;
 
     setLoading(true);
     setProgresso({ etapa: 'Iniciando...', atual: 0, total: pedidosAtivos.length });
@@ -874,8 +880,6 @@ export default function App() {
                 comErro={loteSelecionado.comErro}
                 lojaId={lojaHubId}
                 lojaNome={lojaHub?.nome}
-                data={loteSelecionado.data}
-                aoMudarData={(data) => alterarLote(loteSelecionado.id, { data })}
                 aoMudarMarcados={(marcados) => alterarLote(loteSelecionado.id, { marcados })}
                 aoCorrigir={(id, campos) => alterarLote(loteSelecionado.id, (l) => {
                   const corrigido = corrigirEndereco(l.pedidos, l.comErro, id, campos);

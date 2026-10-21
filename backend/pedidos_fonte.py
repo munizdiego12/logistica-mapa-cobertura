@@ -3,6 +3,8 @@ Fonte de pedidos (Etapa 7): interface única para trazer um lote de pedidos de q
 validação linha a linha.
 
 Camadas:
+    0) `data_entrega` é OPCIONAL e só informativa (decisão do operador: pedidos sem filtro de data; o id identifica o pedido e o
+       operador consulta o dia na base dele): se vier preenchida o formato é validado e ela é preservada no lote, mas nada filtra por ela;
     1) uma FONTE lê a origem e devolve um `LoteBruto` (cada linha com os campos padrão, ainda como texto): hoje só `FonteArquivo`
        (CSV/XLSX enviado pelo operador). Google Sheets, Superset e BigQuery (Etapa 15) entram como novas classes com o método
        `ler()`, registradas em `FONTES`, e reaproveitam a validação;
@@ -295,8 +297,6 @@ class RelatorioLote:
     avisos: list  # [{motivo, quantidade, linhas}]
     erros_por_motivo: dict
     lojas: list  # [{loja_id, nome, quantidade}] das válidas
-    datas: list  # datas de entrega (ISO) das válidas
-    sem_data: int
     sem_loja: int
     com_aviso: int
     erros_total: int
@@ -309,7 +309,7 @@ class RelatorioLote:
             "colunas_opcionais_ausentes": self.colunas_opcionais_ausentes,
             "resumo": {
                 "linhas": self.total_linhas, "validas": len(self.pedidos), "com_erro": self.erros_total, "com_aviso": self.com_aviso,
-                "sem_data": self.sem_data, "sem_loja": self.sem_loja,
+                "sem_loja": self.sem_loja,
             },
             "pedidos": self.pedidos,
             "erros": self.erros,
@@ -317,7 +317,6 @@ class RelatorioLote:
             "erros_por_motivo": self.erros_por_motivo,
             "avisos": self.avisos,
             "lojas": self.lojas,
-            "datas": self.datas,
         }
 
 
@@ -339,8 +338,7 @@ def validar_lote(bruto: LoteBruto, lojas_cadastradas: Optional[list] = None) -> 
     primeira_linha_do_id = {}
     erros_por_motivo = Counter()
     lojas_contagem = Counter()
-    datas = set()
-    sem_data = sem_loja = com_aviso = 0
+    sem_loja = com_aviso = 0
 
     def avisar(motivo, linha):
         entrada = avisos_por_motivo.setdefault(motivo, {"motivo": motivo, "quantidade": 0, "linhas": []})
@@ -392,7 +390,7 @@ def validar_lote(bruto: LoteBruto, lojas_cadastradas: Optional[list] = None) -> 
             except ValueError:
                 motivos.append("volume inválido (use um número inteiro de 1 a 9999)")
 
-        data_entrega = None
+        data_entrega = None  # só informativa: validada e preservada, nunca filtra nem muda a roteirização
         if valor("data_entrega"):
             try:
                 data_entrega = interpretar_data(valor("data_entrega"))
@@ -444,10 +442,6 @@ def validar_lote(bruto: LoteBruto, lojas_cadastradas: Optional[list] = None) -> 
             lojas_contagem[(loja_id, loja_nome)] += 1
         elif "loja" in bruto.colunas:
             sem_loja += 1
-        if data_entrega:
-            datas.add(data_entrega)
-        else:
-            sem_data += 1
         pedidos.append({
             "linha": linha.numero, "id": id_pedido, "loja": valor("loja") or None, "loja_id": loja_id, "loja_nome": loja_nome,
             "cliente": valor("cliente") or None, "endereco": valor("endereco"), "numero": valor("numero"),
@@ -462,7 +456,7 @@ def validar_lote(bruto: LoteBruto, lojas_cadastradas: Optional[list] = None) -> 
         total_linhas=len(bruto.linhas), pedidos=pedidos, erros=erros[:MAX_ERROS_NA_RESPOSTA], avisos=list(avisos_por_motivo.values()),
         erros_por_motivo=dict(erros_por_motivo), erros_total=len(erros),
         lojas=[{"loja_id": i, "nome": n, "quantidade": q} for (i, n), q in sorted(lojas_contagem.items(), key=lambda x: x[0][1].lower())],
-        datas=sorted(datas), sem_data=sem_data, sem_loja=sem_loja, com_aviso=com_aviso,
+        sem_loja=sem_loja, com_aviso=com_aviso,
     )
 
 

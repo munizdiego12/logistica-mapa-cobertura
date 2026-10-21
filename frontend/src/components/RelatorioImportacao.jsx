@@ -15,7 +15,7 @@ function Contador({ rotulo, valor, cor }) {
 }
 
 export default function RelatorioImportacao({ nomeArquivo, relatorio, onAceitar, onCancelar }) {
-  const { resumo, erros, erros_truncados: truncados, erros_por_motivo: porMotivo, avisos, lojas, datas } = relatorio;
+  const { resumo, erros, erros_truncados: truncados, erros_por_motivo: porMotivo, avisos, lojas } = relatorio;
   const validas = resumo.validas;
   const motivos = Object.entries(porMotivo || {}).sort((a, b) => b[1] - a[1]);
 
@@ -39,11 +39,8 @@ export default function RelatorioImportacao({ nomeArquivo, relatorio, onAceitar,
             <Contador rotulo="Com erro" valor={resumo.com_erro} cor={resumo.com_erro ? 'text-red-400' : 'text-slate-500'} />
           </div>
 
-          {(lojas.length > 0 || datas.length > 0) && (
-            <p className="text-[11px] text-slate-400 leading-snug">
-              {lojas.length > 0 && <>Lojas no arquivo: {lojas.map((l) => `${l.nome} (${l.quantidade})`).join(', ')}. </>}
-              {datas.length > 0 && <>Datas de entrega: {datas.length}.</>}
-            </p>
+          {lojas.length > 0 && (
+            <p className="text-[11px] text-slate-400 leading-snug">Lojas no arquivo: {lojas.map((l) => `${l.nome} (${l.quantidade})`).join(', ')}.</p>
           )}
 
           {resumo.com_erro > 0 && (

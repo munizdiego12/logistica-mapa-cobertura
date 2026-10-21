@@ -220,7 +220,7 @@ def test_otimizar_sem_motorista_marcado_pede_a_escolha_sem_erro_tecnico(api, mon
     chamado = []
     monkeypatch.setattr(main, "_processar_otimizacao", lambda *a, **k: chamado.append(a))
     for extra in ({}, {"motorista_ids": []}, {"motorista_ids": None}):
-        corpo = {"origem_rua": "Av Paulista", "origem_num": "1", "pedidos": [{"id": 1}], **extra}
+        corpo = {"origem_rua": "Av Paulista", "origem_num": "1", "turno": "manha", "pedidos": [{"id": 1}], **extra}
         r = cliente.post("/api/otimizar", json=corpo)
         assert r.status_code == 422
         assert r.json()["detail"] == frota.MSG_ESCOLHA_UM_MOTORISTA and "Marque pelo menos um motorista" in r.json()["detail"]
@@ -233,13 +233,13 @@ def test_otimizar_usa_os_motoristas_ativos_e_ignora_frota_e_custos_do_cliente(ap
     conn.respostas = [[{"id": 5, "nome": "Ana", "ativo": True, "tipo_veiculo": "Fiorino/Utilitário", "valor_rota": None, "custo_rota": Decimal("260.00"), "peso_referencia_kg": None}]]
     capturado = {}
 
-    async def falso(job_id, req, frota_usar, valores_informados=None, loja=None):
+    async def falso(job_id, req, frota_usar, valores_informados=None, loja=None, contexto=None):
         capturado["frota"] = frota_usar
         capturado["req"] = req
         capturado["valores"] = valores_informados
 
     monkeypatch.setattr(main, "_processar_otimizacao", falso)
-    corpo = {"origem_rua": "Av Paulista", "origem_num": "1", "pedidos": [{"id": 1}], "motorista_ids": [5],
+    corpo = {"origem_rua": "Av Paulista", "origem_num": "1", "turno": "manha", "pedidos": [{"id": 1}], "motorista_ids": [5],
              "frota": [{"id": 1, "motorista": "Motorista 01", "modal": "Carro de Passeio"}],  # cliente antigo: ignorado
              "preco_gasolina": 9.9, "custo_hora": 99}
     r = cliente.post("/api/otimizar", json=corpo)
@@ -367,11 +367,11 @@ def test_otimizar_repassa_os_valores_informados_e_ignora_os_vazios(api, monkeypa
     conn.respostas = [[{"id": 5, "nome": "Ana", "ativo": True, "tipo_veiculo": "Fiorino/Utilitário", "valor_rota": None, "custo_rota": Decimal("260.00"), "peso_referencia_kg": None}]]
     capturado = {}
 
-    async def falso(job_id, req, frota_usar, valores_informados=None, loja=None):
+    async def falso(job_id, req, frota_usar, valores_informados=None, loja=None, contexto=None):
         capturado["valores"] = valores_informados
 
     monkeypatch.setattr(main, "_processar_otimizacao", falso)
-    corpo = {"origem_rua": "Av Paulista", "origem_num": "1", "pedidos": [{"id": 1}], "motorista_ids": [5],
+    corpo = {"origem_rua": "Av Paulista", "origem_num": "1", "turno": "manha", "pedidos": [{"id": 1}], "motorista_ids": [5],
              "valores_por_rota": {"Carro de passeio": "", "Fiorino/Utilitário": "300,50"}}
     assert cliente.post("/api/otimizar", json=corpo).status_code == 200
     assert capturado["valores"] == {"fiorino/utilitário": Decimal("300.50")}
@@ -382,11 +382,11 @@ def test_otimizar_sem_o_campo_nao_informa_nada(api, monkeypatch):
     conn.respostas = [[{"id": 5, "nome": "Ana", "ativo": True, "tipo_veiculo": "Carro de passeio", "valor_rota": None, "custo_rota": Decimal("130.00"), "peso_referencia_kg": None}]]
     capturado = {}
 
-    async def falso(job_id, req, frota_usar, valores_informados=None, loja=None):
+    async def falso(job_id, req, frota_usar, valores_informados=None, loja=None, contexto=None):
         capturado["valores"] = valores_informados
 
     monkeypatch.setattr(main, "_processar_otimizacao", falso)
-    assert cliente.post("/api/otimizar", json={"origem_rua": "A", "origem_num": "1", "pedidos": [{"id": 1}], "motorista_ids": [5]}).status_code == 200
+    assert cliente.post("/api/otimizar", json={"origem_rua": "A", "origem_num": "1", "turno": "manha", "pedidos": [{"id": 1}], "motorista_ids": [5]}).status_code == 200
     assert capturado["valores"] == {}
 
 
@@ -400,7 +400,7 @@ def test_otimizar_com_valor_negativo_ou_texto_devolve_422_e_nao_cria_o_calculo(a
     cliente, conn = api
     criados = []
     monkeypatch.setattr(main, "_processar_otimizacao", lambda *a, **k: criados.append(a))
-    r = cliente.post("/api/otimizar", json={"origem_rua": "A", "origem_num": "1", "pedidos": [{"id": 1}], "valores_por_rota": valores})
+    r = cliente.post("/api/otimizar", json={"origem_rua": "A", "origem_num": "1", "turno": "manha", "pedidos": [{"id": 1}], "valores_por_rota": valores})
     assert r.status_code == 422 and trecho in r.json()["detail"]
     assert criados == [] and conn.chamadas == []
 
@@ -509,11 +509,11 @@ def test_otimizar_leva_o_valor_proprio_do_motorista_para_o_calculo(api, monkeypa
                        {"id": 2, "nome": "Ana", "ativo": True, "tipo_veiculo": "Fiorino/Utilitário", "valor_rota": None, "custo_rota": Decimal("260.00"), "peso_referencia_kg": None}]]
     capturado = {}
 
-    async def falso(job_id, req, frota_usar, valores_informados=None, loja=None):
+    async def falso(job_id, req, frota_usar, valores_informados=None, loja=None, contexto=None):
         capturado["frota"] = frota_usar
 
     monkeypatch.setattr(main, "_processar_otimizacao", falso)
-    assert cliente.post("/api/otimizar", json={"origem_rua": "A", "origem_num": "1", "pedidos": [{"id": 1}], "motorista_ids": [1, 2]}).status_code == 200
+    assert cliente.post("/api/otimizar", json={"origem_rua": "A", "origem_num": "1", "turno": "manha", "pedidos": [{"id": 1}], "motorista_ids": [1, 2]}).status_code == 200
     assert [(m.motorista, m.custo_rota, m.valor_motorista) for m in capturado["frota"]] == [("João", 130.0, 150.0), ("Ana", 260.0, None)]
 
 

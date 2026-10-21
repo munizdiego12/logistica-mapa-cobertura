@@ -278,7 +278,7 @@ def test_api_otimizar_recusa_motorista_inativo_ou_inexistente_com_422(api, monke
     cliente, banco = api
     criados = []
     monkeypatch.setattr(main, "_processar_otimizacao", lambda *a, **k: criados.append(a))
-    base = {"origem_rua": "Av Paulista", "origem_num": "1", "pedidos": [{"id": 1}]}
+    base = {"origem_rua": "Av Paulista", "origem_num": "1", "turno": "manha", "pedidos": [{"id": 1}]}
     r = cliente.post("/api/otimizar", json={**base, "motorista_ids": [banco.joao, banco.inativo]})
     assert r.status_code == 422 and "Pedro está desativado" in r.json()["detail"]
     r = cliente.post("/api/otimizar", json={**base, "motorista_ids": [banco.joao, 9999]})
@@ -292,11 +292,11 @@ def test_api_otimizar_so_leva_os_motoristas_marcados(api, monkeypatch):
     cliente, banco = api
     capturado = {}
 
-    async def falso(job_id, req, frota_usar, valores_informados=None, loja=None):
+    async def falso(job_id, req, frota_usar, valores_informados=None, loja=None, contexto=None):
         capturado["frota"] = frota_usar
 
     monkeypatch.setattr(main, "_processar_otimizacao", falso)
-    r = cliente.post("/api/otimizar", json={"origem_rua": "A", "origem_num": "1", "pedidos": [{"id": 1}], "motorista_ids": [banco.ana]})
+    r = cliente.post("/api/otimizar", json={"origem_rua": "A", "origem_num": "1", "turno": "manha", "pedidos": [{"id": 1}], "motorista_ids": [banco.ana]})
     assert r.status_code == 200
     assert [(m.id, m.motorista, m.modal) for m in capturado["frota"]] == [(banco.ana, "Ana", "Carro de passeio")]  # João não foi marcado
 
@@ -332,15 +332,15 @@ def test_resultado_traz_o_motorista_de_cada_rota_a_execucao_e_os_motoristas_real
     frota_usar = [main.MotoristaItem(id=7, motorista="João", modal="Carro de passeio", custo_rota=130.0),
                   main.MotoristaItem(id=8, motorista="Ana", modal="Fiorino/Utilitário", custo_rota=260.0),
                   main.MotoristaItem(id=9, motorista="Beto", modal="Carro de passeio", custo_rota=130.0)]
-    # Só 8 pedidos com 4 por viagem: duas viagens bastam e o terceiro motorista não é usado.
+    # 8 pedidos e 3 motoristas marcados: o equilíbrio (Etapa 8) usa todos os motoristas marcados quando há pedidos para isso.
     resultado = _roteirizar(monkeypatch, frota_usar, {"Carro de passeio": {"capacidade": 4}, "Fiorino/Utilitário": {"capacidade": 4}})
     assert resultado["execucao_id"] == "t5b"
     assert resultado["loja_hub"] == "Av Paulista, 1 - Bela Vista"
     assert all(r["motorista_id"] in (7, 8, 9) for r in resultado["rotas"])
     usados = {r["motorista_id"] for r in resultado["rotas"]}
-    assert 9 not in usados and usados == {7, 8}
-    assert resultado["kpis"]["total_motoristas"] == resultado["kpis"]["total_veiculos"] == 2
-    assert resultado["kpis"]["total_rotas_viagens"] == len(resultado["rotas"]) == 2
+    assert usados == {7, 8, 9}
+    assert resultado["kpis"]["total_motoristas"] == resultado["kpis"]["total_veiculos"] == 3
+    assert resultado["kpis"]["total_rotas_viagens"] == len(resultado["rotas"]) == 3
 
 
 def test_um_motorista_com_duas_viagens_conta_duas_rotas_e_um_motorista(monkeypatch):

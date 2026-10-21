@@ -487,17 +487,17 @@ def test_otimizar_com_loja_valida_loja_ativa_e_motoristas(api, monkeypatch):
     motorista = banco.inserir_motorista("Ana", "Carro de passeio")
     capturado = {}
 
-    async def falso(job_id, req, frota_usar, valores_informados=None, loja=None):
+    async def falso(job_id, req, frota_usar, valores_informados=None, loja=None, contexto=None):
         capturado["loja"] = loja
 
     monkeypatch.setattr(main, "_processar_otimizacao", falso)
-    corpo = {"loja_id": id_loja, "pedidos": [{"id": 1}], "motorista_ids": [motorista]}
+    corpo = {"loja_id": id_loja, "turno": "manha", "pedidos": [{"id": 1}], "motorista_ids": [motorista]}
     assert cliente.post("/api/otimizar", json=corpo).status_code == 200
     assert capturado["loja"]["nome"] == "Atacadão Guarujá" and capturado["loja"]["lat"] == -23.993
     cliente.put(f"/api/lojas/{id_loja}", json={**CORPO, "ativo": False})
     r = cliente.post("/api/otimizar", json=corpo)
     assert r.status_code == 422 and r.json()["detail"] == lojas.MSG_INATIVA
-    r = cliente.post("/api/otimizar", json={"pedidos": [{"id": 1}], "motorista_ids": [motorista]})
+    r = cliente.post("/api/otimizar", json={"turno": "manha", "pedidos": [{"id": 1}], "motorista_ids": [motorista]})
     assert r.status_code == 422 and "Escolha uma loja" in r.json()["detail"]
 
 

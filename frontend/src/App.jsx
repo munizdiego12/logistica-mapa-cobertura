@@ -18,6 +18,10 @@ import SeletorLoja from './components/SeletorLoja';
 import ListaPedidos from './components/ListaPedidos';
 import RelatorioImportacao from './components/RelatorioImportacao';
 import {
+  TURNOS, interpretarTempoPorParada, podeExecutar, textoDeConfirmacao, textoDosSetores, avisosOrdenados, distanciasEmLinhaReta, formatarMinutos,
+  MSG_ESCOLHA_O_TURNO, TEMPO_POR_PARADA_PADRAO_MIN
+} from './services/roteirizacao';
+import {
   pedidosParaRoteirizar, pedidoParaRoteirizacao, idsSemEndereco, corrigirEndereco, contarMarcados, avisoAntesDeExecutar, MSG_ERRO_ENDERECO
 } from './services/pedidos';
 import { interpretarRaio, nomeDoHub, RAIO_PADRAO_KM } from './services/lojas';
@@ -88,6 +92,9 @@ export default function App() {
   const [loadingCeps, setLoadingCeps] = useState(false);
   const [dadosCoberturaCeps, setDadosCoberturaCeps] = useState(null);
   const [progresso, setProgresso] = useState(null); // { etapa, atual, total } | null
+  // Turno ESCOLHIDO À MÃO pelo operador (nunca inferido do relógio) e tempo parado em cada entrega.
+  const [turno, setTurno] = useState('');
+  const [tempoPorParada, setTempoPorParada] = useState(String(TEMPO_POR_PARADA_PADRAO_MIN));
 
   // Painel de Configuração de Capacidades Variáveis por Loja
   const [mostrarConfigModais, setMostrarConfigModais] = useState(false);
@@ -315,9 +322,21 @@ export default function App() {
       return;
     }
 
+    if (!turno) {
+      alert(MSG_ESCOLHA_O_TURNO);
+      return;
+    }
+    const tempo = interpretarTempoPorParada(tempoPorParada);
+    if (!tempo.ok) {
+      alert(tempo.mensagem);
+      return;
+    }
+
     // Aviso curto: marcados de outra loja não entram nas rotas desta loja.
     const aviso = avisoAntesDeExecutar(marcadosForaDoFiltro);
     if (aviso && !window.confirm(aviso)) return;
+    // Confirmação curta antes de rodar.
+    if (!window.confirm(textoDeConfirmacao({ turno, loja: lojaHub?.nome, pedidos: pedidosAtivos.length, motoristas: selecionados.length }))) return;
 
     setLoading(true);
     setProgresso({ etapa: 'Iniciando...', atual: 0, total: pedidosAtivos.length });
@@ -331,6 +350,8 @@ export default function App() {
           : { origem_rua: origem.rua, origem_num: origem.numero, origem_bairro: origem.bairro, origem_cep: origem.cep }),
         modais_config: modais,
         motorista_ids: selecionados,
+        turno,
+        tempo_por_parada_min: tempo.valor,
         pedidos: pedidosAtivos.map(pedidoParaRoteirizacao)
       });
 
@@ -992,14 +1013,35 @@ export default function App() {
                 </div>
               </div>
             )}
+            <div className="space-y-1.5 p-2.5 rounded-lg bg-slate-950/60 border border-slate-800">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Turno (escolha obrigatória)</p>
+              <div className="flex rounded-lg overflow-hidden border border-slate-700 text-xs font-semibold" role="radiogroup" aria-label="Turno">
+                {TURNOS.map((t) => (
+                  <button key={t.valor} type="button" role="radio" aria-checked={turno === t.valor} onClick={() => setTurno(t.valor)}
+                    className={`flex-1 px-2 py-1.5 ${turno === t.valor ? 'bg-blue-600 text-white' : 'bg-slate-900 text-slate-300 hover:bg-slate-800'}`}>
+                    {t.rotulo} <span className="block text-[9px] font-normal opacity-70">{t.janela}</span>
+                  </button>
+                ))}
+              </div>
+              <label className="flex items-center justify-between gap-2 text-[11px] text-slate-400">
+                Tempo por parada (min)
+                <input type="text" inputMode="numeric" value={tempoPorParada} onChange={(e) => setTempoPorParada(e.target.value)} aria-label="Tempo por parada em minutos"
+                  className="w-16 px-2 py-1 rounded bg-slate-950 border border-slate-700 text-slate-100 text-xs font-mono text-right focus:outline-none focus:border-blue-500" />
+              </label>
+            </div>
             <button
               onClick={handleOtimizar}
-              disabled={loading || pedidosAtivos.length === 0 || !hubDefinido || !podeExecutarComMotoristas(selecionados)}
+              disabled={loading || !podeExecutar({ hubDefinido, pedidos: pedidosAtivos.length, motoristas: selecionados.length, turno, tempoPorParada }).ok}
               className="w-full py-3.5 bg-blue-600 hover:bg-blue-500 active:scale-[0.99] transition-all rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-blue-600/25 text-white disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4 fill-current" />}
               {loading ? (progresso ? progresso.etapa : 'Agrupando Polígonos & Otimizando...') : 'Executar Roteirização'}
             </button>
+            {!loading && !turno && pedidosAtivos.length > 0 && hubDefinido && podeExecutarComMotoristas(selecionados) && (
+              <p className="flex items-center gap-1.5 text-[11px] text-amber-300">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {MSG_ESCOLHA_O_TURNO}
+              </p>
+            )}
             {frotaCarregada && motoristas.length > 0 && !podeExecutarComMotoristas(selecionados) && (
               <p className="flex items-center gap-1.5 text-[11px] text-amber-300">
                 <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {MSG_MARQUE_MOTORISTA}
@@ -1143,6 +1185,23 @@ export default function App() {
             </div>
           )}
 
+          {/* Avisos da roteirização (Etapa 8): distâncias em linha reta, rotação de região, viagens extras, motoristas sem rota... */}
+          {resultado && distanciasEmLinhaReta(resultado) && (
+            <p className="flex items-center gap-2 text-[11px] text-amber-300 bg-amber-950/20 border border-amber-500/30 rounded-lg px-3 py-2">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> Distâncias e tempos em linha reta (estimativa): não foi possível consultar as ruas.
+            </p>
+          )}
+          {resultado && avisosOrdenados(resultado.avisos).length > 0 && (
+            <div className="bg-slate-900/50 border border-slate-800/80 rounded-xl p-4 space-y-1.5" aria-label="Avisos da roteirização">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Avisos</p>
+              {avisosOrdenados(resultado.avisos).map((a, i) => (
+                <p key={`${a.tipo}-${i}`} className={`text-[11px] rounded px-2.5 py-1.5 ${a.gravidade === 'atencao' ? 'text-amber-200 bg-amber-950/20' : 'text-slate-300 bg-slate-950/50'}`}>
+                  {a.mensagem}
+                </p>
+              ))}
+            </div>
+          )}
+
           {/* Visualizador do Mapa */}
           <div className="bg-slate-900/50 border border-slate-800/80 p-4 rounded-xl">
             <div className="flex items-center justify-between mb-3 px-1">
@@ -1195,6 +1254,7 @@ export default function App() {
                       <th className="p-3.5 font-semibold">Despacho / Motorista</th>
                       <th className="p-3.5 font-semibold">Veículo</th>
                       <th className="p-3.5 font-semibold">Entregas</th>
+                      <th className="p-3.5 font-semibold">Setores</th>
                       <th className="p-3.5 font-semibold">Quilometragem</th>
                       <th className="p-3.5 font-semibold">Tempo</th>
                       <th className="p-3.5 font-semibold text-right">Navegação</th>
@@ -1225,6 +1285,10 @@ export default function App() {
                             )}
                           </div>
                         </td>
+                        <td className="p-3.5 text-slate-300 font-sans" title={(r.violacoes_rotacao || []).length ? 'Região em que o motorista já fez rota hoje em outro turno (veja os avisos).' : undefined}>
+                          {textoDosSetores(r.setores)}
+                          {(r.violacoes_rotacao || []).length > 0 && <AlertTriangle className="inline w-3.5 h-3.5 ml-1 text-amber-400" />}
+                        </td>
                         <td className="p-3.5 text-slate-300">
                           <div className="flex items-center gap-2">
                             {r.km_total} km
@@ -1238,7 +1302,7 @@ export default function App() {
                             )}
                           </div>
                         </td>
-                        <td className="p-3.5 text-slate-400">{r.tempo_formatado}</td>
+                        <td className="p-3.5 text-slate-400" title={r.tempo_min !== undefined ? `Deslocamento ${formatarMinutos(r.tempo_deslocamento_min)} + paradas ${formatarMinutos(r.tempo_paradas_min)}` : undefined}>{r.tempo_formatado}</td>
                         <td className="p-3.5 text-right font-sans">
                           <a
                             href={r.link_maps}

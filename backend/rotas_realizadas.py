@@ -43,6 +43,26 @@ async def contagem_do_dia(conn, dia: date) -> dict:
     return {int(l["motorista_id"]): int(l["rotas"]) for l in linhas}
 
 
+async def setores_do_dia(conn, dia: date, turno: str) -> dict:
+    """
+    Regra de rotação (Etapa 8): {motorista_id: {setor: [turnos]}} com os setores que cada motorista já fez no dia em OUTROS turnos
+    (rotas confirmadas, com turno e setores gravados; rotas antigas sem setores não entram). O turno igual ao pedido não conta.
+    """
+    linhas = await conn.fetch(
+        "SELECT motorista_id, turno, setores FROM rotas_realizadas "
+        "WHERE data = $1 AND status = 'confirmada' AND turno IS NOT NULL AND turno <> $2 AND setores IS NOT NULL",
+        dia, turno,
+    )
+    por_motorista = {}
+    for l in linhas:
+        for setor in str(l["setores"]).replace(" ", "").split(","):
+            if setor:
+                turnos = por_motorista.setdefault(int(l["motorista_id"]), {}).setdefault(setor, [])
+                if l["turno"] not in turnos:
+                    turnos.append(l["turno"])
+    return por_motorista
+
+
 async def resumo_da_execucao(conn, execucao_id: str, dia: date) -> list:
     """Para cada motorista da execução: rotas confirmadas nela agora e total confirmado no dia (todas as execuções)."""
     linhas = await conn.fetch(
@@ -71,13 +91,15 @@ async def confirmar(conn, execucao_id: str, rotas: list, dia: date, loja_hub: Op
     async with conn.transaction():
         for rota in rotas:
             linha = await conn.fetchrow(
-                "INSERT INTO rotas_realizadas (execucao_id, numero_rota, motorista_id, data, loja_hub, turno, qtd_pedidos, distancia_km, status, criado_por) "
-                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'confirmada', $9) "
-                "ON CONFLICT (execucao_id, numero_rota) DO UPDATE SET status = 'confirmada', criado_em = CURRENT_TIMESTAMP, criado_por = EXCLUDED.criado_por "
+                "INSERT INTO rotas_realizadas (execucao_id, numero_rota, motorista_id, data, loja_hub, turno, qtd_pedidos, distancia_km, status, criado_por, setores) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'confirmada', $9, $10) "
+                "ON CONFLICT (execucao_id, numero_rota) DO UPDATE SET status = 'confirmada', criado_em = CURRENT_TIMESTAMP, criado_por = EXCLUDED.criado_por, "
+                "turno = EXCLUDED.turno, setores = EXCLUDED.setores "
                 "WHERE rotas_realizadas.status = 'cancelada' "
                 "RETURNING id",
                 execucao_id, int(rota["numero_rota"]), int(rota["motorista_id"]), dia, loja_hub, turno,
                 int(rota.get("qtd_pedidos") or 0), round(float(rota.get("distancia_km") or 0), 2), rotulo_operador,
+                (rota.get("setores") or None),
             )
             if linha is not None:
                 novas += 1

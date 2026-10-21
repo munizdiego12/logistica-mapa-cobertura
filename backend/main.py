@@ -26,8 +26,11 @@ import item_pesos
 import item_pesos_importacao
 import frota
 import lojas
+import matriz
 import pedidos_fonte
+import roteirizacao
 import rotas_realizadas
+import setores as modulo_setores
 from logistica.costs import calcular_custo_rota
 from database import get_db, Operador, init_db
 from config import OPERATOR_INVITE_CODE
@@ -540,46 +543,6 @@ def exportar_tabela_frete_xlsx(req: ExportarXlsxRequest):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-def dist_coords(c1, c2):
-    return math.sqrt((c1[0] - c2[0])**2 + (c1[1] - c2[1])**2)
-
-def ordenar_paradas_otimizadas(origem_coords, lista_pedidos):
-    if len(lista_pedidos) <= 1:
-        return lista_pedidos
-
-    nao_visitados = list(lista_pedidos)
-    rota_ordenada = []
-    ponto_atual = origem_coords
-
-    while nao_visitados:
-        proximo = min(nao_visitados, key=lambda p: dist_coords(ponto_atual, (p['lat'], p['lon'])))
-        rota_ordenada.append(proximo)
-        ponto_atual = (proximo['lat'], proximo['lon'])
-        nao_visitados.remove(proximo)
-
-    melhorou = True
-    while melhorou:
-        melhorou = False
-        n = len(rota_ordenada)
-        for i in range(n - 1):
-            for j in range(i + 1, n):
-                p_ant = origem_coords if i == 0 else (rota_ordenada[i-1]['lat'], rota_ordenada[i-1]['lon'])
-                p_i = (rota_ordenada[i]['lat'], rota_ordenada[i]['lon'])
-                p_j = (rota_ordenada[j]['lat'], rota_ordenada[j]['lon'])
-                p_prox = origem_coords if j == n - 1 else (rota_ordenada[j+1]['lat'], rota_ordenada[j+1]['lon'])
-
-                dist_atual = dist_coords(p_ant, p_i) + dist_coords(p_j, p_prox)
-                dist_invertida = dist_coords(p_ant, p_j) + dist_coords(p_i, p_prox)
-
-                if dist_invertida < dist_atual - 1e-6:
-                    rota_ordenada[i:j+1] = reversed(rota_ordenada[i:j+1])
-                    melhorou = True
-                    break
-            if melhorou:
-                break
-
-    return rota_ordenada
-
 async def get_osrm_route_async(client: httpx.AsyncClient, pontos):
     if len(pontos) < 2:
         return 0, 0, []
@@ -611,109 +574,10 @@ async def get_osrm_route_async(client: httpx.AsyncClient, pontos):
     tempo_min = round((dist_km / 22.0) * 60)
     return dist_km, tempo_min, geometria
 
-def montar_rotas_por_capacidade_real(origem_lat, origem_lon, pedidos, frota, modais_usar, iteracoes=5):
-    """
-    Agrupamento geográfico por CLUSTERIZAÇÃO REAL (k-means capacitado).
+async def obter_matriz(cliente, pontos):
+    """Matriz de distâncias e tempos (OSRM `table`, com reserva em linha reta e aviso). Os testes trocam esta função."""
+    return await matriz.obter_matriz(cliente, pontos)
 
-    A versão anterior ordenava os pedidos só por ÂNGULO em torno do Hub e cortava
-    essa lista 1D em fatias do tamanho da capacidade de cada veículo. Isso falha
-    quando a demanda está concentrada de forma desigual entre direções: um veículo
-    pode acabar levando uma fatia que varre metade da cidade (ex: Norte + Leste +
-    Sul), porque em ÂNGULO esses pontos são "a fatia seguinte", mesmo estando
-    fisicamente longe uns dos outros.
-
-    Esta versão usa a posição real (lat/lon) de cada pedido, agrupando por
-    proximidade física de verdade, e reajusta os grupos por algumas iterações
-    (como um k-means), sempre respeitando a capacidade exata de cada veículo —
-    nenhum grupo pode ultrapassar a capacidade do veículo que vai atendê-lo.
-    """
-    if not pedidos:
-        return []
-
-    total_pedidos = len(pedidos)
-
-    # 1. Define as "vagas de viagem" a preencher (motorista + capacidade), repetindo
-    #    a frota em rodadas até haver vagas suficientes para todos os pedidos.
-    vagas = []
-    idx_motorista = 0
-    capacidade_acumulada = 0
-    while capacidade_acumulada < total_pedidos:
-        motorista = frota[idx_motorista % len(frota)]
-        cap = max(1, modais_usar.get(motorista.modal, {'capacidade': 6}).get('capacidade', 6))
-        vagas.append([motorista, cap])
-        capacidade_acumulada += cap
-        idx_motorista += 1
-
-    n_vagas = len(vagas)
-
-    # 2. Sementes iniciais via "farthest-point sampling": escolhe pedidos REAIS
-    #    como pontos de partida (o mais distante do centro, depois o mais distante
-    #    de todas as sementes já escolhidas, e assim por diante). Isso alinha as
-    #    sementes com as regiões onde a demanda realmente está concentrada, em vez
-    #    de assumir uma distribuição uniforme em círculo — que é o que causava
-    #    zigue-zague quando a demanda real é desigual entre direções.
-    indices_disponiveis = list(range(total_pedidos))
-    primeiro = max(indices_disponiveis, key=lambda i: dist_coords((pedidos[i]['lat'], pedidos[i]['lon']), (origem_lat, origem_lon)))
-    sementes_idx = [primeiro]
-    while len(sementes_idx) < n_vagas and len(sementes_idx) < total_pedidos:
-        candidato = max(
-            indices_disponiveis,
-            key=lambda i: min(dist_coords((pedidos[i]['lat'], pedidos[i]['lon']), (pedidos[s]['lat'], pedidos[s]['lon'])) for s in sementes_idx)
-        )
-        sementes_idx.append(candidato)
-    sementes = [(pedidos[i]['lat'], pedidos[i]['lon']) for i in sementes_idx]
-    # Se houver mais vagas do que pedidos distintos para servir de semente, completa em círculo
-    while len(sementes) < n_vagas:
-        ang = (2 * math.pi / n_vagas) * len(sementes)
-        sementes.append((origem_lat + 0.05 * math.cos(ang), origem_lon + 0.05 * math.sin(ang)))
-
-    atribuicao = [0] * total_pedidos
-
-    # 3. Iterações de atribuição capacitada: a cada rodada, cada pedido "vota" na
-    #    vaga mais próxima; pedidos com preferência mais forte (1ª opção bem melhor
-    #    que a 2ª) são atendidos primeiro, evitando que um pedido "decisivo" perca
-    #    sua melhor vaga para outro pedido que quase não faria diferença.
-    for _ in range(iteracoes):
-        info_pedidos = []
-        for i, p in enumerate(pedidos):
-            dists = [dist_coords((p['lat'], p['lon']), s) for s in sementes]
-            ordem_preferencia = sorted(range(n_vagas), key=lambda k: dists[k])
-            urgencia = (dists[ordem_preferencia[1]] - dists[ordem_preferencia[0]]) if n_vagas > 1 else 0
-            info_pedidos.append((i, ordem_preferencia, urgencia))
-
-        info_pedidos.sort(key=lambda x: x[2], reverse=True)
-
-        capacidade_restante = [vagas[k][1] for k in range(n_vagas)]
-        nova_atribuicao = [0] * total_pedidos
-        for i, ordem_preferencia, _ in info_pedidos:
-            for k in ordem_preferencia:
-                if capacidade_restante[k] > 0:
-                    nova_atribuicao[i] = k
-                    capacidade_restante[k] -= 1
-                    break
-            else:
-                nova_atribuicao[i] = ordem_preferencia[0]  # segurança (não deveria ocorrer)
-
-        atribuicao = nova_atribuicao
-
-        # Recalcula o centro geográfico real de cada grupo com base nos membros atuais
-        somas = [[0.0, 0.0, 0] for _ in range(n_vagas)]
-        for i, p in enumerate(pedidos):
-            k = atribuicao[i]
-            somas[k][0] += p['lat']
-            somas[k][1] += p['lon']
-            somas[k][2] += 1
-        sementes = [
-            (somas[k][0] / somas[k][2], somas[k][1] / somas[k][2]) if somas[k][2] > 0 else sementes[k]
-            for k in range(n_vagas)
-        ]
-
-    # 4. Monta o resultado final: (motorista, pedidos) por vaga preenchida
-    grupos = [[] for _ in range(n_vagas)]
-    for i, p in enumerate(pedidos):
-        grupos[atribuicao[i]].append(p)
-
-    return [(vagas[k][0], grupos[k]) for k in range(n_vagas) if grupos[k]]
 
 class MotoristaItem(BaseModel):
     """Motorista ativo do cadastro, com o valor base por rota do tipo de veículo dele."""
@@ -739,6 +603,10 @@ class OtimizarRequest(BaseModel):
     valores_por_rota: Optional[Dict[str, Optional[Union[float, str]]]] = None
     # Ids dos motoristas escolhidos no painel (só os marcados entram na roteirização; precisam estar ativos).
     motorista_ids: Optional[List[Any]] = None
+    # Turno escolhido MANUALMENTE pelo operador (manha, tarde ou noite): obrigatório, nunca inferido do relógio.
+    turno: Optional[str] = None
+    # Minutos parados em cada entrega (padrão 10), somados ao tempo de deslocamento.
+    tempo_por_parada_min: Optional[Union[int, float, str]] = None
     pedidos: List[Dict[str, Any]]
 
 @app.get("/api/modais", dependencies=[Depends(obter_operador_atual)])
@@ -797,8 +665,11 @@ def _novo_job() -> str:
     return job_id
 
 
-async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar: List[MotoristaItem], valores_informados: Optional[Dict[str, Any]] = None, loja: Optional[Dict[str, Any]] = None):
+async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar: List[MotoristaItem], valores_informados: Optional[Dict[str, Any]] = None, loja: Optional[Dict[str, Any]] = None, contexto: Optional[Dict[str, Any]] = None):
     job = JOBS[job_id]
+    contexto = contexto or {}
+    turno = contexto.get("turno") or "manha"
+    tempo_por_parada = contexto.get("tempo_por_parada_min") or roteirizacao.TEMPO_POR_PARADA_PADRAO_MIN
     try:
         modais_usar = {}
         if req.modais_config:
@@ -883,49 +754,44 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar:
                 "geocode_status": p_status,
             })
 
-        # --- Etapa 3: montar as viagens respeitando a CAPACIDADE REAL de cada veículo ---
-        viagens_planejadas = montar_rotas_por_capacidade_real(orig_lat, orig_lon, pedidos_geo, frota_usar, modais_usar)
-
-        # --- Etapa 4: calcular cada rota (traçado OSRM em paralelo) ---
-        job["etapa"] = f"Calculando rotas (0/{len(viagens_planejadas)})..."
-        job["atual"] = 0
-        job["total"] = len(viagens_planejadas)
-
-        motorista_viagens = {f.id: 0 for f in frota_usar}
-        total_viagens_por_motorista = {f.id: 0 for f in frota_usar}
-        for mot_info, _ in viagens_planejadas:
-            total_viagens_por_motorista[mot_info.id] += 1
-
+        # --- Etapa 3: roteirizar com OR-Tools (agrupamento, ordem das paradas, setores, tempos e avisos) ---
+        # Capacidade por NÚMERO de pedidos por viagem; o peso nunca entra. Tudo é sugestão: o sistema nunca recusa.
+        capacidades = {nome: int(cfg["capacidade"]) for nome, cfg in modais_usar.items()}
+        por_id = {f.id: f for f in frota_usar}
         valores_informados = valores_informados or {}
         rotas_resultado = []
         km_total_geral = 0.0
         custo_total_geral = 0.0
-
+        tempo_total_min = 0
         async with httpx.AsyncClient() as client:
-            for c_idx, (mot_info, cluster) in enumerate(viagens_planejadas):
-                motorista_viagens[mot_info.id] += 1
-                num_viagem = motorista_viagens[mot_info.id]
+            plano = await roteirizacao.executar(
+                pedidos=pedidos_geo, hub=(orig_lat, orig_lon), motoristas=frota_usar, capacidades=capacidades, turno=turno,
+                tempo_por_parada_min=tempo_por_parada, rotas_hoje=contexto.get("rotas_hoje"), proibidos=contexto.get("proibidos"),
+                obter_matriz=lambda pontos: obter_matriz(client, pontos),
+                progresso=lambda texto: job.__setitem__("etapa", texto),
+            )
+            viagens = plano["viagens"]
+            job["etapa"] = f"Montando as rotas (0/{len(viagens)})..."
+            job["atual"] = 0
+            job["total"] = len(viagens)
+            total_viagens_por_motorista = {}
+            for v in viagens:
+                total_viagens_por_motorista[v["motorista_id"]] = total_viagens_por_motorista.get(v["motorista_id"], 0) + 1
 
-                pts_rota = ordenar_paradas_otimizadas((orig_lat, orig_lon), cluster)
+            for c_idx, viagem in enumerate(viagens):
+                mot_info = por_id[viagem["motorista_id"]]
+                num_viagem = viagem["viagem_num"]
+                pts_rota = viagem["pedidos"]
                 for p in pts_rota:
                     p['modal_alocado'] = mot_info.modal
                     p['motorista_alocado'] = mot_info.motorista
                     p['viagem_alocada'] = num_viagem
 
                 pontos_coords = [(orig_lat, orig_lon)] + [(p['lat'], p['lon']) for p in pts_rota] + [(orig_lat, orig_lon)]
-                dist_km, tempo_min, geometria = await get_osrm_route_async(client, pontos_coords)
-
-                amplitude_km = 0.0
-                if len(pts_rota) > 1:
-                    max_dist = 0
-                    for p1 in pts_rota:
-                        for p2 in pts_rota:
-                            d = haversine_distance((p1['lat'], p1['lon']), (p2['lat'], p2['lon']))
-                            if d > max_dist: max_dist = d
-                    amplitude_km = max_dist
-                
-                # Defina o limite que considera "espalhado demais" (ex: 15 km)
-                alerta_amplitude = amplitude_km > 15.0
+                # A distância e o tempo vêm da matriz (iguais aos trechos mostrados); daqui só se usa o traçado para o mapa.
+                _, _, geometria = await get_osrm_route_async(client, pontos_coords)
+                dist_km = viagem["km_total"]
+                tempo_min = viagem["tempo_min"]
 
                 # Valor da rota, do mais específico ao mais geral: (1) o informado pelo operador nesta roteirização
                 # para o tipo de veículo, (2) o valor próprio do motorista, (3) o valor base do tipo
@@ -937,6 +803,7 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar:
                 custo_rota = custos["custo_total"]
                 km_total_geral += dist_km
                 custo_total_geral += custo_rota
+                tempo_total_min += tempo_min
 
                 waypoint_coords = "/".join([f"{p['lat']},{p['lon']}" for p in pts_rota])
                 link_maps = f"https://www.google.com/maps/dir/{orig_lat},{orig_lon}/{waypoint_coords}/{orig_lat},{orig_lon}"
@@ -946,14 +813,17 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar:
                     "id": c_idx + 1, "motorista": titulo_viagem, "motorista_base": mot_info.motorista, "motorista_id": mot_info.id,
                     "viagem_num": num_viagem, "modal": mot_info.modal, "cor": CORES_ROTAS[c_idx % len(CORES_ROTAS)],
                     "qtd_pedidos": len(pts_rota), "km_total": dist_km,
-                    "tempo_formatado": f"{tempo_min // 60}h {tempo_min % 60}m" if tempo_min >= 60 else f"{tempo_min} min",
+                    "tempo_formatado": roteirizacao.formatar_tempo(tempo_min), "tempo_min": tempo_min,
+                    "tempo_deslocamento_min": viagem["tempo_deslocamento_min"], "tempo_paradas_min": viagem["tempo_paradas_min"],
+                    "setores": viagem["setores"], "distancias_trechos_km": viagem["distancias_trechos_km"],
+                    "distancia_retorno_km": viagem["distancia_retorno_km"], "violacoes_rotacao": viagem["violacoes_rotacao"],
                     "custo_total": custos["custo_total"], "custo_por_pedido": custos["custo_por_pedido"],
                     "valor_rota": custos["valor_rota"], "origem_valor": custos["origem_valor"],
                     "geometria": geometria, "paradas": pts_rota, "link_maps": link_maps
                 })
 
                 job["atual"] = c_idx + 1
-                job["etapa"] = f"Calculando rotas ({c_idx + 1}/{len(viagens_planejadas)})..."
+                job["etapa"] = f"Montando as rotas ({c_idx + 1}/{len(viagens)})..."
 
         # Resumo do valor por rota usado em cada tipo de veículo desta execução e de onde veio (o mesmo tipo pode ter
         # valores diferentes se algum motorista tiver valor próprio): uma linha por tipo, valor e origem.
@@ -973,7 +843,11 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar:
             "custo_medio_pedido": round(custo_total_geral / max(total_p, 1), 2),
             "valores_por_tipo": list(valores_por_tipo.values()),
             "total_pedidos_sem_geocodificacao": len(pedidos_sem_geocodificacao),
+            "tempo_total_min": tempo_total_min,
         }
+        avisos = list(plano["avisos"])
+        if not pedidos_geo and pedidos_sem_geocodificacao:
+            avisos.append({"tipo": "sem_pedidos", "gravidade": "atencao", "mensagem": "Nenhum pedido pôde ser localizado no mapa, então não há rotas."})
 
         job["status"] = "concluido"
         job["etapa"] = "Concluído."
@@ -986,6 +860,12 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar:
             # Pedidos com CEP/endereço não localizado: ficam de fora das rotas
             # calculadas acima e voltam aqui para o operador ver e corrigir.
             "pedidos_sem_geocodificacao": pedidos_sem_geocodificacao,
+            # Etapa 8: turno escolhido, de onde vieram as distâncias (osrm | linha_reta), avisos (rotação, linha reta, viagens extras...)
+            "turno": turno,
+            "origem_distancias": plano["origem_distancias"],
+            "metodo": plano["metodo"],
+            "avisos": avisos,
+            "parametros": plano["parametros"],
         }
 
     except Exception as e:
@@ -1002,16 +882,30 @@ async def iniciar_otimizacao(req: "OtimizarRequest"):
         valores_informados = frota.interpretar_valores_informados(req.valores_por_rota)
     except ValueError as erro:
         raise HTTPException(status_code=422, detail=str(erro))
+    try:
+        turno = roteirizacao.normalizar_turno(req.turno)
+        tempo_por_parada = roteirizacao.interpretar_tempo_por_parada(req.tempo_por_parada_min)
+    except ValueError as erro:
+        raise HTTPException(status_code=422, detail=str(erro))
     loja = await _com_conexao_lojas(lambda c: lojas.obter_ativa(c, req.loja_id)) if req.loja_id is not None else None
     if loja is None and not (req.origem_rua or req.origem_cep):
         raise HTTPException(status_code=422, detail="Escolha uma loja ou informe o endereço do hub.")
-    motoristas = await _com_conexao_frota(lambda c: frota.selecionar_motoristas(c, req.motorista_ids))
+
+    async def _motoristas_e_historico_do_dia(c):
+        escolhidos = await frota.selecionar_motoristas(c, req.motorista_ids)
+        dia = rotas_realizadas.hoje_em_brasilia()
+        return escolhidos, await rotas_realizadas.contagem_do_dia(c, dia), await rotas_realizadas.setores_do_dia(c, dia, turno)
+
+    motoristas, rotas_hoje, proibidos = await _com_conexao_frota(_motoristas_e_historico_do_dia)
     frota_usar = [
         MotoristaItem(id=m["id"], motorista=m["nome"], modal=m["tipo_veiculo"], custo_rota=m["custo_rota"], valor_motorista=m.get("valor_rota"))
         for m in motoristas
     ]
     job_id = _novo_job()
-    asyncio.create_task(_processar_otimizacao(job_id, req, frota_usar, valores_informados, loja))
+    asyncio.create_task(_processar_otimizacao(
+        job_id, req, frota_usar, valores_informados, loja,
+        {"turno": turno, "tempo_por_parada_min": tempo_por_parada, "rotas_hoje": rotas_hoje, "proibidos": proibidos},
+    ))
     return {"job_id": job_id}
 
 
@@ -1416,10 +1310,12 @@ async def confirmar_rotas(dados: ConfirmarRotasRequest, operador: Operador = Dep
         raise HTTPException(status_code=404, detail="Este resultado não está mais disponível. Gere as rotas de novo.")
     resultado = job["resultado"]
     rotas = [
-        {"numero_rota": r["id"], "motorista_id": r["motorista_id"], "qtd_pedidos": r.get("qtd_pedidos", 0), "distancia_km": r.get("km_total", 0)}
+        {"numero_rota": r["id"], "motorista_id": r["motorista_id"], "qtd_pedidos": r.get("qtd_pedidos", 0), "distancia_km": r.get("km_total", 0),
+         "setores": modulo_setores.texto_dos_setores(r.get("setores") or [])}
         for r in resultado.get("rotas", []) if r.get("motorista_id") is not None
     ]
-    turno = (dados.turno or "").strip()[:20] or None
+    # O turno gravado é o da roteirização (escolhido pelo operador); o do corpo só vale para resultados sem turno.
+    turno = (resultado.get("turno") or (dados.turno or "").strip())[:20] or None
     dia = rotas_realizadas.hoje_em_brasilia()
     return await _com_conexao_frota(
         lambda c: rotas_realizadas.confirmar(c, dados.execucao_id, rotas, dia, resultado.get("loja_hub"), turno, _rotulo_do_operador(operador))

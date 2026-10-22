@@ -1367,7 +1367,7 @@ export default function App() {
                   )}
                   <button
                     onClick={exportarRomaneio}
-                    title="Baixa o romaneio com cliente, coordenadas, chegada estimada e janela de entrega"
+                    title="Baixa o romaneio com cliente, coordenadas, chegada estimada e janela de entrega (campos separados por ponto e vírgula)"
                     className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-lg text-xs font-medium transition-colors"
                   >
                     <FileDown className="w-3.5 h-3.5" /> Romaneio (.csv)

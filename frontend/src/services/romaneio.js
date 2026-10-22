@@ -1,12 +1,18 @@
 // Romaneio (.csv) da roteirização (Etapa 13): montagem do arquivo na tela, com funções puras. O arquivo NÃO passa pelo servidor.
-// As 10 colunas antigas ficam iguais (mesmos nomes e mesma ordem, em ASCII); as novas entram só no fim. Separador vírgula, fim de linha \\n, UTF-8, SEM BOM
-// (como o arquivo sempre foi). O nome do cliente vem do lote em memória (pelo id da parada) e só existe no arquivo baixado: nunca vai ao servidor,
+// As 10 colunas antigas ficam iguais (mesmos nomes e mesma ordem, em ASCII); as novas entram só no fim. Separador PONTO E VÍRGULA, fim de linha \n e UTF-8 COM BOM
+// (o mesmo padrão do modelo de pedidos), para abrir certo no Excel em português com duplo clique; latitude e longitude mantêm o ponto decimal.
+// O nome do cliente vem do lote em memória (pelo id da parada) e só existe no arquivo baixado: nunca vai ao servidor,
 // banco, log, console, armazenamento do navegador nem git. Nenhuma coluna de peso. Chegada e janela são ESTIMATIVAS calculadas na tela (Etapa 11).
 import { janelaEfetivaDoPedido, minutosParaHora } from './janelas.js';
 
 export const COLUNAS_ANTIGAS = ['Rota', 'Motorista', 'Viagem', 'Veiculo', 'Ordem_Parada', 'Endereco', 'Numero', 'Bairro', 'CEP', 'Volume'];
 export const COLUNAS_NOVAS = ['ID_Pedido', 'Cliente', 'Latitude', 'Longitude', 'Chegada_Estimada', 'Janela_Inicio', 'Janela_Fim', 'Fora_do_Prazo'];
 export const COLUNAS = [...COLUNAS_ANTIGAS, ...COLUNAS_NOVAS];
+
+/** BOM UTF-8 (U+FEFF) no começo do arquivo, uma vez só. */
+export const BOM = '\uFEFF';
+/** Separador de campos. */
+export const SEPARADOR = ';';
 
 const SO_NUMERO = /^[-+]?\d+([.,]\d+)?$/;
 
@@ -22,10 +28,10 @@ export function neutralizarFormula(valor) {
   return texto;
 }
 
-/** Campo CSV (RFC 4180): entre aspas quando tem vírgula, aspas, quebra de linha ou espaço nas pontas (ou `sempreAspas`), com as aspas internas duplicadas. */
+/** Campo CSV (RFC 4180): entre aspas quando tem ponto e vírgula, vírgula, aspas, quebra de linha ou espaço nas pontas (ou `sempreAspas`), com as aspas internas duplicadas. */
 export function escaparCampo(valor, sempreAspas = false) {
   const texto = String(valor ?? '');
-  const precisa = sempreAspas || /[",\n\r]/.test(texto) || texto !== texto.trim();
+  const precisa = sempreAspas || /[";,\n\r]/.test(texto) || texto !== texto.trim();
   return precisa ? `"${texto.replace(/"/g, '""')}"` : texto;
 }
 
@@ -72,9 +78,9 @@ export function linhasDoRomaneio({ rotas, pedidos, relatorio, loja, turno }) {
   return linhas;
 }
 
-/** O arquivo inteiro como texto: cabeçalho + uma linha por parada, cada uma terminando em \n. */
+/** O arquivo inteiro como texto: BOM (uma vez só) + cabeçalho + uma linha por parada, campos separados por ";" e cada linha terminando em \n. */
 export function montarCsv(dados) {
-  return `${COLUNAS.join(',')}\n${linhasDoRomaneio(dados).map((campos) => `${campos.join(',')}\n`).join('')}`;
+  return `${BOM}${COLUNAS.join(SEPARADOR)}\n${linhasDoRomaneio(dados).map((campos) => `${campos.join(SEPARADOR)}\n`).join('')}`;
 }
 
 /** Nome do arquivo (o mesmo de sempre): romaneio_expedicao_zubale_AAAA-MM-DD.csv */

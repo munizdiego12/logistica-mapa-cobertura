@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  COLUNAS, COLUNAS_ANTIGAS, COLUNAS_NOVAS, neutralizarFormula, escaparCampo, linhasDoRomaneio, montarCsv, nomeDoArquivo, avisoDoRomaneio,
+  COLUNAS, COLUNAS_ANTIGAS, COLUNAS_NOVAS, BOM, SEPARADOR, neutralizarFormula, escaparCampo, linhasDoRomaneio, montarCsv, nomeDoArquivo, avisoDoRomaneio,
 } from './romaneio.js';
 import { relatorioDeJanelas } from './janelas.js';
 import { rotasEfetivas } from './despacho.js';
@@ -30,15 +30,15 @@ test('colunas: as 10 antigas iguais e na mesma ordem, as 8 novas no fim, sem pes
   assert.deepEqual(COLUNAS, [...COLUNAS_ANTIGAS, ...COLUNAS_NOVAS]);
   assert.ok(!COLUNAS.some((c) => /peso|kg/i.test(c)));
   const cabecalho = montarCsv(dados()).split('\n')[0];
-  assert.equal(cabecalho, 'Rota,Motorista,Viagem,Veiculo,Ordem_Parada,Endereco,Numero,Bairro,CEP,Volume,ID_Pedido,Cliente,Latitude,Longitude,Chegada_Estimada,Janela_Inicio,Janela_Fim,Fora_do_Prazo');
+  assert.equal(cabecalho, `${BOM}Rota;Motorista;Viagem;Veiculo;Ordem_Parada;Endereco;Numero;Bairro;CEP;Volume;ID_Pedido;Cliente;Latitude;Longitude;Chegada_Estimada;Janela_Inicio;Janela_Fim;Fora_do_Prazo`);
 });
 
 test('uma linha por parada, na ordem das rotas e das paradas, com o mesmo jeito das colunas antigas', () => {
   const linhas = montarCsv(dados()).split('\n').slice(0, -1);
   assert.equal(linhas.length, 1 + 3);
-  assert.ok(linhas[1].startsWith('Rota 1,"Ana",Viagem 1,"Carro de passeio",1,"Rua P1","10","Centro","01310100",2,'));
-  assert.ok(linhas[2].startsWith('Rota 1,"Ana",Viagem 1,"Carro de passeio",2,"Rua P2",'));
-  assert.ok(linhas[3].startsWith('Rota 2,"Beto",Viagem 1,"Fiorino/Utilitário",1,"Rua P3",'));
+  assert.ok(linhas[1].startsWith('Rota 1;"Ana";Viagem 1;"Carro de passeio";1;"Rua P1";"10";"Centro";"01310100";2;'));
+  assert.ok(linhas[2].startsWith('Rota 1;"Ana";Viagem 1;"Carro de passeio";2;"Rua P2";'));
+  assert.ok(linhas[3].startsWith('Rota 2;"Beto";Viagem 1;"Fiorino/Utilitário";1;"Rua P3";'));
 });
 
 test('cliente, id e coordenadas por pedido', () => {
@@ -140,6 +140,7 @@ test('o romaneio neutraliza cliente, endereço e bairro, e a latitude negativa c
 
 test('escape de vírgula, aspas, quebra de linha e espaços nas pontas', () => {
   assert.equal(escaparCampo('a,b'), '"a,b"');
+  assert.equal(escaparCampo('Rua A; casa 2'), '"Rua A; casa 2"');
   assert.equal(escaparCampo('diz "oi"'), '"diz ""oi"""');
   assert.equal(escaparCampo('linha1\nlinha2'), '"linha1\nlinha2"');
   assert.equal(escaparCampo('a\r\nb'), '"a\r\nb"');
@@ -149,30 +150,60 @@ test('escape de vírgula, aspas, quebra de linha e espaços nas pontas', () => {
   assert.equal(escaparCampo(null), '');
 });
 
-test('arquivo: vírgula, aspas e quebra de linha no texto continuam um registro só; acentos em UTF-8; \\n no fim; sem BOM', () => {
-  const rotas = [rota(1, 1, 'Ana', 'Carro de passeio', [parada('P1', { Endereco: 'Rua "Ação", 5\nfundos' })], [600, 600])];
-  const csv = montarCsv(dados({ rotas, pedidos: [{ id: 'P1', cliente: 'José, "Zé" Ávila' }], relatorio: null }));
-  assert.ok(csv.includes('"Rua ""Ação"", 5\nfundos"'));
-  assert.ok(csv.includes('"José, ""Zé"" Ávila"'));
+test('arquivo: ";", vírgula, aspas e quebra de linha no texto continuam um registro só; acentos em UTF-8; \\n no fim; BOM uma vez só', () => {
+  const rotas = [rota(1, 1, 'Ana', 'Carro de passeio', [parada('P1', { Endereco: 'Rua "Ação", 5; casa 2\nfundos' })], [600, 600])];
+  const csv = montarCsv(dados({ rotas, pedidos: [{ id: 'P1', cliente: 'José, "Zé"; Ávila' }], relatorio: null }));
+  assert.ok(csv.includes('"Rua ""Ação"", 5; casa 2\nfundos"'));
+  assert.ok(csv.includes('"José, ""Zé""; Ávila"'));
   assert.ok(csv.endsWith('\n'));
-  assert.ok(!csv.startsWith('﻿'));
-  assert.equal(new TextDecoder('utf-8').decode(new TextEncoder().encode(csv)), csv); // ida e volta em UTF-8 sem perder acentos
-  // um leitor de CSV simples (aspas e quebra de linha dentro de campo) enxerga 1 cabeçalho + 1 registro de 18 campos
+  assert.ok(csv.startsWith(BOM));
+  assert.ok(!csv.slice(1).includes(BOM)); // o BOM aparece uma vez só
+  assert.ok(!csv.slice(BOM.length).startsWith(BOM));
+  const bytes = new TextEncoder().encode(csv);
+  assert.deepEqual([...bytes.slice(0, 3)], [0xef, 0xbb, 0xbf]); // BOM UTF-8
+  assert.equal(new TextDecoder('utf-8', { ignoreBOM: true }).decode(bytes), csv); // ida e volta em UTF-8 sem perder acentos
+  // o mesmo arquivo dentro de um Blob text/csv;charset=utf-8 continua com um único BOM
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  assert.equal(blob.type, 'text/csv;charset=utf-8');
+  assert.equal(blob.size, bytes.length);
+  // um leitor de CSV simples com ";" (aspas e quebra de linha dentro de campo) enxerga 1 cabeçalho + 1 registro de 18 campos
   const registros = [];
   let campo = '';
   let campos = [];
   let aspas = false;
-  for (let i = 0; i < csv.length; i += 1) {
-    const c = csv[i];
+  const texto = csv.slice(BOM.length);
+  for (let i = 0; i < texto.length; i += 1) {
+    const c = texto[i];
     if (aspas) {
-      if (c === '"' && csv[i + 1] === '"') { campo += '"'; i += 1; } else if (c === '"') aspas = false; else campo += c;
+      if (c === '"' && texto[i + 1] === '"') { campo += '"'; i += 1; } else if (c === '"') aspas = false; else campo += c;
     } else if (c === '"') aspas = true;
-    else if (c === ',') { campos.push(campo); campo = ''; } else if (c === '\n') { campos.push(campo); registros.push(campos); campos = []; campo = ''; } else campo += c;
+    else if (c === SEPARADOR) { campos.push(campo); campo = ''; } else if (c === '\n') { campos.push(campo); registros.push(campos); campos = []; campo = ''; } else campo += c;
   }
   assert.equal(registros.length, 2);
   assert.ok(registros.every((r) => r.length === COLUNAS.length));
-  assert.equal(registros[1][5], 'Rua "Ação", 5\nfundos');
-  assert.equal(registros[1][11], 'José, "Zé" Ávila');
+  assert.equal(registros[0][0], 'Rota');
+  assert.equal(registros[1][5], 'Rua "Ação", 5; casa 2\nfundos');
+  assert.equal(registros[1][11], 'José, "Zé"; Ávila');
+});
+
+test('separador é ponto e vírgula; latitude e longitude mantêm o ponto decimal, sem aspas nem apóstrofo', () => {
+  assert.equal(SEPARADOR, ';');
+  const csv = montarCsv(dados());
+  const primeira = csv.split('\n')[1].split(';');
+  assert.equal(primeira.length, COLUNAS.length); // nenhum campo desta linha tem ";" dentro
+  assert.equal(primeira[12], '-23.550500');
+  assert.equal(primeira[13], '-46.633300');
+  assert.ok(primeira[12].indexOf(',') < 0 && !/["']/.test(primeira[12] + primeira[13]));
+  assert.equal(primeira[4], '1'); // Ordem_Parada número
+  assert.equal(primeira[9], '2'); // Volume número
+});
+
+test('endereço com ";" não desloca as colunas e a linha antiga com vírgula continua bem escapada', () => {
+  const rotas = [rota(1, 1, 'Ana', 'Carro de passeio', [parada('P1', { Endereco: 'Rua A; casa 2', Bairro: 'Centro, zona 1' })], [600, 600])];
+  const linha = linhasDoRomaneio(dados({ rotas, relatorio: null }))[0];
+  assert.equal(linha[5], '"Rua A; casa 2"');
+  assert.equal(linha[7], '"Centro, zona 1"');
+  assert.equal(linha.length, COLUNAS.length);
 });
 
 test('nome do arquivo continua o mesmo e o aviso deixa claro que a chegada é estimativa', () => {

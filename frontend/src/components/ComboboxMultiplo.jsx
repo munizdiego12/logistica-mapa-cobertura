@@ -1,7 +1,7 @@
 // Campo de pesquisa com lista de seleção múltipla (combobox), usado nas lojas do motorista e na escolha dos motoristas da roteirização.
 // O pai filtra, agrupa e LIMITA as opções (nunca se renderizam centenas de itens) e guarda o texto da busca; aqui ficam a abertura
 // da lista, o teclado e a acessibilidade. Os marcados aparecem como etiquetas removíveis.
-// Teclado: setas movem, Enter marca/desmarca (a lista continua aberta), Esc fecha, Tab sai. As etiquetas só saem pelo "x" de cada uma (Backspace no campo vazio não remove nada).
+// Teclado: setas movem, Enter marca/desmarca (a lista continua aberta), Esc fecha, Tab sai. As etiquetas só saem pelo "x" de cada uma.
 // Leitor de tela: padrão ARIA de combobox com lista (role="combobox" + role="listbox" aria-multiselectable + grupos).
 //
 // grupos: [{ chave, titulo, itens: [{ id, rotulo, detalhe?, aviso? }] }]   chips: [{ id, rotulo }]

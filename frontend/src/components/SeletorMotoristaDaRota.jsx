@@ -4,6 +4,7 @@
 // Nada de telefone, pedido, endereço ou cliente aqui.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, AlertTriangle, Check, Search } from 'lucide-react';
+import { deveFecharNoScroll } from '../services/despacho';
 
 export default function SeletorMotoristaDaRota({ rota, alternativas, onEscolher, desabilitado = false, motivoDesabilitado = '' }) {
   const [aberto, setAberto] = useState(false);
@@ -24,14 +25,15 @@ export default function SeletorMotoristaDaRota({ rota, alternativas, onEscolher,
   };
   const escolher = (item) => { fechar(); if (item && !item.atual) onEscolher(item.id); botao.current?.focus(); };
 
-  // Fecha ao clicar fora, ao rolar a página ou ao redimensionar.
+  // Fecha ao clicar fora, ao rolar a página (a rolagem da própria lista não fecha) ou ao redimensionar.
   useEffect(() => {
     if (!aberto) return undefined;
     const fora = (e) => { if (!caixa.current?.contains(e.target) && !botao.current?.contains(e.target)) fechar(); };
     document.addEventListener('mousedown', fora);
     window.addEventListener('resize', fechar);
-    window.addEventListener('scroll', fechar, true);
-    return () => { document.removeEventListener('mousedown', fora); window.removeEventListener('resize', fechar); window.removeEventListener('scroll', fechar, true); };
+    const aoRolar = (e) => { if (deveFecharNoScroll(e.target, caixa.current)) fechar(); };
+    window.addEventListener('scroll', aoRolar, true);
+    return () => { document.removeEventListener('mousedown', fora); window.removeEventListener('resize', fechar); window.removeEventListener('scroll', aoRolar, true); };
   }, [aberto]);
 
   const aoTeclar = (e) => {

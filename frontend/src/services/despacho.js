@@ -188,3 +188,8 @@ export function avisosDoDespacho({ avisosDoSolver, rotas, rotacao, capacidades, 
   }
   return [...base, ...novos];
 }
+
+/** A lista de motoristas da rota fecha ao rolar a PÁGINA, não ao rolar a própria caixa: false quando o alvo da rolagem está dentro da caixa. */
+export function deveFecharNoScroll(alvo, caixa) {
+  return !(caixa && alvo && typeof caixa.contains === 'function' && caixa.contains(alvo));
+}

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   regioesRepetidas, seloDeRotacao, rotasEfetivas, trocarMotorista, voltarASugestao, ajustesValidos, quantasAjustadas, corpoDaConfirmacao, textoNestaRoteirizacao,
-  alternativasParaRota, linhasDoCartao, avisosDeRotacao, avisoDeCargaDesigual, avisosDeTeto, avisosDoDespacho, LIMITE_DE_ALTERNATIVAS,
+  alternativasParaRota, linhasDoCartao, avisosDeRotacao, avisoDeCargaDesigual, avisosDeTeto, avisosDoDespacho, LIMITE_DE_ALTERNATIVAS, deveFecharNoScroll,
 } from './despacho.js';
 import { resumoPorMotorista, rotasPorMotoristaDoResultado, textoDoMotoristaNoCartao } from './selecaoMotoristas.js';
 
@@ -196,4 +196,14 @@ test('avisos do despacho: a rotação do solver é substituída pela recalculada
   assert.deepEqual(com.map((a) => a.tipo), ['viagens_extras', 'rotacao']);
   const sem = avisosDoDespacho({ avisosDoSolver: solver, rotas: r, rotacao: null, capacidades: {}, marcados: [ANA, BETO, CAIO] });
   assert.deepEqual(sem.map((a) => a.tipo), ['rotacao', 'viagens_extras']); // sem a conferência o aviso do solver continua
+});
+
+test('rolagem dentro da caixa de motoristas não fecha a lista; a da página fecha', () => {
+  const filho = { id: 'item' };
+  const caixa = { contains: (n) => n === caixa || n === filho };
+  assert.equal(deveFecharNoScroll(filho, caixa), false); // rolar a lista de nomes
+  assert.equal(deveFecharNoScroll(caixa, caixa), false); // barra de rolagem da própria caixa
+  assert.equal(deveFecharNoScroll({ id: 'documento' }, caixa), true); // rolar a página
+  assert.equal(deveFecharNoScroll(null, caixa), true);
+  assert.equal(deveFecharNoScroll(filho, null), true); // sem caixa aberta
 });

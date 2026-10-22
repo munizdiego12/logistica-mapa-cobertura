@@ -1449,8 +1449,10 @@ export default function App() {
                         </td>
                         <td className="p-3.5 text-slate-300 font-sans">
                           <div className="flex items-center gap-2">
-                            {textoPedidos(r.qtd_pedidos)}
-                            {r.rota_personalizada && <span className="text-[10px] text-violet-300">; recomendado {r.teto_recomendado} por viagem</span>}
+                            <span>
+                              {textoPedidos(r.qtd_pedidos)}
+                              {r.rota_personalizada && <span className="text-[10px] text-violet-300">; recomendado {r.teto_recomendado} por viagem</span>}
+                            </span>
                             {foraDaJanelaPorRota[r.id] > 0 && (
                               <div
                                 title={dicaDoSelo(foraDaJanelaPorRota[r.id])}

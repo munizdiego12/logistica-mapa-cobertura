@@ -29,6 +29,45 @@ export function minutosParaHora(total) {
   return t >= DIA_EM_MIN ? `${texto} (dia seguinte)` : texto;
 }
 
+/**
+ * Hora digitada pelo operador -> "HH:MM". Aceita "8", "830", "1230", "8:30", "08h30" e "8h"; vazio = padrão do turno ({ ok: true, valor: '' }).
+ * Inválida (25:00, abc, 12:60...) = { ok: false, valor: '', mensagem }, e quem chama não usa o valor.
+ */
+export function normalizarHoraDigitada(texto) {
+  const limpo = String(texto ?? '').trim().toLowerCase().replace(/\s+/g, '');
+  if (!limpo) return { ok: true, valor: '' };
+  const invalida = { ok: false, valor: '', mensagem: MSG_HORA_INVALIDA };
+  let h;
+  let m = 0;
+  let achou = /^(\d{1,2})(?:[:h.](\d{2})?)?$/.exec(limpo);
+  if (achou) {
+    h = Number(achou[1]);
+    m = achou[2] === undefined ? 0 : Number(achou[2]);
+  } else {
+    achou = /^(\d{1,2})(\d{2})$/.exec(limpo);
+    if (!achou) return invalida;
+    h = Number(achou[1]);
+    m = Number(achou[2]);
+  }
+  if (h > 23 || m > 59) return invalida;
+  return { ok: true, valor: `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}` };
+}
+
+/** Soma `delta` minutos a uma hora "HH:MM" (ou ao `padraoMin`, em minutos, se vazia; 08:00 sem padrão), sem passar de 00:00 nem de 23:59. Devolve "HH:MM". */
+export function somarMinutos(texto, delta, padraoMin = null) {
+  const base = horaParaMinutos(texto) ?? padraoMin ?? 8 * 60;
+  const total = Math.min(DIA_EM_MIN - 1, Math.max(0, base + delta));
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+}
+
+/** Linha de resumo da saída: "Saída às 12:30", "Saída às 08:00 (padrão do turno)" ou "Informe a hora de saída". */
+export function resumoDaSaida(horaDeSaida, saidaPadraoMin) {
+  const digitada = horaParaMinutos(horaDeSaida);
+  if (digitada !== null) return `Saída às ${minutosParaHora(digitada)}`;
+  if (saidaPadraoMin !== null && saidaPadraoMin !== undefined) return `Saída às ${minutosParaHora(saidaPadraoMin)} (padrão do turno)`;
+  return 'Informe a hora de saída';
+}
+
 /** Janela da loja no turno, em minutos: { inicio, fim } ou null (loja sem janela para o turno, ex.: noite desligada). */
 export function janelaDaLoja(loja, turno) {
   if (!loja || !TURNO_NO_TEXTO[turno]) return null;

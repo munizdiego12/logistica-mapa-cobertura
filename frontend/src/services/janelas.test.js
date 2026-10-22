@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   horaParaMinutos, minutosParaHora, janelaDaLoja, interpretarHoraDeSaida, temposDosTrechos, saidasDasViagens, chegadasDaRota, relatorioDeJanelas,
-  foraDoPrazoPorRota, dicaDoSelo, resumoDoRelatorio, MSG_INFORME_A_SAIDA, MSG_SEM_LOJA,
+  foraDoPrazoPorRota, dicaDoSelo, resumoDoRelatorio, MSG_INFORME_A_SAIDA, MSG_SEM_LOJA, normalizarHoraDigitada, somarMinutos, resumoDaSaida, MSG_HORA_INVALIDA,
 } from './janelas.js';
 import { rotasEfetivas } from './despacho.js';
 
@@ -185,4 +185,37 @@ test('sem rotas não há relatório; selo e textos', () => {
   assert.equal(dicaDoSelo(3), '3 pedidos chegam fora da janela');
   assert.equal(dicaDoSelo(1), '1 pedido chega fora da janela');
   assert.equal(foraDoPrazoPorRota(null).constructor, Object);
+});
+
+test('hora digitada: "8", "830", "1230", "8:30", "08h30" e "8h" viram HH:MM', () => {
+  const casos = { '8': '08:00', '830': '08:30', '1230': '12:30', '8:30': '08:30', '08h30': '08:30', '8h': '08:00', '8H30': '08:30', ' 12:05 ': '12:05', '0': '00:00', '23:59': '23:59', '9.15': '09:15' };
+  for (const [digitado, esperado] of Object.entries(casos)) assert.deepEqual(normalizarHoraDigitada(digitado), { ok: true, valor: esperado }, digitado);
+});
+
+test('hora digitada vazia vale o padrão; inválida avisa e não devolve valor', () => {
+  for (const vazio of ['', '   ', null, undefined]) assert.deepEqual(normalizarHoraDigitada(vazio), { ok: true, valor: '' });
+  for (const ruim of ['25:00', 'abc', '12:60', '2460', '8:3', '1:2:3', '-8', '8h5', '123456']) {
+    assert.deepEqual(normalizarHoraDigitada(ruim), { ok: false, valor: '', mensagem: MSG_HORA_INVALIDA }, ruim);
+  }
+  assert.equal(MSG_HORA_INVALIDA, 'Digite a hora de saída no formato 08:00.');
+});
+
+test('passo de 15 minutos para cima e para baixo, a partir do valor ou do padrão, sem passar de 00:00 nem de 23:59', () => {
+  assert.equal(somarMinutos('12:30', 15), '12:45');
+  assert.equal(somarMinutos('12:30', -15), '12:15');
+  assert.equal(somarMinutos('12:50', 15), '13:05');
+  assert.equal(somarMinutos('', 15, 480), '08:15'); // vazio parte do padrão do turno
+  assert.equal(somarMinutos('', -15, 480), '07:45');
+  assert.equal(somarMinutos('', 15), '08:15'); // sem padrão parte de 08:00
+  assert.equal(somarMinutos('00:10', -15), '00:00');
+  assert.equal(somarMinutos('00:00', -15), '00:00');
+  assert.equal(somarMinutos('23:50', 15), '23:59');
+  assert.equal(somarMinutos('23:59', 15), '23:59');
+});
+
+test('resumo da saída: digitada, padrão do turno ou pedir a hora', () => {
+  assert.equal(resumoDaSaida('12:30', 480), 'Saída às 12:30');
+  assert.equal(resumoDaSaida('', 480), 'Saída às 08:00 (padrão do turno)');
+  assert.equal(resumoDaSaida('', null), 'Informe a hora de saída');
+  assert.equal(resumoDaSaida('xx', 480), 'Saída às 08:00 (padrão do turno)');
 });

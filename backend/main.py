@@ -820,7 +820,7 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar:
                     "qtd_pedidos": len(pts_rota), "km_total": dist_km,
                     "tempo_formatado": roteirizacao.formatar_tempo(tempo_min), "tempo_min": tempo_min,
                     "tempo_deslocamento_min": viagem["tempo_deslocamento_min"], "tempo_paradas_min": viagem["tempo_paradas_min"],
-                    "setores": viagem["setores"], "distancias_trechos_km": viagem["distancias_trechos_km"],
+                    "setores": viagem["setores"], "distancias_trechos_km": viagem["distancias_trechos_km"], "tempos_trechos_s": viagem.get("tempos_trechos_s"),
                     "distancia_retorno_km": viagem["distancia_retorno_km"], "violacoes_rotacao": viagem["violacoes_rotacao"],
                     "rota_personalizada": viagem["personalizada"], "teto_recomendado": viagem["teto_recomendado"],
                     "viagens_solicitadas": viagem["viagens_solicitadas"],

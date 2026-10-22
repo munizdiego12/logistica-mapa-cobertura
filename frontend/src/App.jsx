@@ -6,7 +6,7 @@ import {
   ShieldCheck, Activity, Trash2, Users, AlertCircle,
   CheckSquare, Square, Download, FileSpreadsheet, FileDown,
   Settings, ChevronDown, ChevronUp, Layers, Compass, Table as TableIcon, Store, 
-  AlertTriangle, Scale, History
+  AlertTriangle, Scale, History, Clock
 } from 'lucide-react';
 import MapaLeaflet from './components/MapaLeaflet';
 import Login from './components/Login';
@@ -16,6 +16,7 @@ import SeletorMotoristas from './components/SeletorMotoristas';
 import Lojas from './components/Lojas';
 import Historico from './components/Historico';
 import SeletorMotoristaDaRota from './components/SeletorMotoristaDaRota';
+import JanelasDeEntrega from './components/JanelasDeEntrega';
 import SeletorLoja from './components/SeletorLoja';
 import ListaPedidos from './components/ListaPedidos';
 import RelatorioImportacao from './components/RelatorioImportacao';
@@ -30,8 +31,9 @@ import { interpretarRaio, nomeDoHub, RAIO_PADRAO_KM } from './services/lojas';
 import { idsParaConsultar, aplicarDuplicidade, avisoDesmarcados, contarJaRoteirizados } from './services/duplicidade';
 import {
   rotasEfetivas, trocarMotorista, voltarASugestao, quantasAjustadas, corpoDaConfirmacao, alternativasParaRota, linhasDoCartao, avisosDoDespacho, regioesRepetidas,
-  seloDeRotacao, MSG_TROCA_TRAVADA, MSG_AJUSTES_E_REINICIO, MSG_SEM_ROTACAO
+  seloDeRotacao, MSG_TROCA_TRAVADA, MSG_AJUSTES_E_REINICIO, MSG_SEM_ROTACAO, interpretarLimiteKm
 } from './services/despacho';
+import { relatorioDeJanelas, foraDoPrazoPorRota, dicaDoSelo } from './services/janelas';
 import { API_BASE } from './config';
 import { instalarTratamento401, MENSAGEM_SESSAO_EXPIRADA } from './services/sessao';
 import { baixarBlob } from './services/download';
@@ -226,6 +228,18 @@ export default function App() {
   const resumoDosMotoristas = resultado ? resumoPorMotorista(rotasDoDespacho) : new Map();
   const ajustadas = quantasAjustadas(rotasDoDespacho);
   const capacidadesPorTipo = Object.fromEntries(Object.entries(modais).map(([tipo, v]) => [tipo, v.capacidade]));
+  // Etapa 11 (informativo, só na tela): limites de km por viagem e por motorista (opcionais) e hora de saída para estimar as chegadas.
+  const [limiteKmViagem, setLimiteKmViagem] = useState('');
+  const [limiteKmMotorista, setLimiteKmMotorista] = useState('');
+  const [horaDeSaida, setHoraDeSaida] = useState('');
+  const limiteViagem = interpretarLimiteKm(limiteKmViagem);
+  const limiteMotorista = interpretarLimiteKm(limiteKmMotorista);
+  const limitesKm = { porViagem: limiteViagem.valor, porMotorista: limiteMotorista.valor };
+  const relatorioDeJanela = resultado ? relatorioDeJanelas({
+    rotas: rotasDoDespacho, pedidos: loteSelecionado?.pedidos ?? [], loja: lojaHub, turno: resultado.turno, horaDeSaida,
+    tempoPorParada: Number(resultado.parametros?.tempo_por_parada_min) || 10
+  }) : null;
+  const foraDaJanelaPorRota = foraDoPrazoPorRota(relatorioDeJanela);
   const alternativasDaRota = (rota) => (busca) => alternativasParaRota({
     rota, rotas: rotasDoDespacho, motoristas, selecionados, lojaId: lojaHubId, rotasHoje, pedidosHoje, rotacao, busca
   });
@@ -477,6 +491,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     setAtribuicoes({});
+    setHoraDeSaida('');
     setRotacao(null);
     setRotacaoFalhou(false);
     if (resultado?.execucao_id) carregarRotacao(resultado.turno);
@@ -1134,6 +1149,18 @@ export default function App() {
                 <input type="text" inputMode="numeric" value={tempoPorParada} onChange={(e) => setTempoPorParada(e.target.value)} aria-label="Tempo por parada em minutos"
                   className="w-16 px-2 py-1 rounded bg-slate-950 border border-slate-700 text-slate-100 text-xs font-mono text-right focus:outline-none focus:border-blue-500" />
               </label>
+              <label className="flex items-center justify-between gap-2 text-[11px] text-slate-400" title="Opcional. Conta a ida e a volta à loja. Só avisa; não muda as rotas.">
+                Limite de km por viagem
+                <input type="text" inputMode="decimal" value={limiteKmViagem} onChange={(e) => setLimiteKmViagem(e.target.value)} placeholder="sem limite" aria-label="Limite de km por viagem"
+                  className="w-24 px-2 py-1 rounded bg-slate-950 border border-slate-700 text-slate-100 text-xs font-mono text-right focus:outline-none focus:border-blue-500" />
+              </label>
+              {!limiteViagem.ok && <p className="text-[10px] text-amber-300">{limiteViagem.mensagem} Enquanto isso, o limite não é conferido.</p>}
+              <label className="flex items-center justify-between gap-2 text-[11px] text-slate-400" title="Opcional. Soma das viagens do motorista nesta roteirização, com a volta à loja. Só avisa; não muda as rotas.">
+                Limite de km por motorista (soma das viagens)
+                <input type="text" inputMode="decimal" value={limiteKmMotorista} onChange={(e) => setLimiteKmMotorista(e.target.value)} placeholder="sem limite" aria-label="Limite de km por motorista"
+                  className="w-24 px-2 py-1 rounded bg-slate-950 border border-slate-700 text-slate-100 text-xs font-mono text-right focus:outline-none focus:border-blue-500" />
+              </label>
+              {!limiteMotorista.ok && <p className="text-[10px] text-amber-300">{limiteMotorista.mensagem} Enquanto isso, o limite não é conferido.</p>}
             </div>
             <button
               onClick={handleOtimizar}
@@ -1301,15 +1328,20 @@ export default function App() {
               <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> Distâncias e tempos em linha reta (estimativa): não foi possível consultar as ruas.
             </p>
           )}
-          {resultado && avisosOrdenados(avisosDoDespacho({ avisosDoSolver: resultado.avisos, rotas: rotasDoDespacho, rotacao, capacidades: capacidadesPorTipo, marcados })).length > 0 && (
+          {resultado && avisosOrdenados(avisosDoDespacho({ avisosDoSolver: resultado.avisos, rotas: rotasDoDespacho, rotacao, capacidades: capacidadesPorTipo, marcados, limitesKm })).length > 0 && (
             <div className="bg-slate-900/50 border border-slate-800/80 rounded-xl p-4 space-y-1.5" aria-label="Avisos da roteirização">
               <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Avisos</p>
-              {avisosOrdenados(avisosDoDespacho({ avisosDoSolver: resultado.avisos, rotas: rotasDoDespacho, rotacao, capacidades: capacidadesPorTipo, marcados })).map((a, i) => (
+              {avisosOrdenados(avisosDoDespacho({ avisosDoSolver: resultado.avisos, rotas: rotasDoDespacho, rotacao, capacidades: capacidadesPorTipo, marcados, limitesKm })).map((a, i) => (
                 <p key={`${a.tipo}-${i}`} className={`text-[11px] rounded px-2.5 py-1.5 ${a.gravidade === 'atencao' ? 'text-amber-200 bg-amber-950/20' : 'text-slate-300 bg-slate-950/50'}`}>
                   {a.mensagem}
                 </p>
               ))}
             </div>
+          )}
+
+          {/* Janelas de entrega (Etapa 11): informativo, calculado na tela a partir do resultado e do lote */}
+          {resultado && relatorioDeJanela && relatorioDeJanela.status !== 'sem_rotas' && (
+            <JanelasDeEntrega relatorio={relatorioDeJanela} horaDeSaida={horaDeSaida} onHoraDeSaida={setHoraDeSaida} />
           )}
 
           {/* Visualizador do Mapa */}
@@ -1419,6 +1451,14 @@ export default function App() {
                           <div className="flex items-center gap-2">
                             {textoPedidos(r.qtd_pedidos)}
                             {r.rota_personalizada && <span className="text-[10px] text-violet-300">; recomendado {r.teto_recomendado} por viagem</span>}
+                            {foraDaJanelaPorRota[r.id] > 0 && (
+                              <div
+                                title={dicaDoSelo(foraDaJanelaPorRota[r.id])}
+                                className="flex items-center justify-center p-1 bg-sky-500/10 rounded border border-sky-500/20 text-sky-300 cursor-help"
+                              >
+                                <Clock className="w-3.5 h-3.5" aria-label={dicaDoSelo(foraDaJanelaPorRota[r.id])} />
+                              </div>
+                            )}
                             {(r.paradas || []).some(p => p.geocode_status === 'ALERTA_APROXIMADO') && (
                               <div
                                 title="Uma ou mais paradas desta rota têm localização aproximada (só bairro/cidade, não o endereço exato)."

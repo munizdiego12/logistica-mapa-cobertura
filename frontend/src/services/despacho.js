@@ -178,7 +178,7 @@ export function avisosDeTeto(rotas, capacidades) {
  * Avisos da tela depois dos ajustes: os do solver (com a rotação recalculada quando a conferência está disponível) mais, só com rota trocada,
  * carga desigual e teto. Tudo informativo.
  */
-export function avisosDoDespacho({ avisosDoSolver, rotas, rotacao, capacidades, marcados }) {
+export function avisosDoDespacho({ avisosDoSolver, rotas, rotacao, capacidades, marcados, limitesKm = null }) {
   const base = (avisosDoSolver ?? []).filter((a) => !(rotacao && a.tipo === 'rotacao'));
   const novos = [...avisosDeRotacao(rotas, rotacao)];
   if (quantasAjustadas(rotas) > 0) {
@@ -186,10 +186,64 @@ export function avisosDoDespacho({ avisosDoSolver, rotas, rotacao, capacidades, 
     const desigual = avisoDeCargaDesigual(linhasDoCartao(rotas, marcados));
     if (desigual) novos.push(desigual);
   }
+  if (limitesKm) novos.push(...avisosDeLimiteKm(rotas, limitesKm));
   return [...base, ...novos];
 }
 
 /** A lista de motoristas da rota fecha ao rolar a PÁGINA, não ao rolar a própria caixa: false quando o alvo da rolagem está dentro da caixa. */
 export function deveFecharNoScroll(alvo, caixa) {
   return !(caixa && alvo && typeof caixa.contains === 'function' && caixa.contains(alvo));
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Limite de km (Etapa 11): só na tela, por execução, opcional; nunca bloqueia nem é gravado. A distância é o `km_total` de cada rota, que INCLUI a volta à loja.
+// ---------------------------------------------------------------------------------------------------------------------------
+export const LIMITE_KM_MAXIMO = 2000;
+export const MSG_LIMITE_KM_FORMATO = 'Digite o limite em km, por exemplo 20 ou 20,5.';
+export const MSG_LIMITE_KM_FAIXA = 'O limite precisa ser maior que zero e ir até 2.000 km.';
+
+/** Limite digitado: vazio = não confere ({ ok: true, valor: null }); vírgula decimal vale; inválido = { ok: false, valor: null, mensagem } (a roteirização segue). */
+export function interpretarLimiteKm(texto) {
+  const limpo = String(texto ?? '').trim();
+  if (!limpo) return { ok: true, valor: null };
+  if (!/^\d+([.,]\d+)?$/.test(limpo)) return { ok: false, valor: null, mensagem: MSG_LIMITE_KM_FORMATO };
+  const valor = Number(limpo.replace(',', '.'));
+  return valor > 0 && valor <= LIMITE_KM_MAXIMO ? { ok: true, valor } : { ok: false, valor: null, mensagem: MSG_LIMITE_KM_FAIXA };
+}
+
+const km1 = (n) => Number(n).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+const kmLimite = (n) => Number(n).toLocaleString('pt-BR', { maximumFractionDigits: 2 });
+const excesso = (km, limite) => Math.max(0.1, Math.round((km - limite) * 10) / 10);
+
+/**
+ * Avisos de limite de km (informativos): por viagem ("Rota 3 (Ana, Viagem 2) passou 4,2 km do limite de 20 km") e por motorista, somando as viagens dele nesta
+ * roteirização ("Ana passou 6,0 km do limite de 40 km: 46,0 km em 3 viagens"). `limites`: { porViagem, porMotorista } em km (null = não confere). Sem repetir mensagens.
+ */
+export function avisosDeLimiteKm(rotas, { porViagem = null, porMotorista = null } = {}) {
+  const lista = rotas ?? [];
+  const avisos = [];
+  const viagensDe = new Map();
+  lista.forEach((r) => viagensDe.set(r.motorista_id, (viagensDe.get(r.motorista_id) ?? 0) + 1));
+  if (porViagem) {
+    lista.filter((r) => Number(r.km_total) > porViagem).forEach((r) => {
+      const quem = viagensDe.get(r.motorista_id) > 1 ? `${r.motorista_base}, Viagem ${r.viagem_num}` : r.motorista_base;
+      avisos.push({ tipo: 'limite_km_viagem', gravidade: 'atencao', mensagem: `Rota ${r.id} (${quem}) passou ${km1(excesso(Number(r.km_total), porViagem))} km do limite de ${kmLimite(porViagem)} km` });
+    });
+  }
+  if (porMotorista) {
+    const somas = new Map();
+    lista.forEach((r) => {
+      const atual = somas.get(r.motorista_id) ?? { nome: r.motorista_base, km: 0, viagens: 0 };
+      atual.km += Number(r.km_total) || 0;
+      atual.viagens += 1;
+      somas.set(r.motorista_id, atual);
+    });
+    [...somas.values()].filter((m) => m.km > porMotorista).forEach((m) => {
+      avisos.push({
+        tipo: 'limite_km_motorista', gravidade: 'atencao',
+        mensagem: `${m.nome} passou ${km1(excesso(m.km, porMotorista))} km do limite de ${kmLimite(porMotorista)} km: ${km1(m.km)} km em ${m.viagens} ${m.viagens === 1 ? 'viagem' : 'viagens'}`,
+      });
+    });
+  }
+  return avisos.filter((a, i) => avisos.findIndex((b) => b.mensagem === a.mensagem) === i);
 }

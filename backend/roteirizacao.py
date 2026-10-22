@@ -121,6 +121,7 @@ async def executar(
     for rota in resultado.rotas:
         nos = [0] + [i + 1 for i in rota.pedidos] + [0]
         trechos_km = [round(dist[a][b] / 1000.0, 2) for a, b in zip(nos, nos[1:])]
+        tempos_trechos_s = [int(round(dur[a][b])) for a, b in zip(nos, nos[1:])]  # tempo de cada trecho (a tela estima as chegadas por parada)
         deslocamento_min = round(rota.duracao_s / 60)
         paradas_min = len(rota.pedidos) * tempo_por_parada_min
         paradas = []
@@ -130,7 +131,7 @@ async def executar(
             paradas.append(parada)
         viagens.append({
             "motorista_id": rota.motorista_id, "viagem_num": rota.viagem_num, "modal": rota.modal, "pedidos": paradas,
-            "km_total": round(rota.distancia_m / 1000.0, 2), "distancias_trechos_km": trechos_km, "distancia_retorno_km": trechos_km[-1],
+            "km_total": round(rota.distancia_m / 1000.0, 2), "distancias_trechos_km": trechos_km, "tempos_trechos_s": tempos_trechos_s, "distancia_retorno_km": trechos_km[-1],
             "tempo_deslocamento_min": deslocamento_min, "tempo_paradas_min": paradas_min, "tempo_min": deslocamento_min + paradas_min,
             "setores": [s for s in modulo_setores.SETORES if s in rota.setores], "violacoes_rotacao": rota.violacoes,
             "personalizada": rota.personalizada, "teto_recomendado": rota.teto_recomendado, "viagens_solicitadas": rota.viagens_solicitadas,

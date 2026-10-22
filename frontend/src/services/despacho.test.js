@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   regioesRepetidas, seloDeRotacao, rotasEfetivas, trocarMotorista, voltarASugestao, ajustesValidos, quantasAjustadas, corpoDaConfirmacao, textoNestaRoteirizacao,
   alternativasParaRota, linhasDoCartao, avisosDeRotacao, avisoDeCargaDesigual, avisosDeTeto, avisosDoDespacho, LIMITE_DE_ALTERNATIVAS, deveFecharNoScroll,
+  interpretarLimiteKm, avisosDeLimiteKm, MSG_LIMITE_KM_FORMATO, MSG_LIMITE_KM_FAIXA,
 } from './despacho.js';
 import { resumoPorMotorista, rotasPorMotoristaDoResultado, textoDoMotoristaNoCartao } from './selecaoMotoristas.js';
 
@@ -206,4 +207,58 @@ test('rolagem dentro da caixa de motoristas não fecha a lista; a da página fec
   assert.equal(deveFecharNoScroll({ id: 'documento' }, caixa), true); // rolar a página
   assert.equal(deveFecharNoScroll(null, caixa), true);
   assert.equal(deveFecharNoScroll(filho, null), true); // sem caixa aberta
+});
+
+test('limite de km: vazio não confere, vírgula decimal vale, inválido avisa sem bloquear', () => {
+  assert.deepEqual(interpretarLimiteKm(''), { ok: true, valor: null });
+  assert.deepEqual(interpretarLimiteKm(undefined), { ok: true, valor: null });
+  assert.deepEqual(interpretarLimiteKm(' 20 '), { ok: true, valor: 20 });
+  assert.deepEqual(interpretarLimiteKm('20,5'), { ok: true, valor: 20.5 });
+  assert.deepEqual(interpretarLimiteKm('20.5'), { ok: true, valor: 20.5 });
+  for (const texto of ['abc', '-5', '1,2,3', '20km']) assert.deepEqual(interpretarLimiteKm(texto), { ok: false, valor: null, mensagem: MSG_LIMITE_KM_FORMATO });
+  for (const texto of ['0', '0,0', '2001']) assert.deepEqual(interpretarLimiteKm(texto), { ok: false, valor: null, mensagem: MSG_LIMITE_KM_FAIXA });
+  assert.deepEqual(interpretarLimiteKm('2000'), { ok: true, valor: 2000 });
+  assert.ok(!/api|tabela|servidor/i.test(MSG_LIMITE_KM_FORMATO + MSG_LIMITE_KM_FAIXA));
+});
+
+const kmRota = (id, motorista, km, extra = {}) => ({ id, motorista_id: motorista.id, motorista_base: motorista.nome, motorista: motorista.nome, viagem_num: 1, km_total: km, ...extra });
+
+test('limite de km por viagem: "Rota 3 (Ana, Viagem 2) passou 4,2 km do limite de 20 km"', () => {
+  const rotas = [kmRota(1, ANA, 18), kmRota(2, ANA, 24.2, { viagem_num: 2 }), kmRota(3, BETO, 21)];
+  const avisos = avisosDeLimiteKm(rotas, { porViagem: 20 });
+  assert.deepEqual(avisos.map((a) => a.mensagem), ['Rota 2 (Ana, Viagem 2) passou 4,2 km do limite de 20 km', 'Rota 3 (Beto) passou 1,0 km do limite de 20 km']);
+  assert.ok(avisos.every((a) => a.gravidade === 'atencao' && a.tipo === 'limite_km_viagem'));
+  assert.deepEqual(avisosDeLimiteKm(rotas, { porViagem: 30 }), []);
+  assert.deepEqual(avisosDeLimiteKm(rotas, { porViagem: 24.2 }), []); // igual ao limite não passou
+});
+
+test('limite de km por motorista soma as viagens dele', () => {
+  const rotas = [kmRota(1, ANA, 16), kmRota(2, ANA, 15, { viagem_num: 2 }), kmRota(3, ANA, 15, { viagem_num: 3 }), kmRota(4, BETO, 30)];
+  const avisos = avisosDeLimiteKm(rotas, { porMotorista: 40 });
+  assert.deepEqual(avisos.map((a) => a.mensagem), ['Ana passou 6,0 km do limite de 40 km: 46,0 km em 3 viagens']);
+  assert.equal(avisosDeLimiteKm([kmRota(1, ANA, 45.5)], { porMotorista: 40 })[0].mensagem, 'Ana passou 5,5 km do limite de 40 km: 45,5 km em 1 viagem');
+  assert.equal(avisosDeLimiteKm([kmRota(1, ANA, 45.5)], { porMotorista: 40.5 })[0].mensagem, 'Ana passou 5,0 km do limite de 40,5 km: 45,5 km em 1 viagem');
+});
+
+test('os dois limites juntos, vazios não conferem e mensagens iguais não se repetem', () => {
+  const rotas = [kmRota(1, ANA, 25), kmRota(2, ANA, 25, { viagem_num: 2 })];
+  const ambos = avisosDeLimiteKm(rotas, { porViagem: 20, porMotorista: 40 });
+  assert.deepEqual(ambos.map((a) => a.tipo), ['limite_km_viagem', 'limite_km_viagem', 'limite_km_motorista']);
+  assert.deepEqual(avisosDeLimiteKm(rotas, {}), []);
+  assert.deepEqual(avisosDeLimiteKm(rotas, { porViagem: null, porMotorista: null }), []);
+  assert.deepEqual(avisosDeLimiteKm(rotas), []);
+  const iguais = avisosDeLimiteKm([kmRota(1, ANA, 25), kmRota(1, ANA, 25)], { porViagem: 20 });
+  assert.equal(iguais.length, 1);
+});
+
+test('limite de km recalcula depois de trocar o motorista de uma rota e entra no bloco de avisos', () => {
+  const rotas = [kmRota(1, ANA, 25), kmRota(2, BETO, 25)];
+  const sem = avisosDeLimiteKm(rotasEfetivas(rotas, {}, TODOS), { porMotorista: 40 });
+  assert.deepEqual(sem, []);
+  const trocadas = rotasEfetivas(rotas, { 2: 1 }, TODOS); // a Ana passa a fazer as duas
+  assert.deepEqual(avisosDeLimiteKm(trocadas, { porMotorista: 40 }).map((a) => a.mensagem), ['Ana passou 10,0 km do limite de 40 km: 50,0 km em 2 viagens']);
+  assert.deepEqual(avisosDeLimiteKm(trocadas, { porViagem: 20 }).map((a) => a.mensagem), ['Rota 1 (Ana, Viagem 1) passou 5,0 km do limite de 20 km', 'Rota 2 (Ana, Viagem 2) passou 5,0 km do limite de 20 km']);
+  const bloco = avisosDoDespacho({ avisosDoSolver: [{ tipo: 'viagens_extras', gravidade: 'info', mensagem: 'x' }], rotas: trocadas, rotacao: {}, capacidades: {}, marcados: [ANA, BETO], limitesKm: { porMotorista: 40 } });
+  assert.ok(bloco.some((a) => a.tipo === 'limite_km_motorista') && bloco.some((a) => a.tipo === 'viagens_extras'));
+  assert.ok(!avisosDoDespacho({ avisosDoSolver: [], rotas: trocadas, rotacao: {}, capacidades: {}, marcados: [ANA, BETO] }).some((a) => a.tipo.startsWith('limite_km')));
 });

@@ -19,7 +19,7 @@ import ListaPedidos from './components/ListaPedidos';
 import RelatorioImportacao from './components/RelatorioImportacao';
 import {
   TURNOS, interpretarTempoPorParada, podeExecutar, textoDeConfirmacao, textoDosSetores, avisosOrdenados, distanciasEmLinhaReta, formatarMinutos,
-  MSG_ESCOLHA_O_TURNO, TEMPO_POR_PARADA_PADRAO_MIN
+  MSG_ESCOLHA_O_TURNO, TEMPO_POR_PARADA_PADRAO_MIN, recomendarRotas, corpoDasViagens, manterViagensDosMarcados
 } from './services/roteirizacao';
 import {
   pedidosParaRoteirizar, pedidoParaRoteirizacao, idsSemEndereco, corrigirEndereco, contarMarcados, avisoAntesDeExecutar, MSG_ERRO_ENDERECO
@@ -29,8 +29,8 @@ import { API_BASE } from './config';
 import { instalarTratamento401, MENSAGEM_SESSAO_EXPIRADA } from './services/sessao';
 import { baixarBlob } from './services/download';
 import {
-  MSG_MARQUE_MOTORISTA, textoRotasEMotoristas, linhaDeConfirmacao, linhaDeDesfazer,
-  rotasPorMotoristaDoResultado, manterSomenteAtivos, motoristasMarcados, podeExecutarComMotoristas
+  MSG_MARQUE_MOTORISTA, textoRotasEMotoristas, linhaDeConfirmacao, linhaDeDesfazer, textoDoMotoristaNoCartao, resumoPorMotorista,
+  textoResumoDoMotorista, textoPedidos, rotasPorMotoristaDoResultado, manterSomenteAtivos, motoristasMarcados, podeExecutarComMotoristas
 } from './services/selecaoMotoristas';
 
 // Instância dedicada que anexa automaticamente o token do operador logado
@@ -107,6 +107,8 @@ export default function App() {
   // para esta roteirização: só os marcados entram nas rotas. Marcar não ativa nem desativa ninguém.
   const [motoristas, setMotoristas] = useState([]);
   const [rotasHoje, setRotasHoje] = useState({});
+  const [pedidosHoje, setPedidosHoje] = useState({}); // pedidos das rotas confirmadas hoje, por motorista
+  const [viagensPorMotorista, setViagensPorMotorista] = useState({}); // { idDoMotorista: '2' }; ausente = automático (recomendado)
   const [selecionados, setSelecionados] = useState([]);
   const [frotaCarregada, setFrotaCarregada] = useState(false);
   // Confirmação das rotas do resultado: { confirmada, linhas, enviando, erro }
@@ -115,10 +117,11 @@ export default function App() {
   // Sem o cadastro a roteirização avisa o operador na hora de gerar as rotas.
   const carregarFrota = useCallback(() => Promise.all([
     apiAuth.get('/motoristas', { params: { incluir_inativos: false } }),
-    apiAuth.get('/rotas-realizadas/hoje').catch(() => ({ data: { por_motorista: {} } }))
+    apiAuth.get('/rotas-realizadas/hoje').catch(() => ({ data: { por_motorista: {}, pedidos_por_motorista: {} } }))
   ]).then(([respMotoristas, respHoje]) => {
     setMotoristas(respMotoristas.data);
     setRotasHoje(respHoje.data.por_motorista || {});
+    setPedidosHoje(respHoje.data.pedidos_por_motorista || {});
     setSelecionados((atuais) => manterSomenteAtivos(atuais, respMotoristas.data));
   }).catch(() => {}).finally(() => setFrotaCarregada(true)), []);
 
@@ -174,6 +177,9 @@ export default function App() {
 
   // Capacidade por Viagem Simultânea: só dos motoristas marcados
   const marcados = motoristasMarcados(motoristas, selecionados);
+  const resumoDosMotoristas = resultado ? resumoPorMotorista(resultado.rotas) : new Map();
+  // O número de rotas só vale para quem continua marcado.
+  const viagensDosMarcados = manterViagensDosMarcados(viagensPorMotorista, selecionados);
   const capacidadeSimultaneaFrota = capacityCheck(modais, marcados);
 
   // Alterar capacidade variável de um modal específico
@@ -350,6 +356,7 @@ export default function App() {
           : { origem_rua: origem.rua, origem_num: origem.numero, origem_bairro: origem.bairro, origem_cep: origem.cep }),
         modais_config: modais,
         motorista_ids: selecionados,
+        viagens_por_motorista: corpoDasViagens(selecionados, viagensDosMarcados),
         turno,
         tempo_por_parada_min: tempo.valor,
         pedidos: pedidosAtivos.map(pedidoParaRoteirizacao)
@@ -407,7 +414,7 @@ export default function App() {
       const { data } = await apiAuth.post('/rotas-realizadas/confirmar', { execucao_id: resultado.execucao_id });
       setConfirmacao({
         confirmada: true,
-        linhas: data.motoristas.map((m) => linhaDeConfirmacao(m.nome, m.nesta_execucao, m.total_hoje)),
+        linhas: data.motoristas.map((m) => linhaDeConfirmacao(m.nome, m.nesta_execucao, m.total_hoje, m.pedidos_nesta_execucao, m.pedidos_hoje)),
         enviando: false,
         erro: ''
       });
@@ -426,7 +433,7 @@ export default function App() {
       const { data } = await apiAuth.post(`/rotas-realizadas/${encodeURIComponent(resultado.execucao_id)}/desfazer`);
       setConfirmacao({
         confirmada: false,
-        linhas: data.motoristas.map((m) => linhaDeDesfazer(m.nome, m.total_hoje)),
+        linhas: data.motoristas.map((m) => linhaDeDesfazer(m.nome, m.total_hoje, m.pedidos_hoje)),
         enviando: false,
         erro: ''
       });
@@ -973,6 +980,10 @@ export default function App() {
                   motoristas={motoristas}
                   lojaId={lojaHubId}
                   rotasHoje={rotasHoje}
+                  pedidosHoje={pedidosHoje}
+                  viagens={viagensDosMarcados}
+                  onViagens={(id, valor) => setViagensPorMotorista((atual) => (valor === '' ? Object.fromEntries(Object.entries(atual).filter(([k]) => Number(k) !== id)) : { ...atual, [id]: valor }))}
+                  recomendado={recomendarRotas(pedidosAtivos.length, marcados.map((m) => m.tipo_veiculo), modais)}
                   selecionados={selecionados}
                   onMudar={setSelecionados}
                 />
@@ -1115,9 +1126,7 @@ export default function App() {
                       const hoje = rotasHoje[String(l.motorista_id)] || 0;
                       return (
                         <p key={l.motorista_id} className="text-[11px] text-slate-300 leading-snug">
-                          <span className="font-semibold text-white">{l.nome}</span>
-                          {l.rotas !== null && <>: {l.rotas === 1 ? '1 rota' : `${l.rotas} rotas`} nesta roteirização</>}
-                          <span className="text-slate-500"> • {hoje === 0 ? 'nenhuma rota hoje' : hoje === 1 ? '1 rota realizada hoje' : `${hoje} rotas realizadas hoje`}</span>
+                          {textoDoMotoristaNoCartao(l, hoje, pedidosHoje[String(l.motorista_id)] || 0)}
                         </p>
                       );
                     })}
@@ -1266,6 +1275,14 @@ export default function App() {
                         <td className="p-3.5 font-sans font-bold flex items-center gap-2">
                           <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: r.cor }}></span>
                           <span className="text-white">{r.motorista}</span>
+                          {r.rota_personalizada && (
+                            <span className="text-[10px] font-normal px-1.5 py-0.5 rounded bg-violet-500/15 border border-violet-500/30 text-violet-300" title="O operador escolheu quantas rotas este motorista faz">
+                              Rota personalizada
+                            </span>
+                          )}
+                          {textoResumoDoMotorista(resumoDosMotoristas.get(r.motorista_id)) && (
+                            <span className="text-[10px] font-normal text-slate-400">({textoResumoDoMotorista(resumoDosMotoristas.get(r.motorista_id))})</span>
+                          )}
                         </td>
                         <td className="p-3.5 text-slate-300 font-sans">
                           <span className="text-[10px] font-normal px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300">
@@ -1274,7 +1291,8 @@ export default function App() {
                         </td>
                         <td className="p-3.5 text-slate-300 font-sans">
                           <div className="flex items-center gap-2">
-                            {r.qtd_pedidos} paradas
+                            {textoPedidos(r.qtd_pedidos)}
+                            {r.rota_personalizada && <span className="text-[10px] text-violet-300">; recomendado {r.teto_recomendado} por viagem</span>}
                             {(r.paradas || []).some(p => p.geocode_status === 'ALERTA_APROXIMADO') && (
                               <div
                                 title="Uma ou mais paradas desta rota têm localização aproximada (só bairro/cidade, não o endereço exato)."

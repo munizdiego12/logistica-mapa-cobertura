@@ -238,7 +238,7 @@ def test_rotacao_violada_com_aviso_quando_e_inevitavel_e_a_rota_sai_mesmo_assim(
     assert r.rotas[0].violacoes == ["N"]
     avisos = [a for a in r.avisos if a["tipo"] == "rotacao"]
     assert len(avisos) == 1 and "Ana" in avisos[0]["mensagem"] and "setor N" in avisos[0]["mensagem"] and "manha" in avisos[0]["mensagem"]
-    assert "não há outro motorista deste tipo marcado" in avisos[0]["mensagem"]
+    assert "não há outro motorista marcado" in avisos[0]["mensagem"]
 
 
 def test_rotacao_violada_quando_todos_os_motoristas_ja_passaram_pelo_setor():
@@ -259,11 +259,18 @@ def test_justica_prefere_quem_fez_menos_rotas_no_dia():
     assert any(a["tipo"] == "sem_rota" for a in um.avisos)  # com pouco pedido, o outro fica sem rota (informativo)
 
 
-def test_justica_nas_rotas_extras_e_todos_os_motoristas_trabalham():
+def test_justica_na_cota_impar_e_todos_os_motoristas_trabalham():
     mots = _motoristas((1, "Ana", CARRO, 2), (2, "Beto", CARRO, 2))
     r = _resolver(_aleatorios(6), mots, rotas_hoje={1: 5, 2: 0})
-    rotas_por_motorista = Counter(x.motorista_id for x in r.rotas)
-    assert len(r.rotas) == 3 and rotas_por_motorista[2] == 2 and rotas_por_motorista[1] == 1  # quem fez menos pega a rota extra
+    pedidos_por_motorista = Counter()
+    for x in r.rotas:
+        pedidos_por_motorista[x.motorista_id] += len(x.pedidos)
+    assert pedidos_por_motorista == {1: 3, 2: 3} and len(r.rotas) == 4  # carga igual por motorista (3 e 3), cada um em 2 viagens de teto 2
+    r = _resolver(_aleatorios(7), mots, rotas_hoje={1: 5, 2: 0})
+    pedidos_por_motorista = Counter()
+    for x in r.rotas:
+        pedidos_por_motorista[x.motorista_id] += len(x.pedidos)
+    assert pedidos_por_motorista == {1: 3, 2: 4}  # o pedido a mais vai para quem fez menos rotas no dia
 
 
 def test_viagens_do_mesmo_motorista_ficam_em_setores_diferentes():

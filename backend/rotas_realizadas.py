@@ -43,6 +43,16 @@ async def contagem_do_dia(conn, dia: date) -> dict:
     return {int(l["motorista_id"]): int(l["rotas"]) for l in linhas}
 
 
+async def totais_do_dia(conn, dia: date) -> dict:
+    """{motorista_id: {"rotas": n, "pedidos": p}} das rotas CONFIRMADAS no dia (pedidos somados de `qtd_pedidos`). Rotas canceladas não entram."""
+    linhas = await conn.fetch(
+        "SELECT motorista_id, count(*) AS rotas, COALESCE(SUM(qtd_pedidos), 0) AS pedidos FROM rotas_realizadas "
+        "WHERE data = $1 AND status = 'confirmada' GROUP BY motorista_id",
+        dia,
+    )
+    return {int(l["motorista_id"]): {"rotas": int(l["rotas"]), "pedidos": int(l["pedidos"])} for l in linhas}
+
+
 async def setores_do_dia(conn, dia: date, turno: str) -> dict:
     """
     Regra de rotação (Etapa 8): {motorista_id: {setor: [turnos]}} com os setores que cada motorista já fez no dia em OUTROS turnos
@@ -68,14 +78,17 @@ async def resumo_da_execucao(conn, execucao_id: str, dia: date) -> list:
     linhas = await conn.fetch(
         "SELECT m.id AS motorista_id, m.nome AS nome, "
         "  (SELECT count(*) FROM rotas_realizadas x WHERE x.execucao_id = $1 AND x.motorista_id = m.id AND x.status = 'confirmada') AS nesta_execucao, "
-        "  (SELECT count(*) FROM rotas_realizadas y WHERE y.motorista_id = m.id AND y.data = $2 AND y.status = 'confirmada') AS total_hoje "
+        "  (SELECT count(*) FROM rotas_realizadas y WHERE y.motorista_id = m.id AND y.data = $2 AND y.status = 'confirmada') AS total_hoje, "
+        "  (SELECT COALESCE(SUM(x2.qtd_pedidos), 0) FROM rotas_realizadas x2 WHERE x2.execucao_id = $1 AND x2.motorista_id = m.id AND x2.status = 'confirmada') AS pedidos_nesta_execucao, "
+        "  (SELECT COALESCE(SUM(y2.qtd_pedidos), 0) FROM rotas_realizadas y2 WHERE y2.motorista_id = m.id AND y2.data = $2 AND y2.status = 'confirmada') AS pedidos_hoje "
         "FROM motoristas m "
         "WHERE m.id IN (SELECT motorista_id FROM rotas_realizadas WHERE execucao_id = $1) "
         "ORDER BY lower(m.nome), m.id",
         execucao_id, dia,
     )
     return [
-        {"motorista_id": int(l["motorista_id"]), "nome": l["nome"], "nesta_execucao": int(l["nesta_execucao"]), "total_hoje": int(l["total_hoje"])}
+        {"motorista_id": int(l["motorista_id"]), "nome": l["nome"], "nesta_execucao": int(l["nesta_execucao"]), "total_hoje": int(l["total_hoje"]),
+         "pedidos_nesta_execucao": int(l["pedidos_nesta_execucao"]), "pedidos_hoje": int(l["pedidos_hoje"])}
         for l in linhas
     ]
 

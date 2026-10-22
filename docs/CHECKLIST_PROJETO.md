@@ -314,8 +314,10 @@ Escreva testes com 10, 20 e 40 pedidos e meça o tempo. Sem push.
 - [ ] **Aplicar a migration `0010` no Neon** (você roda; backup antes; `alembic current` deve mostrar `0009` → `upgrade head --sql` (revisar) → `upgrade head` → `current` deve mostrar `0010`; comandos em `docs/MIGRATIONS.md`). **Antes de confirmar rotas com a versão nova.**
 - [ ] **Publicar frontend e backend juntos** (o Render instala o `ortools`; conferir o deploy, a memória e o tempo no plano gratuito).
 - [ ] **Validar no site:** escolher o turno, conferir o botão e a confirmação, rodar com poucos e muitos pedidos, ver setores, tempos, distâncias entre paradas e avisos, confirmar rotas em dois turnos e ver a regra de rotação no segundo.
+- [x] **Etapa 8b pronta no código (22/10/2026); falta validar no site. Sem migration** (`rotas_realizadas.qtd_pedidos` já existia). **Quantas rotas cada motorista faz:** ao lado de cada motorista marcado, o campo **"Quantas rotas o motorista vai fazer?"** ("Automático (recomendado)", 1, 2, 3 ou 4) e o texto "Recomendado: N rotas com base na quantidade de pedidos" (N = ceil(pedidos marcados / soma dos tetos dos motoristas marcados), mínimo 1; atualiza ao marcar/desmarcar pedidos e motoristas), com o aviso de que cada viagem conta como uma rota no dia (quem fizer menos viagens terá menos rotas contadas). `POST /api/otimizar` aceita `viagens_por_motorista` ({id: n|null}; 1 a 10 no servidor; nulo/ausente = automático; id fora dos marcados ou valor inválido = 422) e continua aceitando só `motorista_ids`. **Regra de equilíbrio (corrigida em 22/10/2026): por MOTORISTA, não por rota.** O solver (`backend/solver.py`, reescrito) tem dois níveis: (1) a carga de cada motorista: cota exata `n // D`, o resto para quem fez MENOS rotas confirmadas no dia, a mesma com ou sem número de viagens escolhido e sem depender do tipo de veículo; OR-Tools com um veículo por motorista, rotação como custo de arco e a cota fixa; (2) as viagens de cada motorista: automático = `ceil(cota / teto do tipo)`, personalizado = o número escolhido (nunca mais que a cota: não cria viagem vazia; o teto do tipo NÃO vale), carga dividida em viagens equilibradas (tamanhos que diferem em no máximo 1), preferindo setores diferentes entre as viagens do mesmo motorista. Exemplos testados: 20 pedidos e 2 motoristas de teto 5 = 10 pedidos cada em 2 viagens de 5; A escolhe 1 rota = A com 10 em 1 viagem (aviso de que passa do teto 5) e B com 10 em 2 de 5; A escolhe 4 = A com 10 em 4 viagens (2 a 3 cada) e B em 2; tipos diferentes (carro teto 5 e utilitário teto 12, 24 pedidos) = 12 para cada, o carro em 3 viagens de 4 e o utilitário em 1 de 12. Rotação, setores, justiça, tempo e a regra de nunca recusar/nunca usar o peso continuam. **Avisos novos:** "Rota personalizada de Ana: 10 pedidos em 1 viagem; o teto recomendado do tipo de veículo é 5 por viagem" (só quando alguma viagem passa do teto) e "viagens pedidas a mais que os pedidos" (não cria rota vazia). **Quantos pedidos cada motorista fez:** a tabela de rotas do resultado mostra "N pedidos" por rota, a marca "Rota personalizada" com "10 pedidos; recomendado 5 por viagem" e, para quem tem mais de uma viagem, o resumo "2 rotas, 10 pedidos"; o cartão "Rotas por Motorista" mostra "Nome: N rota(s) nesta roteirização (M pedidos) • K rota(s) realizada(s) hoje (P pedidos)"; a confirmação mostra "Nome: +N rota(s), M pedidos (total hoje: K rota(s), P pedidos)" e o desfazer reflete o novo total; a lista de escolha mostra "Nome - Tipo - K rota(s) realizada(s) hoje (P pedidos)" ("nenhuma rota hoje" quando zero). Backend: `rotas_realizadas.totais_do_dia` (soma de `qtd_pedidos` das confirmadas do dia de Brasília), `GET /api/rotas-realizadas/hoje` acrescenta `pedidos_por_motorista` e a confirmação/desfazer acrescentam `pedidos_nesta_execucao` e `pedidos_hoje` por motorista, sem mudar o que já existia. (A "matriz de despacho" completa é a Etapa 10; por ora esses dados estão na tabela de rotas do resultado.) **Tempos medidos de novo** (matriz em linha reta, esta máquina, execução completa): 10 pedidos = 2,5 s, 20 pedidos = 5,0 s, 40 pedidos = 10,0 s (o solver usa todo o limite). Testes: 1007 no backend (32 novos em test_roteirizacao_8b.py: os três exemplos do operador e tipos de veículo diferentes, cota por motorista, viagens pedidas a mais, aviso de rota personalizada, rotação, totais do dia, confirmar e desfazer, validações da API) e 115 no frontend; build do frontend ok.
+- [ ] **Validar a 8b no site:** com 2 motoristas e 20 pedidos, rodar no automático, com "1 rota" e com "4 rotas" para um deles; conferir a marca "Rota personalizada", o aviso do teto, os totais de pedidos no cartão e na confirmação/desfazer.
 
-## ⬜ Etapa 9 — Controle de duplicidade
+## ⬜ Etapa 9 — Controle de duplicidade *(feita em sequência com a Etapa 12, sobre a mesma tabela de pedidos por rota confirmada)*
 ```
 Crie a tabela pedidos_roteirizados_hoje com ID do pedido, rota, motorista, turno, data e operador. Pedido já usado aparece como "já está na Rota X". Reselecionar exige confirmação em duas etapas (avisa, não bloqueia). Sem push.
 ```
@@ -330,9 +332,12 @@ Na Matriz de Despacho, a coluna Motorista vem pré-preenchida com a sugestão do
 Relatórios pós-cálculo, sem alterar o agrupamento: (a) validação de janela (loja e Delivery Window do pedido), indicando pedidos fora do prazo e o motivo; (b) limite de km por rota/motorista, com aviso "Rota X passou Y km do limite". Sem push.
 ```
 
-## ⬜ Etapa 12 — Histórico
+## ⬜ Etapa 12 — Histórico *(redesenhada em 22/10/2026; feita logo depois da Etapa 9, sobre a mesma tabela de pedidos por rota confirmada)*
+- Tela estilo histórico do navegador: agrupada por **dia > loja > motorista-rota (expansível) > pedidos com id e endereço**, com busca e filtros por loja, motorista e operador; só rotas **confirmadas**.
+- **Proposta pendente de confirmação (privacidade):** guardar só id, endereço e cidade (sem nome de cliente nem telefone) e apagar o endereço depois de cerca de 90 dias, mantendo a contagem de rotas.
+- A tabela de pedidos por rota confirmada também resolve a perda do resultado da roteirização quando o Render reinicia antes de "Confirmar rotas".
 ```
-Crie o histórico permanente de cada roteirização (dados da matriz + data/hora + operador) com tela de consulta e filtros. Sem push.
+Crie a tabela de pedidos por rota confirmada (migration nova) e a tela de histórico descrita acima (agrupada por dia, loja, motorista-rota e pedidos; busca e filtros por loja, motorista e operador; só rotas confirmadas). Só id, endereço e cidade; nunca nome de cliente nem telefone. Sem push.
 ```
 
 ## ⬜ Etapa 13 — Romaneio
@@ -340,7 +345,7 @@ Crie o histórico permanente de cada roteirização (dados da matriz + data/hora
 Adicione ao romaneio .csv as colunas ID do pedido, cliente, peso (estimado, com o aviso de itens sem peso), latitude e longitude, mantendo todas as atuais. A coluna de janela de entrega fica pendente do schema do BigQuery. Sem push.
 ```
 
-## ⬜ Etapa 14 — Layout novo
+## ❌ Etapa 14 — Layout novo *(CANCELADA em 22/10/2026: o layout atual fica como está)*
 ```
 Reorganize o layout: o mapa ocupa a largura toda, os controles ficam em faixa horizontal acima, a lista de pedidos em painel retrátil sobre a borda do mapa, e as métricas (volume, rotas, extensão, custo) ficam abaixo do mapa e acima do romaneio. Sem push.
 ```
@@ -375,3 +380,11 @@ Implemente conectores de pedidos para Google Sheets (links nomeados) e BigQuery 
 
 ## Pendências novas (validação no site)
 - [ ] **Itens de teste:** os itens **TESTE-001 a TESTE-004** foram criados na validação dos pesos; ainda **não há como excluir nem desativar itens** na tela "Pesos dos itens". Criar a desativação de itens (ou aceitar conviver com eles) e depois tirá-los da fila "sem peso".
+
+## Decisões do operador (22/10/2026)
+- **Etapa 14 (layout novo) CANCELADA:** o layout atual (aba à esquerda, informações acima do mapa) fica como está.
+- **Etapa 12 (histórico) redesenhada:** tela estilo histórico do navegador, agrupada por dia, loja, motorista-rota (expansível) e pedidos com id e endereço, com busca e filtros por loja, motorista e operador, só com rotas confirmadas. **Proposta pendente de confirmação:** guardar só id, endereço e cidade (sem nome de cliente nem telefone) e apagar o endereço depois de cerca de 90 dias, mantendo a contagem de rotas.
+- **Etapas 9 (duplicidade) e 12 (histórico) serão feitas em sequência sobre uma mesma tabela de pedidos por rota confirmada**, o que também resolve a perda do resultado da roteirização quando o Render reinicia.
+- **Melhoria futura:** trocar o ícone de casinha das lojas pela logo da rede (arquivos guardados no próprio sistema, com ícone de reserva, e a rede de cada loja vinda do `retailer_name` do Superset), depois que tudo estiver pronto, conferindo o uso das marcas.
+- **Operação no Render:** a primeira roteirização levou cerca de 30 segundos (inclui carregar o ortools) e o servidor dorme após 15 minutos sem uso.
+- **Equilíbrio por motorista (8b):** o número de viagens escolhido só define em quantas viagens a carga DO MOTORISTA é dividida; a quantidade de pedidos dele é a mesma que o modo automático lhe daria.

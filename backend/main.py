@@ -607,6 +607,9 @@ class OtimizarRequest(BaseModel):
     turno: Optional[str] = None
     # Minutos parados em cada entrega (padrão 10), somados ao tempo de deslocamento.
     tempo_por_parada_min: Optional[Union[int, float, str]] = None
+    # Número de viagens por motorista ({"id": 2}); nulo/ausente = automático (recomendado). O teto de pedidos do tipo de veículo não vale para o
+    # motorista com número definido (rota personalizada): o resultado só avisa quando a viagem passa do teto.
+    viagens_por_motorista: Optional[Dict[str, Optional[Union[int, float, str]]]] = None
     pedidos: List[Dict[str, Any]]
 
 @app.get("/api/modais", dependencies=[Depends(obter_operador_atual)])
@@ -767,6 +770,7 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar:
             plano = await roteirizacao.executar(
                 pedidos=pedidos_geo, hub=(orig_lat, orig_lon), motoristas=frota_usar, capacidades=capacidades, turno=turno,
                 tempo_por_parada_min=tempo_por_parada, rotas_hoje=contexto.get("rotas_hoje"), proibidos=contexto.get("proibidos"),
+                viagens_por_motorista=contexto.get("viagens"),
                 obter_matriz=lambda pontos: obter_matriz(client, pontos),
                 progresso=lambda texto: job.__setitem__("etapa", texto),
             )
@@ -817,6 +821,8 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar:
                     "tempo_deslocamento_min": viagem["tempo_deslocamento_min"], "tempo_paradas_min": viagem["tempo_paradas_min"],
                     "setores": viagem["setores"], "distancias_trechos_km": viagem["distancias_trechos_km"],
                     "distancia_retorno_km": viagem["distancia_retorno_km"], "violacoes_rotacao": viagem["violacoes_rotacao"],
+                    "rota_personalizada": viagem["personalizada"], "teto_recomendado": viagem["teto_recomendado"],
+                    "viagens_solicitadas": viagem["viagens_solicitadas"],
                     "custo_total": custos["custo_total"], "custo_por_pedido": custos["custo_por_pedido"],
                     "valor_rota": custos["valor_rota"], "origem_valor": custos["origem_valor"],
                     "geometria": geometria, "paradas": pts_rota, "link_maps": link_maps
@@ -897,6 +903,10 @@ async def iniciar_otimizacao(req: "OtimizarRequest"):
         return escolhidos, await rotas_realizadas.contagem_do_dia(c, dia), await rotas_realizadas.setores_do_dia(c, dia, turno)
 
     motoristas, rotas_hoje, proibidos = await _com_conexao_frota(_motoristas_e_historico_do_dia)
+    try:  # número de viagens por motorista (opcional; nulo = automático): só vale para motoristas marcados
+        viagens_por_motorista = roteirizacao.interpretar_viagens(req.viagens_por_motorista, {int(m["id"]) for m in motoristas})
+    except ValueError as erro:
+        raise HTTPException(status_code=422, detail=str(erro))
     frota_usar = [
         MotoristaItem(id=m["id"], motorista=m["nome"], modal=m["tipo_veiculo"], custo_rota=m["custo_rota"], valor_motorista=m.get("valor_rota"))
         for m in motoristas
@@ -904,7 +914,7 @@ async def iniciar_otimizacao(req: "OtimizarRequest"):
     job_id = _novo_job()
     asyncio.create_task(_processar_otimizacao(
         job_id, req, frota_usar, valores_informados, loja,
-        {"turno": turno, "tempo_por_parada_min": tempo_por_parada, "rotas_hoje": rotas_hoje, "proibidos": proibidos},
+        {"turno": turno, "tempo_por_parada_min": tempo_por_parada, "rotas_hoje": rotas_hoje, "proibidos": proibidos, "viagens": viagens_por_motorista},
     ))
     return {"job_id": job_id}
 
@@ -1298,8 +1308,13 @@ class ConfirmarRotasRequest(BaseModel):
 async def rotas_realizadas_hoje(operador: Operador = Depends(obter_operador_atual)):
     """Rotas confirmadas hoje (dia de Brasília) por motorista: {"data": "2026-10-15", "por_motorista": {"3": 2}}."""
     dia = rotas_realizadas.hoje_em_brasilia()
-    contagem = await _com_conexao_frota(lambda c: rotas_realizadas.contagem_do_dia(c, dia))
-    return {"data": dia.isoformat(), "por_motorista": {str(k): v for k, v in contagem.items()}}
+    totais = await _com_conexao_frota(lambda c: rotas_realizadas.totais_do_dia(c, dia))
+    return {
+        "data": dia.isoformat(),
+        "por_motorista": {str(k): v["rotas"] for k, v in totais.items()},
+        # Etapa 8b: pedidos das rotas confirmadas do dia por motorista (acrescentado; "por_motorista" continua igual)
+        "pedidos_por_motorista": {str(k): v["pedidos"] for k, v in totais.items()},
+    }
 
 
 @app.post("/api/rotas-realizadas/confirmar")

@@ -10,6 +10,43 @@ export const TEMPO_POR_PARADA_PADRAO_MIN = 10;
 export const MSG_ESCOLHA_O_TURNO = 'Escolha o turno (manhã, tarde ou noite).';
 export const MSG_TEMPO_POR_PARADA = 'O tempo por parada precisa ficar entre 1 e 60 minutos.';
 
+// Etapa 8b: quantas rotas (viagens) cada motorista faz. Automático é o padrão (recomendado); 1 a 4 definem a rota personalizada.
+export const OPCOES_DE_VIAGENS = [
+  { valor: '', rotulo: 'Automático (recomendado)' },
+  { valor: '1', rotulo: '1' }, { valor: '2', rotulo: '2' }, { valor: '3', rotulo: '3' }, { valor: '4', rotulo: '4' },
+];
+export const CAPACIDADE_PADRAO = 6; // o mesmo teto que o servidor usa quando o tipo não tem capacidade
+export const AVISO_VIAGENS = 'Cada viagem conta como uma rota no dia: o motorista que fizer menos viagens terá menos rotas contadas.';
+
+/**
+ * Rotas recomendadas: ceil(pedidos marcados / soma dos tetos dos motoristas marcados), mínimo 1. `tiposDosMotoristas`: o tipo de veículo de cada
+ * motorista marcado; `capacidades`: { tipo: teto de pedidos por viagem }.
+ */
+export function recomendarRotas(pedidos, tiposDosMotoristas, capacidades) {
+  const soma = (tiposDosMotoristas ?? []).reduce((t, tipo) => t + Math.max(1, Number(capacidades?.[tipo]?.capacidade ?? capacidades?.[tipo]) || CAPACIDADE_PADRAO), 0);
+  if (!soma) return 1;
+  return Math.max(1, Math.ceil((Number(pedidos) || 0) / soma));
+}
+
+/** "Recomendado: 1 rota com base na quantidade de pedidos" / "Recomendado: 3 rotas com base na quantidade de pedidos". */
+export const textoRecomendado = (n) => `Recomendado: ${n} ${n === 1 ? 'rota' : 'rotas'} com base na quantidade de pedidos`;
+
+/** Corpo enviado: { "id": n } só para os motoristas marcados com número definido (1 a 4); automático fica de fora. */
+export function corpoDasViagens(selecionados, viagensPorMotorista) {
+  const corpo = {};
+  for (const id of selecionados ?? []) {
+    const n = Number(viagensPorMotorista?.[id]);
+    if (Number.isInteger(n) && n >= 1 && n <= 4) corpo[id] = n;
+  }
+  return corpo;
+}
+
+/** Tira do mapa os motoristas que deixaram de estar marcados. */
+export function manterViagensDosMarcados(viagensPorMotorista, selecionados) {
+  const ids = new Set(selecionados ?? []);
+  return Object.fromEntries(Object.entries(viagensPorMotorista ?? {}).filter(([id]) => ids.has(Number(id))));
+}
+
 export const rotuloDoTurno = (valor) => TURNOS.find((t) => t.valor === valor)?.rotulo ?? '';
 
 /** Tempo por parada digitado: vazio vale 10; precisa ser inteiro de 1 a 60. Devolve { ok, valor } ou { ok: false, mensagem }. */

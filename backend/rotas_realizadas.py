@@ -74,6 +74,24 @@ async def setores_do_dia(conn, dia: date, turno: str) -> dict:
     return por_motorista
 
 
+def avisos_de_rotacao(rotas: list, rotacao: dict, nomes: dict) -> list:
+    """
+    Etapa 10: avisos (só informativos, nunca bloqueiam) das rotas finais cujo motorista já fez, em outro turno de hoje, algum dos setores da rota.
+    `rotas`: [{"numero_rota", "motorista_id", "setores": "N,NE"}]; `rotacao`: o que `setores_do_dia` devolve; `nomes`: {motorista_id: nome}.
+    O texto traz só o número da rota e o nome do motorista.
+    """
+    avisos = []
+    for rota in rotas:
+        feitos = rotacao.get(int(rota["motorista_id"])) or {}
+        repetidos = [s for s in str(rota.get("setores") or "").replace(" ", "").split(",") if s and s in feitos]
+        if not repetidos:
+            continue
+        regiao = f"a região {repetidos[0]}" if len(repetidos) == 1 else f"as regiões {', '.join(repetidos[:-1])} e {repetidos[-1]}"
+        nome = nomes.get(int(rota["motorista_id"])) or "O motorista"
+        avisos.append(f"Rota {int(rota['numero_rota'])}: {nome} já fez {regiao} em outro turno hoje.")
+    return avisos
+
+
 async def resumo_da_execucao(conn, execucao_id: str, dia: date) -> list:
     """Para cada motorista da execução: rotas confirmadas nela agora e total confirmado no dia (todas as execuções)."""
     linhas = await conn.fetch(
@@ -108,7 +126,8 @@ async def confirmar(conn, execucao_id: str, rotas: list, dia: date, loja_hub: Op
                 "INSERT INTO rotas_realizadas (execucao_id, numero_rota, motorista_id, data, loja_hub, turno, qtd_pedidos, distancia_km, status, criado_por, setores) "
                 "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'confirmada', $9, $10) "
                 "ON CONFLICT (execucao_id, numero_rota) DO UPDATE SET status = 'confirmada', criado_em = CURRENT_TIMESTAMP, criado_por = EXCLUDED.criado_por, "
-                "turno = EXCLUDED.turno, setores = EXCLUDED.setores "
+                "turno = EXCLUDED.turno, setores = EXCLUDED.setores, motorista_id = EXCLUDED.motorista_id, qtd_pedidos = EXCLUDED.qtd_pedidos, "
+                "distancia_km = EXCLUDED.distancia_km, loja_hub = EXCLUDED.loja_hub "
                 "WHERE rotas_realizadas.status = 'cancelada' "
                 "RETURNING id",
                 execucao_id, int(rota["numero_rota"]), int(rota["motorista_id"]), dia, loja_hub, turno,

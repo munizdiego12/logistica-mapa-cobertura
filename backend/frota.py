@@ -483,6 +483,31 @@ async def frota_ativa(conn) -> list:
     ]
 
 
+MSG_MOTORISTA_DA_ROTA = "O motorista escolhido para uma das rotas não está mais ativo ou cadastrado. Atualize a lista e escolha de novo."
+
+
+async def nomes_dos_motoristas_ativos(conn, ids) -> dict:
+    """
+    Etapa 10 (troca de motorista na matriz de despacho): {id: nome} dos motoristas pedidos, todos ATIVOS. ValueError em linguagem do operador se algum
+    valor não for um número, não existir ou estiver desativado. Não devolve telefone nem código.
+    """
+    numeros = set()
+    for bruto in ids or []:
+        if isinstance(bruto, bool) or (isinstance(bruto, float) and not bruto.is_integer()):
+            raise ValueError(MSG_MOTORISTA_DA_ROTA)
+        try:
+            numeros.add(int(bruto))
+        except (TypeError, ValueError):
+            raise ValueError(MSG_MOTORISTA_DA_ROTA) from None
+    if not numeros:
+        return {}
+    linhas = await conn.fetch("SELECT id, nome, ativo FROM motoristas")
+    ativos = {int(l["id"]): l["nome"] for l in linhas if l["ativo"]}
+    if any(n not in ativos for n in numeros):
+        raise ValueError(MSG_MOTORISTA_DA_ROTA)
+    return {n: ativos[n] for n in numeros}
+
+
 async def selecionar_motoristas(conn, ids) -> list:
     """
     Motoristas escolhidos para a roteirização (na ordem escolhida, sem repetir), com o tipo de veículo e o valor base.

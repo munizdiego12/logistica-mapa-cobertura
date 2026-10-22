@@ -1303,6 +1303,29 @@ async def atualizar_loja(id_loja: int, dados: LojaRequest, operador: Operador = 
 class ConfirmarRotasRequest(BaseModel):
     execucao_id: str
     turno: Optional[str] = None
+    # Etapa 10: motorista final das rotas que o operador trocou na matriz de despacho, {"<numero da rota>": <id do motorista>}. Ausente = o do solver.
+    atribuicoes: Optional[Any] = None
+
+
+MSG_ROTA_AJUSTADA_INEXISTENTE = "Uma das rotas ajustadas não existe neste resultado. Gere as rotas de novo."
+
+
+def _atribuicoes_validas(atribuicoes, numeros_das_rotas: set) -> Dict[int, Any]:
+    """{numero_da_rota: motorista_id (ainda não validado no banco)}; ValueError em linguagem do operador se a rota não existe ou o formato é inválido."""
+    if not atribuicoes:
+        return {}
+    if not isinstance(atribuicoes, dict):
+        raise ValueError(MSG_ROTA_AJUSTADA_INEXISTENTE)
+    validas = {}
+    for chave, motorista in atribuicoes.items():
+        try:
+            numero = int(str(chave).strip())
+        except ValueError:
+            raise ValueError(MSG_ROTA_AJUSTADA_INEXISTENTE) from None
+        if numero not in numeros_das_rotas:
+            raise ValueError(MSG_ROTA_AJUSTADA_INEXISTENTE)
+        validas[numero] = motorista
+    return validas
 
 
 @app.get("/api/rotas-realizadas/hoje")
@@ -1316,6 +1339,21 @@ async def rotas_realizadas_hoje(operador: Operador = Depends(obter_operador_atua
         # Etapa 8b: pedidos das rotas confirmadas do dia por motorista (acrescentado; "por_motorista" continua igual)
         "pedidos_por_motorista": {str(k): v["pedidos"] for k, v in totais.items()},
     }
+
+
+@app.get("/api/rotas-realizadas/rotacao")
+async def rotacao_do_dia(turno: Optional[str] = None, operador: Operador = Depends(obter_operador_atual)):
+    """
+    Etapa 10 (selo de rotação da matriz de despacho): setores que cada motorista já fez HOJE em OUTROS turnos (só rotas confirmadas),
+    {"data", "turno", "por_motorista": {"3": {"N": ["manha"]}}}. Só ids de motorista e setores; nenhum dado de pedido.
+    """
+    try:
+        turno_normal = roteirizacao.normalizar_turno(turno)
+    except ValueError as erro:
+        raise HTTPException(status_code=422, detail=str(erro))
+    dia = rotas_realizadas.hoje_em_brasilia()
+    por_motorista = await _com_conexao_frota(lambda c: rotas_realizadas.setores_do_dia(c, dia, turno_normal))
+    return {"data": dia.isoformat(), "turno": turno_normal, "por_motorista": {str(k): v for k, v in por_motorista.items()}}
 
 
 @app.post("/api/rotas-realizadas/confirmar")
@@ -1339,10 +1377,31 @@ async def confirmar_rotas(dados: ConfirmarRotasRequest, operador: Operador = Dep
     # O turno gravado é o da roteirização (escolhido pelo operador); o do corpo só vale para resultados sem turno.
     turno = (resultado.get("turno") or (dados.turno or "").strip())[:20] or None
     dia = rotas_realizadas.hoje_em_brasilia()
+    try:
+        atribuicoes = _atribuicoes_validas(dados.atribuicoes, {int(r["numero_rota"]) for r in rotas})
+    except ValueError as erro:
+        raise HTTPException(status_code=422, detail=str(erro))
+    nomes = {int(r["motorista_id"]): r.get("motorista_base") for r in resultado.get("rotas", []) if r.get("motorista_id") is not None}
+    sugeridos = {int(r["numero_rota"]): int(r["motorista_id"]) for r in rotas}
+
     async def confirmar_e_limpar(c):
+        # Valida o motorista final ANTES de gravar qualquer coisa (inativo, inexistente ou valor inválido = 422, nada é gravado).
+        nomes.update(await frota.nomes_dos_motoristas_ativos(c, list(atribuicoes.values())))
+        ajustadas = 0
+        for rota in rotas:
+            novo = atribuicoes.get(int(rota["numero_rota"]))
+            if novo is not None and int(novo) != sugeridos[int(rota["numero_rota"])]:
+                rota["motorista_id"] = int(novo)
+                ajustadas += 1
+        avisos = []
+        if turno:  # rotação é só aviso: nunca bloqueia nem derruba a confirmação
+            try:
+                avisos = rotas_realizadas.avisos_de_rotacao(rotas, await rotas_realizadas.setores_do_dia(c, dia, turno), nomes)
+            except Exception as erro:
+                print(f"[despacho] Falha ao conferir a rotação: {type(erro).__name__}")
         resposta = await rotas_realizadas.confirmar(c, dados.execucao_id, rotas, dia, resultado.get("loja_hub"), turno, _rotulo_do_operador(operador))
         await rotas_realizadas.limpeza_preguicosa(c, dia, HISTORICO_DIAS)  # no máximo uma vez por dia; nunca derruba a confirmação
-        return resposta
+        return {**resposta, "ajustadas": 0 if resposta.get("ja_confirmada") else ajustadas, "avisos": avisos}
 
     return await _com_conexao_frota(confirmar_e_limpar)
 

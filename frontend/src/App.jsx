@@ -15,6 +15,7 @@ import Motoristas from './components/Motoristas';
 import SeletorMotoristas from './components/SeletorMotoristas';
 import Lojas from './components/Lojas';
 import Historico from './components/Historico';
+import SeletorMotoristaDaRota from './components/SeletorMotoristaDaRota';
 import SeletorLoja from './components/SeletorLoja';
 import ListaPedidos from './components/ListaPedidos';
 import RelatorioImportacao from './components/RelatorioImportacao';
@@ -27,6 +28,10 @@ import {
 } from './services/pedidos';
 import { interpretarRaio, nomeDoHub, RAIO_PADRAO_KM } from './services/lojas';
 import { idsParaConsultar, aplicarDuplicidade, avisoDesmarcados, contarJaRoteirizados } from './services/duplicidade';
+import {
+  rotasEfetivas, trocarMotorista, voltarASugestao, quantasAjustadas, corpoDaConfirmacao, alternativasParaRota, linhasDoCartao, avisosDoDespacho, regioesRepetidas,
+  seloDeRotacao, MSG_TROCA_TRAVADA, MSG_AJUSTES_E_REINICIO, MSG_SEM_ROTACAO
+} from './services/despacho';
 import { API_BASE } from './config';
 import { instalarTratamento401, MENSAGEM_SESSAO_EXPIRADA } from './services/sessao';
 import { baixarBlob } from './services/download';
@@ -212,7 +217,18 @@ export default function App() {
 
   // Capacidade por Viagem Simultânea: só dos motoristas marcados
   const marcados = motoristasMarcados(motoristas, selecionados);
-  const resumoDosMotoristas = resultado ? resumoPorMotorista(resultado.rotas) : new Map();
+  // Etapa 10 (matriz de despacho): o resultado fica como a sugestão do solver; o ajuste do operador é { id_da_rota: motorista_id } por cima dele,
+  // e a tabela, o cartão, o mapa e o romaneio leem as rotas efetivas. Só o "Confirmar rotas" leva o ajuste ao servidor.
+  const [atribuicoes, setAtribuicoes] = useState({});
+  const [rotacao, setRotacao] = useState(null); // regiões que cada motorista já fez hoje em outros turnos; nulo = ainda não carregou ou falhou
+  const [rotacaoFalhou, setRotacaoFalhou] = useState(false);
+  const rotasDoDespacho = resultado ? rotasEfetivas(resultado.rotas, atribuicoes, motoristas) : [];
+  const resumoDosMotoristas = resultado ? resumoPorMotorista(rotasDoDespacho) : new Map();
+  const ajustadas = quantasAjustadas(rotasDoDespacho);
+  const capacidadesPorTipo = Object.fromEntries(Object.entries(modais).map(([tipo, v]) => [tipo, v.capacidade]));
+  const alternativasDaRota = (rota) => (busca) => alternativasParaRota({
+    rota, rotas: rotasDoDespacho, motoristas, selecionados, lojaId: lojaHubId, rotasHoje, pedidosHoje, rotacao, busca
+  });
   // O número de rotas só vale para quem continua marcado.
   const viagensDosMarcados = manterViagensDosMarcados(viagensPorMotorista, selecionados);
   const capacidadeSimultaneaFrota = capacityCheck(modais, marcados);
@@ -446,18 +462,40 @@ export default function App() {
   };
 
   // Confirma as rotas do resultado: uma rota por viagem, no nome do motorista de cada rota. Repetir não duplica.
+  // Rotação do dia para o selo da matriz: ao receber um resultado novo, zera os ajustes e confere as regiões já feitas hoje em outros turnos.
+  const carregarRotacao = useCallback(async (turnoDoResultado) => {
+    if (!turnoDoResultado) { setRotacao(null); return; }
+    try {
+      const { data } = await apiAuth.get('/rotas-realizadas/rotacao', { params: { turno: turnoDoResultado } });
+      setRotacao(data.por_motorista || {});
+      setRotacaoFalhou(false);
+    } catch (err) {
+      if (err?.response?.status === 401) return; // já voltou para o login, com o aviso
+      setRotacao(null);
+      setRotacaoFalhou(true);
+    }
+  }, []);
+  useEffect(() => {
+    setAtribuicoes({});
+    setRotacao(null);
+    setRotacaoFalhou(false);
+    if (resultado?.execucao_id) carregarRotacao(resultado.turno);
+  }, [resultado?.execucao_id, resultado?.turno, carregarRotacao]);
+
   const confirmarRotas = async () => {
     if (!resultado?.execucao_id) return;
     setConfirmacao((c) => ({ ...c, enviando: true, erro: '' }));
     try {
-      const { data } = await apiAuth.post('/rotas-realizadas/confirmar', { execucao_id: resultado.execucao_id });
+      const { data } = await apiAuth.post('/rotas-realizadas/confirmar', corpoDaConfirmacao(resultado.execucao_id, resultado.rotas, atribuicoes, motoristas));
       setConfirmacao({
         confirmada: true,
+        avisos: data.avisos || [],
         linhas: data.motoristas.map((m) => linhaDeConfirmacao(m.nome, m.nesta_execucao, m.total_hoje, m.pedidos_nesta_execucao, m.pedidos_hoje)),
         enviando: false,
         erro: ''
       });
       carregarFrota();
+      carregarRotacao(resultado.turno);
       consultarDuplicidade(); // os recém-confirmados viram "já roteirizados" e saem da marcação
     } catch (err) {
       if (err?.response?.status === 401) return; // já voltou para o login, com o aviso
@@ -478,6 +516,7 @@ export default function App() {
         erro: ''
       });
       carregarFrota();
+      carregarRotacao(resultado.turno);
       consultarDuplicidade(); // a rota desfeita deixa de contar como já roteirizada
     } catch (err) {
       if (err?.response?.status === 401) return;
@@ -596,7 +635,7 @@ export default function App() {
 
     let csvContent = "data:text/csv;charset=utf-8,Rota,Motorista,Viagem,Veiculo,Ordem_Parada,Endereco,Numero,Bairro,CEP,Volume\n";
 
-    resultado.rotas.forEach((r) => {
+    rotasDoDespacho.forEach((r) => {
       if (r.paradas && r.paradas.length > 0) {
         r.paradas.forEach((p, pIdx) => {
           const linha = [
@@ -1171,7 +1210,7 @@ export default function App() {
                 <Users className="w-4 h-4 text-emerald-400" />
               </div>
               {(() => {
-                const nestaRoteirizacao = resultado ? rotasPorMotoristaDoResultado(resultado.rotas) : [];
+                const nestaRoteirizacao = resultado ? linhasDoCartao(rotasDoDespacho, marcados) : [];
                 const linhas = resultado
                   ? nestaRoteirizacao
                   : marcados.map((m) => ({ motorista_id: m.id, nome: m.nome, rotas: null }));
@@ -1224,6 +1263,12 @@ export default function App() {
                   {confirmacao.linhas.map((linha) => <li key={linha}>{linha}</li>)}
                 </ul>
               )}
+              {(confirmacao.avisos ?? []).length > 0 && (
+                <ul className="text-[11px] text-amber-300 space-y-0.5">
+                  {confirmacao.avisos.map((aviso) => <li key={aviso} className="flex items-start gap-1.5"><AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" /> {aviso}</li>)}
+                </ul>
+              )}
+              {ajustadas > 0 && !confirmacao.confirmada && <p className="text-[10px] text-slate-500">{MSG_AJUSTES_E_REINICIO}</p>}
               {confirmacao.erro && (
                 <p className="flex items-center gap-1.5 text-[11px] text-amber-300"><AlertCircle className="w-3.5 h-3.5 shrink-0" /> {confirmacao.erro}</p>
               )}
@@ -1256,10 +1301,10 @@ export default function App() {
               <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> Distâncias e tempos em linha reta (estimativa): não foi possível consultar as ruas.
             </p>
           )}
-          {resultado && avisosOrdenados(resultado.avisos).length > 0 && (
+          {resultado && avisosOrdenados(avisosDoDespacho({ avisosDoSolver: resultado.avisos, rotas: rotasDoDespacho, rotacao, capacidades: capacidadesPorTipo, marcados })).length > 0 && (
             <div className="bg-slate-900/50 border border-slate-800/80 rounded-xl p-4 space-y-1.5" aria-label="Avisos da roteirização">
               <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Avisos</p>
-              {avisosOrdenados(resultado.avisos).map((a, i) => (
+              {avisosOrdenados(avisosDoDespacho({ avisosDoSolver: resultado.avisos, rotas: rotasDoDespacho, rotacao, capacidades: capacidadesPorTipo, marcados })).map((a, i) => (
                 <p key={`${a.tipo}-${i}`} className={`text-[11px] rounded px-2.5 py-1.5 ${a.gravidade === 'atencao' ? 'text-amber-200 bg-amber-950/20' : 'text-slate-300 bg-slate-950/50'}`}>
                   {a.mensagem}
                 </p>
@@ -1285,7 +1330,7 @@ export default function App() {
                 : (dadosCoberturaCeps
                   ? dadosCoberturaCeps.hub
                   : (lojaHub ? { lat: lojaHub.lat, lon: lojaHub.lng, rua: lojaHub.nome, numero: '' } : null))}
-              rotas={resultado ? resultado.rotas : []}
+              rotas={resultado ? rotasDoDespacho : []}
               lojas={lojas}
               lojaSelecionadaId={lojaHubId}
               onEscolherLoja={escolherLoja}
@@ -1300,9 +1345,18 @@ export default function App() {
               <div className="p-4 border-b border-slate-800/80 flex items-center justify-between">
                 <div>
                   <h3 className="font-bold text-xs uppercase tracking-wider text-slate-200">Matriz de Despacho & Ondas de Entrega</h3>
-                  <p className="text-[11px] text-slate-400">{resultado.rotas.length} viagens distribuídas entre a frota</p>
+                  <p className="text-[11px] text-slate-400">{rotasDoDespacho.length} viagens distribuídas entre a frota{ajustadas > 0 ? ` (${ajustadas} ajustada${ajustadas === 1 ? '' : 's'} à mão)` : ''}</p>
+                  {rotacaoFalhou && <p className="text-[10px] text-slate-500">{MSG_SEM_ROTACAO}</p>}
                 </div>
                 <div className="flex items-center gap-2">
+                  {ajustadas > 0 && !confirmacao.confirmada && (
+                    <button
+                      onClick={() => setAtribuicoes(voltarASugestao(atribuicoes))}
+                      className="px-3 py-1.5 border border-violet-500/30 text-violet-300 hover:bg-violet-500/10 rounded-lg text-xs font-medium transition-colors"
+                    >
+                      Voltar à sugestão de todas
+                    </button>
+                  )}
                   <button
                     onClick={exportarRomaneio}
                     className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-lg text-xs font-medium transition-colors"
@@ -1326,11 +1380,27 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60 font-mono text-[12px]">
-                    {resultado.rotas.map((r) => (
+                    {rotasDoDespacho.map((r) => (
                       <tr key={r.id} className="hover:bg-slate-800/30 transition-colors">
                         <td className="p-3.5 font-sans font-bold flex items-center gap-2">
                           <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: r.cor }}></span>
-                          <span className="text-white">{r.motorista}</span>
+                          <SeletorMotoristaDaRota
+                            rota={r}
+                            alternativas={alternativasDaRota(r)}
+                            onEscolher={(motoristaId) => setAtribuicoes((atual) => trocarMotorista(atual, resultado.rotas, r.id, motoristaId))}
+                            desabilitado={confirmacao.confirmada}
+                            motivoDesabilitado={MSG_TROCA_TRAVADA}
+                          />
+                          {r.ajustada && (
+                            <span className="flex items-center gap-1.5 text-[10px] font-normal">
+                              <span className="px-1.5 py-0.5 rounded bg-blue-500/15 border border-blue-500/30 text-blue-300" title="O motorista foi trocado à mão; o solver tinha sugerido outro">Ajustada</span>
+                              {!confirmacao.confirmada && (
+                                <button type="button" onClick={() => setAtribuicoes((atual) => voltarASugestao(atual, r.id))} className="text-violet-300 hover:text-violet-200 underline">
+                                  Voltar à sugestão
+                                </button>
+                              )}
+                            </span>
+                          )}
                           {r.rota_personalizada && (
                             <span className="text-[10px] font-normal px-1.5 py-0.5 rounded bg-violet-500/15 border border-violet-500/30 text-violet-300" title="O operador escolheu quantas rotas este motorista faz">
                               Rota personalizada
@@ -1359,9 +1429,9 @@ export default function App() {
                             )}
                           </div>
                         </td>
-                        <td className="p-3.5 text-slate-300 font-sans" title={(r.violacoes_rotacao || []).length ? 'Região em que o motorista já fez rota hoje em outro turno (veja os avisos).' : undefined}>
+                        <td className="p-3.5 text-slate-300 font-sans" title={seloDeRotacao(regioesRepetidas(r, rotacao)) || undefined}>
                           {textoDosSetores(r.setores)}
-                          {(r.violacoes_rotacao || []).length > 0 && <AlertTriangle className="inline w-3.5 h-3.5 ml-1 text-amber-400" />}
+                          {regioesRepetidas(r, rotacao).length > 0 && <AlertTriangle className="inline w-3.5 h-3.5 ml-1 text-amber-400" />}
                         </td>
                         <td className="p-3.5 text-slate-300">
                           <div className="flex items-center gap-2">

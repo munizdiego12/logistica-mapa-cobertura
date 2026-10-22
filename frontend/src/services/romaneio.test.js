@@ -44,7 +44,7 @@ test('uma linha por parada, na ordem das rotas e das paradas, com o mesmo jeito 
 test('cliente, id e coordenadas por pedido', () => {
   const linhas = linhasDoRomaneio(dados());
   assert.deepEqual(linhas.map((l) => [l[10], l[11], l[12], l[13]]), [
-    ['"P1"', '"Maria Souza"', '-23.550500', '-46.633300'], ['"P2"', '"João Álvares"', '-23.550500', '-46.633300'], ['"P3"', '"Zé"', '-23.550500', '-46.633300'],
+    ['"P1"', '"Maria Souza"', '-23,550500', '-46,633300'], ['"P2"', '"João Álvares"', '-23,550500', '-46,633300'], ['"P3"', '"Zé"', '-23,550500', '-46,633300'],
   ]);
 });
 
@@ -135,7 +135,7 @@ test('o romaneio neutraliza cliente, endereço e bairro, e a latitude negativa c
   assert.equal(linhas[0][7], '"\'@bairro"');
   assert.equal(linhas[0][6], '"-5"');
   assert.equal(linhas[0][11], '"\'+cliente"');
-  assert.equal(linhas[0][12], '-23.550500');
+  assert.equal(linhas[0][12], '-23,550500');
 });
 
 test('escape de vírgula, aspas, quebra de linha e espaços nas pontas', () => {
@@ -186,14 +186,14 @@ test('arquivo: ";", vírgula, aspas e quebra de linha no texto continuam um regi
   assert.equal(registros[1][11], 'José, "Zé"; Ávila');
 });
 
-test('separador é ponto e vírgula; latitude e longitude mantêm o ponto decimal, sem aspas nem apóstrofo', () => {
+test('separador é ponto e vírgula; latitude e longitude saem com vírgula decimal, sem aspas nem apóstrofo', () => {
   assert.equal(SEPARADOR, ';');
   const csv = montarCsv(dados());
   const primeira = csv.split('\n')[1].split(';');
   assert.equal(primeira.length, COLUNAS.length); // nenhum campo desta linha tem ";" dentro
-  assert.equal(primeira[12], '-23.550500');
-  assert.equal(primeira[13], '-46.633300');
-  assert.ok(primeira[12].indexOf(',') < 0 && !/["']/.test(primeira[12] + primeira[13]));
+  assert.equal(primeira[12], '-23,550500');
+  assert.equal(primeira[13], '-46,633300');
+  assert.ok(!/["']/.test(primeira[12] + primeira[13]));
   assert.equal(primeira[4], '1'); // Ordem_Parada número
   assert.equal(primeira[9], '2'); // Volume número
 });
@@ -219,4 +219,33 @@ test('o código do romaneio não envia nada para fora nem fala de peso', () => {
   const fonte = readFileSync(new URL('./romaneio.js', import.meta.url), 'utf8');
   assert.doesNotMatch(fonte, /fetch\(|axios|localStorage|sessionStorage|console\./);
   assert.doesNotMatch(fonte.replace(/\/\/.*$/gm, ''), /peso/i);
+});
+
+test('coordenadas: vírgula decimal com 6 casas, negativas sem apóstrofo, arredondamento e campo vazio quando falta', () => {
+  const rotas = [rota(1, 1, 'Ana', 'Carro de passeio', [
+    parada('P1', { lat: -23.57674, lon: -46.710225 }), parada('P2', { lat: 23.5, lon: 46 }), parada('P3', { lat: -23.5767404999, lon: -46.7102259999 }),
+    parada('P4', { lat: 0, lon: -0.0000004 }), parada('P5', { lat: null, lon: '' }), parada('P6', { lat: 'abc', lon: undefined }),
+  ], [600, 600, 600, 600, 600, 600, 600])];
+  const l = linhasDoRomaneio(dados({ rotas, relatorio: null }));
+  assert.deepEqual(l.map((x) => [x[12], x[13]]), [
+    ['-23,576740', '-46,710225'], ['23,500000', '46,000000'], ['-23,576740', '-46,710226'], ['0,000000', '-0,000000'], ['', ''], ['', ''],
+  ]);
+  assert.ok(l.every((x) => !/^'/.test(x[12]) && !/^'/.test(x[13]))); // a neutralização de "-" não atinge as coordenadas
+  assert.ok(l.every((x) => !/"/.test(x[12] + x[13])));
+});
+
+test('nenhuma linha de dados tem "." dentro de Latitude ou Longitude (nem aspas), e as demais colunas numéricas seguem inteiras', () => {
+  const csv = montarCsv(dados());
+  const linhasDeDados = csv.slice(BOM.length).split('\n').slice(1, -1);
+  assert.equal(linhasDeDados.length, 3);
+  for (const linha of linhasDeDados) {
+    const campos = linha.split(SEPARADOR);
+    assert.equal(campos.length, COLUNAS.length);
+    for (const i of [COLUNAS.indexOf('Latitude'), COLUNAS.indexOf('Longitude')]) {
+      assert.ok(!campos[i].includes('.'), campos[i]);
+      assert.match(campos[i], /^-?\d+,\d{6}$/);
+    }
+    assert.match(campos[COLUNAS.indexOf('Ordem_Parada')], /^\d+$/);
+    assert.match(campos[COLUNAS.indexOf('Volume')], /^\d+$/);
+  }
 });

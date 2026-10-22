@@ -1,6 +1,6 @@
 // Romaneio (.csv) da roteirização (Etapa 13): montagem do arquivo na tela, com funções puras. O arquivo NÃO passa pelo servidor.
 // As 10 colunas antigas ficam iguais (mesmos nomes e mesma ordem, em ASCII); as novas entram só no fim. Separador PONTO E VÍRGULA, fim de linha \n e UTF-8 COM BOM
-// (o mesmo padrão do modelo de pedidos), para abrir certo no Excel em português com duplo clique; latitude e longitude mantêm o ponto decimal.
+// (o mesmo padrão do modelo de pedidos), para abrir certo no Excel em português com duplo clique; latitude e longitude saem com VÍRGULA decimal (6 casas, sem aspas), porque o ponto decimal era lido como separador de milhar.
 // O nome do cliente vem do lote em memória (pelo id da parada) e só existe no arquivo baixado: nunca vai ao servidor,
 // banco, log, console, armazenamento do navegador nem git. Nenhuma coluna de peso. Chegada e janela são ESTIMATIVAS calculadas na tela (Etapa 11).
 import { janelaEfetivaDoPedido, minutosParaHora } from './janelas.js';
@@ -37,7 +37,8 @@ export function escaparCampo(valor, sempreAspas = false) {
 
 const textoSeguro = (valor) => escaparCampo(neutralizarFormula(valor), true);
 const horaOuVazio = (minutos) => (minutos === null || minutos === undefined ? '' : minutosParaHora(minutos));
-const numeroOuVazio = (valor) => (valor === null || valor === undefined || valor === '' || !Number.isFinite(Number(valor)) ? '' : Number(valor).toFixed(6));
+// Coordenada: vírgula decimal e 6 casas (ex.: -23,576740), sem aspas e sem apóstrofo (não passa por `neutralizarFormula`); vazia quando falta.
+const coordenadaOuVazia = (valor) => (valor === null || valor === undefined || valor === '' || !Number.isFinite(Number(valor)) ? '' : Number(valor).toFixed(6).replace('.', ','));
 
 /**
  * Linhas do romaneio (cada uma é a lista de campos já escapados, na ordem de COLUNAS). `rotas`: as rotas efetivas (motorista, veículo e viagem FINAIS, depois das
@@ -66,8 +67,8 @@ export function linhasDoRomaneio({ rotas, pedidos, relatorio, loja, turno }) {
         p.Volume || 1,
         textoSeguro(p.id),
         textoSeguro(pedido?.cliente ?? ''),
-        numeroOuVazio(p.lat),
-        numeroOuVazio(p.lon),
+        coordenadaOuVazia(p.lat),
+        coordenadaOuVazia(p.lon),
         escaparCampo(confere ? confere.horaTexto : ''),
         horaOuVazio(janela ? janela.inicio : null),
         horaOuVazio(janela ? janela.fim : null),

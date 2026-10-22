@@ -469,4 +469,4 @@ def test_sem_tabela_nova_e_sem_migration():
     from pathlib import Path
     fonte = Path(imp.__file__).read_text(encoding="utf-8") + Path(item_pesos.__file__).read_text(encoding="utf-8")
     assert not re.search(r"\b(CREATE TABLE|DROP|TRUNCATE|ALTER TABLE)\b", fonte.upper())
-    assert not list(Path(item_pesos.__file__).parent.joinpath("migrations", "versions").glob("0011*"))  # nenhuma migration nova
+    assert not list(Path(item_pesos.__file__).parent.joinpath("migrations", "versions").glob("0012*"))  # nenhuma migration nova

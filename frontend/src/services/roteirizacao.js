@@ -1,5 +1,6 @@
 // Roteirização (Etapa 8): turno escolhido pelo operador, regra do botão "Executar Roteirização", confirmação curta e leitura dos avisos.
 // Sem dependências, para ser testável com o `node --test`. O turno é SEMPRE escolhido à mão (nunca inferido do relógio). O peso não entra.
+import { textoJaRoteirizadosNaConfirmacao } from './duplicidade.js';
 
 export const TURNOS = [
   { valor: 'manha', rotulo: 'Manhã', janela: '08–13h' },
@@ -75,9 +76,9 @@ export function podeExecutar({ hubDefinido, pedidos, motoristas, turno, tempoPor
 const plural = (n, um, varios) => `${n} ${n === 1 ? um : varios}`;
 
 /** Confirmação curta antes de rodar: "Gerar as rotas do turno da manhã para Atacadão X com 12 pedidos e 3 motoristas?" */
-export function textoDeConfirmacao({ turno, loja, pedidos, motoristas }) {
+export function textoDeConfirmacao({ turno, loja, pedidos, motoristas, jaRoteirizados = 0 }) {
   const turnoTexto = { manha: 'da manhã', tarde: 'da tarde', noite: 'da noite' }[turno] ?? '';
-  return `Gerar as rotas do turno ${turnoTexto} para ${loja || 'o endereço informado'} com ${plural(pedidos, 'pedido', 'pedidos')} e ${plural(motoristas, 'motorista', 'motoristas')}?`;
+  return `Gerar as rotas do turno ${turnoTexto} para ${loja || 'o endereço informado'} com ${plural(pedidos, 'pedido', 'pedidos')} e ${plural(motoristas, 'motorista', 'motoristas')}?${textoJaRoteirizadosNaConfirmacao(jaRoteirizados)}`;
 }
 
 /** "45 min" ou "2h 5m". */

@@ -411,4 +411,4 @@ def test_api_confirmar_e_desfazer_devolvem_os_pedidos(api):
 
 def test_sem_migration_nova_na_8b():
     versoes = Path(main.__file__).parent / "migrations" / "versions"
-    assert not list(versoes.glob("0011*")) and sorted(p.name[:4] for p in versoes.glob("00*.py"))[-1] == "0010"
+    assert not list(versoes.glob("0012*")) and (versoes / "0010_rotas_realizadas_setores.py").exists()  # a 8b não criou migration (a 0010 é da Etapa 8; a 0011, das Etapas 9 e 12)

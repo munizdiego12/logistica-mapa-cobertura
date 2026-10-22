@@ -6,7 +6,7 @@ import {
   ShieldCheck, Activity, Trash2, Users, AlertCircle,
   CheckSquare, Square, Download, FileSpreadsheet, FileDown,
   Settings, ChevronDown, ChevronUp, Layers, Compass, Table as TableIcon, Store, 
-  AlertTriangle, Scale
+  AlertTriangle, Scale, History
 } from 'lucide-react';
 import MapaLeaflet from './components/MapaLeaflet';
 import Login from './components/Login';
@@ -14,6 +14,7 @@ import PesosItens from './components/PesosItens';
 import Motoristas from './components/Motoristas';
 import SeletorMotoristas from './components/SeletorMotoristas';
 import Lojas from './components/Lojas';
+import Historico from './components/Historico';
 import SeletorLoja from './components/SeletorLoja';
 import ListaPedidos from './components/ListaPedidos';
 import RelatorioImportacao from './components/RelatorioImportacao';
@@ -25,6 +26,7 @@ import {
   pedidosParaRoteirizar, pedidoParaRoteirizacao, idsSemEndereco, corrigirEndereco, contarMarcados, avisoAntesDeExecutar, MSG_ERRO_ENDERECO
 } from './services/pedidos';
 import { interpretarRaio, nomeDoHub, RAIO_PADRAO_KM } from './services/lojas';
+import { idsParaConsultar, aplicarDuplicidade, avisoDesmarcados, contarJaRoteirizados } from './services/duplicidade';
 import { API_BASE } from './config';
 import { instalarTratamento401, MENSAGEM_SESSAO_EXPIRADA } from './services/sessao';
 import { baixarBlob } from './services/download';
@@ -82,6 +84,11 @@ export default function App() {
   const [mostrarPesos, setMostrarPesos] = useState(false);
   const [mostrarMotoristas, setMostrarMotoristas] = useState(false);
   const [mostrarLojas, setMostrarLojas] = useState(false);
+  const [mostrarHistorico, setMostrarHistorico] = useState(false);
+  // Pedidos do lote que já estão em rota confirmada de hoje ({ id: { rota, motorista, ... } }); nulo = ainda não consultou ou a consulta falhou.
+  const [jaRoteirizados, setJaRoteirizados] = useState(null);
+  const [avisoDuplicidade, setAvisoDuplicidade] = useState('');
+  const [duplicidadeFalhou, setDuplicidadeFalhou] = useState(false);
   // Lojas ativas (mapa permanente), hub escolhido ('' = nenhum, 'outro' = "Outro endereço", ou o id da loja) e raio do "Raio X km".
   const [lojas, setLojas] = useState([]);
   const [lojasCarregadas, setLojasCarregadas] = useState(false);
@@ -173,7 +180,35 @@ export default function App() {
     ? contarMarcados(loteSelecionado.pedidos, loteSelecionado.marcados, { lojaId: lojaHubId, comErro: loteSelecionado.comErro }).foraDoFiltro
     : 0;
 
+  const lotesRef = useRef(lotes);
+  lotesRef.current = lotes;
+
   const alterarLote = (id, mudanca) => setLotes((prev) => prev.map((l) => (l.id === id ? { ...l, ...(typeof mudanca === 'function' ? mudanca(l) : mudanca) } : l)));
+
+  // Consulta quais pedidos de todos os lotes já estão em rota CONFIRMADA de hoje. Os que estiverem marcados são DESMARCADOS (uma vez por
+  // pedido) com um aviso curto; falha da consulta não desmarca nada. É aviso, nunca bloqueio. `loteNovo` cobre o lote que acabou de entrar.
+  const consultarDuplicidade = async (loteNovo = null) => {
+    const base = lotesRef.current.filter((l) => !loteNovo || l.id !== loteNovo.id);
+    const ids = idsParaConsultar(loteNovo ? [...base, loteNovo] : base);
+    if (ids.length === 0) return;
+    try {
+      const { data } = await apiAuth.post('/pedidos/ja-roteirizados', { ids });
+      const ja = data?.pedidos || {};
+      setJaRoteirizados(ja);
+      setDuplicidadeFalhou(false);
+      let desmarcados = 0;
+      lotesRef.current.forEach((l) => { desmarcados += aplicarDuplicidade(l.marcados, ja, l.tratados).desmarcados; });
+      setLotes((prev) => prev.map((l) => {
+        const r = aplicarDuplicidade(l.marcados, ja, l.tratados);
+        return { ...l, marcados: r.marcados, tratados: r.tratados };
+      }));
+      const aviso = avisoDesmarcados(desmarcados);
+      if (aviso) setAvisoDuplicidade(aviso);
+    } catch (err) {
+      if (err?.response?.status === 401) return; // já voltou para o login, com o aviso
+      setDuplicidadeFalhou(true);
+    }
+  };
 
   // Capacidade por Viagem Simultânea: só dos motoristas marcados
   const marcados = motoristasMarcados(motoristas, selecionados);
@@ -223,11 +258,14 @@ export default function App() {
       pedidos: relatorio.pedidos,
       marcados: new Set(relatorio.pedidos.map((p) => p.id)),
       comErro: new Set(),
+      tratados: new Set(), // ids já tratados pela checagem de duplicidade (cada pedido é desmarcado sozinho no máximo uma vez)
       dataUpload: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
     setLotes(prev => [...prev, novoLote]);
     setLoteAtivoId(novoLote.id);
     setRelatorioPendente(null);
+    setAvisoDuplicidade('');
+    consultarDuplicidade(novoLote);
   };
 
   const removerLote = (id, e) => {
@@ -342,7 +380,8 @@ export default function App() {
     const aviso = avisoAntesDeExecutar(marcadosForaDoFiltro);
     if (aviso && !window.confirm(aviso)) return;
     // Confirmação curta antes de rodar.
-    if (!window.confirm(textoDeConfirmacao({ turno, loja: lojaHub?.nome, pedidos: pedidosAtivos.length, motoristas: selecionados.length }))) return;
+    const jaRoteirizadosMarcados = contarJaRoteirizados(pedidosAtivos, jaRoteirizados);
+    if (!window.confirm(textoDeConfirmacao({ turno, loja: lojaHub?.nome, pedidos: pedidosAtivos.length, motoristas: selecionados.length, jaRoteirizados: jaRoteirizadosMarcados }))) return;
 
     setLoading(true);
     setProgresso({ etapa: 'Iniciando...', atual: 0, total: pedidosAtivos.length });
@@ -419,6 +458,7 @@ export default function App() {
         erro: ''
       });
       carregarFrota();
+      consultarDuplicidade(); // os recém-confirmados viram "já roteirizados" e saem da marcação
     } catch (err) {
       if (err?.response?.status === 401) return; // já voltou para o login, com o aviso
       const detalhe = err?.response?.data?.detail;
@@ -438,6 +478,7 @@ export default function App() {
         erro: ''
       });
       carregarFrota();
+      consultarDuplicidade(); // a rota desfeita deixa de contar como já roteirizada
     } catch (err) {
       if (err?.response?.status === 401) return;
       const detalhe = err?.response?.data?.detail;
@@ -634,6 +675,13 @@ export default function App() {
               <Store className="w-3 h-3" /> Lojas
             </button>
             <button
+              onClick={() => setMostrarHistorico(true)}
+              className="flex items-center gap-1 text-[10px] font-semibold text-blue-300 hover:text-blue-200 bg-blue-500/10 border border-blue-500/20 px-2 py-1 rounded transition-colors"
+              title="Ver as rotas confirmadas, por dia e por loja"
+            >
+              <History className="w-3 h-3" /> Histórico
+            </button>
+            <button
               onClick={() => setMostrarMotoristas(true)}
               className="flex items-center gap-1 text-[10px] font-semibold text-blue-300 hover:text-blue-200 bg-blue-500/10 border border-blue-500/20 px-2 py-1 rounded transition-colors"
               title="Cadastrar motoristas e ajustar o valor base dos veículos"
@@ -668,6 +716,10 @@ export default function App() {
       )}
       {mostrarLojas && (
         <Lojas api={apiAuth} onFechar={() => setMostrarLojas(false)} onMudou={carregarLojas} />
+      )}
+
+      {mostrarHistorico && (
+        <Historico api={apiAuth} onFechar={() => setMostrarHistorico(false)} />
       )}
 
       {mostrarMotoristas && (
@@ -908,6 +960,10 @@ export default function App() {
                 comErro={loteSelecionado.comErro}
                 lojaId={lojaHubId}
                 lojaNome={lojaHub?.nome}
+                jaRoteirizados={jaRoteirizados}
+                avisoDuplicidade={avisoDuplicidade}
+                duplicidadeFalhou={duplicidadeFalhou}
+                aoFecharAviso={() => setAvisoDuplicidade('')}
                 aoMudarMarcados={(marcados) => alterarLote(loteSelecionado.id, { marcados })}
                 aoCorrigir={(id, campos) => alterarLote(loteSelecionado.id, (l) => {
                   const corrigido = corrigirEndereco(l.pedidos, l.comErro, id, campos);

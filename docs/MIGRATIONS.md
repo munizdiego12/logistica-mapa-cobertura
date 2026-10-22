@@ -16,6 +16,7 @@ Revisões atuais:
 | `0008` | Cria `motorista_lojas` (motorista e loja, chave composta, `atualizado_em`/`atualizado_por`, índice por loja) e acrescenta `motoristas.codigo` (índice único parcial em `lower(btrim(codigo))` onde o código existe; aceita NULL só para os motoristas antigos) e `motoristas.telefone` (opcional, `CHECK` de 10 ou 11 dígitos). `ADD COLUMN IF NOT EXISTS`/`IF NOT EXISTS`: idempotente; não altera dados; o `downgrade` não apaga nada. |
 | `0009` | Acrescenta `lojas.codigo_externo` (índice único parcial em `lower(btrim(codigo_externo))`), `lojas.nome_operacao` e `lojas.nome_operacao_chave` (chave sem acento, espaço nem maiúscula, calculada pelo app; o índice único parcial fica nela). `ADD COLUMN IF NOT EXISTS`/`IF NOT EXISTS`: idempotente; não altera dados; o `downgrade` não apaga nada. |
 | `0010` | Acrescenta `rotas_realizadas.setores` (texto com os setores cardeais da rota, ex.: "N,NE"; NULL nas rotas antigas), usado pela regra de rotação da roteirização (Etapa 8). `ADD COLUMN IF NOT EXISTS`: idempotente; não altera dados; o `downgrade` não apaga nada. |
+| `0011` | Cria `rotas_pedidos` (pedidos de cada rota confirmada: `rota_id` com FK para `rotas_realizadas`, `ordem`, `pedido_id`, `endereco`, `cidade`, `uf`, `volume`, `endereco_apagado_em`; **sem cliente, telefone nem CEP**), com índices por rota e por pedido e único em (`rota_id`, `ordem`), e o índice `ix_rotas_realizadas_data`. O endereço é apagado depois de 90 dias (`HISTORICO_DIAS`) pelo aplicativo. `IF NOT EXISTS`: idempotente; não altera dados; o `downgrade` não apaga nada. **Pronta; ainda não aplicada no Neon.** |
 
 Não existe tabela `geocache`: esse nome aparece em notas antigas por causa do arquivo de teste `geocache.db`. O cache de geocodificação é a tabela `geocode_cache`.
 
@@ -49,7 +50,7 @@ cd backend
 $env:DATABASE_URL = "<string direta do Neon>"
 python -m alembic current
 python -m alembic upgrade head
-python -m alembic current          # deve mostrar o head (hoje 0010)
+python -m alembic current          # deve mostrar o head (hoje 0011)
 Remove-Item Env:DATABASE_URL
 cd ..
 ```

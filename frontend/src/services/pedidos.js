@@ -2,6 +2,7 @@
 // roteirização. A data de entrega NÃO filtra nem muda nada (decisão do operador): é só informação opcional mostrada junto do pedido. Sem dependências, para ser testável com o `node --test`. O lote vive só na memória da tela (é temporário, descartado
 // depois do uso). Cliente e endereço nunca vão para console, log nem mensagem: aqui só se filtra e se separa.
 import { normalizarBusca } from './lojas.js';
+import { estaJaRoteirizado } from './duplicidade.js';
 
 export const MSG_ERRO_ENDERECO = 'Erro ao tentar encontrar endereço do pedido';
 export const TAMANHO_PAGINA = 50;
@@ -48,11 +49,19 @@ export function alternarMarca(marcados, id) {
   return novo;
 }
 
-/** Marca todos os visíveis (menos os travados por erro de endereço). */
-export function marcarVisiveis(marcados, visiveis, comErro = new Set()) {
+/**
+ * Marca todos os visíveis, menos os travados por erro de endereço e os que já estão em rota confirmada de hoje
+ * (`jaRoteirizados`; esses só se marcam um a um, com a confirmação em duas etapas).
+ */
+export function marcarVisiveis(marcados, visiveis, comErro = new Set(), jaRoteirizados = null) {
   const novo = new Set(marcados);
-  visiveis.forEach((p) => { if (!temErroDeEndereco(p, comErro)) novo.add(p.id); });
+  visiveis.forEach((p) => { if (!temErroDeEndereco(p, comErro) && !estaJaRoteirizado(jaRoteirizados, p.id)) novo.add(p.id); });
   return novo;
+}
+
+/** Quantos visíveis o "Marcar visíveis" deixa de fora por já estarem em rota de hoje (e ainda não estarem marcados). */
+export function contarDeixadosDeFora(marcados, visiveis, comErro = new Set(), jaRoteirizados = null) {
+  return visiveis.filter((p) => !marcados.has(p.id) && !temErroDeEndereco(p, comErro) && estaJaRoteirizado(jaRoteirizados, p.id)).length;
 }
 
 export function desmarcarVisiveis(marcados, visiveis) {
@@ -62,8 +71,8 @@ export function desmarcarVisiveis(marcados, visiveis) {
 }
 
 /** Todos os visíveis (que podem ser marcados) já estão marcados? */
-export function todosVisiveisMarcados(marcados, visiveis, comErro = new Set()) {
-  const marcaveis = visiveis.filter((p) => !temErroDeEndereco(p, comErro));
+export function todosVisiveisMarcados(marcados, visiveis, comErro = new Set(), jaRoteirizados = null) {
+  const marcaveis = visiveis.filter((p) => !temErroDeEndereco(p, comErro) && (marcados.has(p.id) || !estaJaRoteirizado(jaRoteirizados, p.id)));
   return marcaveis.length > 0 && marcaveis.every((p) => marcados.has(p.id));
 }
 

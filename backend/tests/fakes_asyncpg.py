@@ -161,7 +161,7 @@ class ConexaoSqlite:
 def criar_banco_sqlite():
     """Cria o banco em memória aplicando as migrations 0004 a 0009 (SQL traduzido do Postgres para o SQLite)."""
     conn = ConexaoSqlite()
-    for arquivo in ("0004_tipos_veiculo_motoristas.py", "0005_motoristas_valor_rota.py", "0006_rotas_realizadas.py", "0007_lojas.py", "0008_motorista_lojas.py", "0009_lojas_codigo_externo_nome_operacao.py", "0010_rotas_realizadas_setores.py"):
+    for arquivo in ("0004_tipos_veiculo_motoristas.py", "0005_motoristas_valor_rota.py", "0006_rotas_realizadas.py", "0007_lojas.py", "0008_motorista_lojas.py", "0009_lojas_codigo_externo_nome_operacao.py", "0010_rotas_realizadas_setores.py", "0011_rotas_pedidos.py"):
         for comando in _migracao(arquivo).COMANDOS:
             adicionada = re.search(r"ALTER TABLE (\w+)\s+ADD COLUMN IF NOT EXISTS (\w+)", comando)
             if adicionada:

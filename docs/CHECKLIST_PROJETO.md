@@ -319,10 +319,9 @@ Escreva testes com 10, 20 e 40 pedidos e meça o tempo. Sem push.
 - [ ] **Melhoria opcional:** marcar "Rota personalizada" só quando o número de rotas escolhido difere do automático (hoje a marca aparece sempre que o operador escolhe um número).
 - [x] **Validar a 8b no site:** com 2 motoristas e 20 pedidos, rodar no automático, com "1 rota" e com "4 rotas" para um deles; conferir a marca "Rota personalizada", o aviso do teto, os totais de pedidos no cartão e na confirmação/desfazer. *(feito e validado em 22/10/2026)*
 
-## ⬜ Etapa 9 — Controle de duplicidade *(feita em sequência com a Etapa 12, sobre a mesma tabela de pedidos por rota confirmada)*
-```
-Crie a tabela pedidos_roteirizados_hoje com ID do pedido, rota, motorista, turno, data e operador. Pedido já usado aparece como "já está na Rota X". Reselecionar exige confirmação em duas etapas (avisa, não bloqueia). Sem push.
-```
+## 🟨 Etapa 9 — Controle de duplicidade *(PRONTA NO CÓDIGO em 22/10/2026, junto com a Etapa 12; falta aplicar a `0011`, publicar e validar no site)*
+- [x] Tabela `rotas_pedidos` (migration `0011`) gravada no "Confirmar rotas"; `POST /api/pedidos/ja-roteirizados` (só rotas confirmadas de hoje); selo "já está na Rota N de [motorista]"; já roteirizados entram desmarcados com aviso único; marcar de volta pede duas confirmações; "Marcar visíveis" os pula; contagem na confirmação de "Executar Roteirização".
+- [ ] Aplicar a `0011` no Neon (`python -m alembic upgrade head` dentro de `backend/`; ver `docs/MIGRATIONS.md`), publicar e validar no site: confirmar rotas, recarregar o lote e ver o selo e os pedidos desmarcados.
 
 ## ⬜ Etapa 10 — Matriz de despacho
 ```
@@ -334,13 +333,11 @@ Na Matriz de Despacho, a coluna Motorista vem pré-preenchida com a sugestão do
 Relatórios pós-cálculo, sem alterar o agrupamento: (a) validação de janela (loja e Delivery Window do pedido), indicando pedidos fora do prazo e o motivo; (b) limite de km por rota/motorista, com aviso "Rota X passou Y km do limite". Sem push.
 ```
 
-## ⬜ Etapa 12 — Histórico *(redesenhada em 22/10/2026; feita logo depois da Etapa 9, sobre a mesma tabela de pedidos por rota confirmada)*
-- Tela estilo histórico do navegador: agrupada por **dia > loja > motorista-rota (expansível) > pedidos com id e endereço**, com busca e filtros por loja, motorista e operador; só rotas **confirmadas**.
-- **Proposta pendente de confirmação (privacidade):** guardar só id, endereço e cidade (sem nome de cliente nem telefone) e apagar o endereço depois de cerca de 90 dias, mantendo a contagem de rotas.
-- A tabela de pedidos por rota confirmada também resolve a perda do resultado da roteirização quando o Render reinicia antes de "Confirmar rotas".
-```
-Crie a tabela de pedidos por rota confirmada (migration nova) e a tela de histórico descrita acima (agrupada por dia, loja, motorista-rota e pedidos; busca e filtros por loja, motorista e operador; só rotas confirmadas). Só id, endereço e cidade; nunca nome de cliente nem telefone. Sem push.
-```
+## 🟨 Etapa 12 — Histórico *(PRONTA NO CÓDIGO em 22/10/2026, junto com a Etapa 9; falta aplicar a `0011`, publicar e validar no site)*
+- [x] Botão "Histórico" no cabeçalho: janela sem mapa, agrupada por **dia > loja > motorista-rota (expansível) > pedidos com id e endereço**, com período (padrão 7 dias), loja, motorista, operador, busca por id ou endereço, "mostrar rotas desfeitas" e "carregar mais"; só rotas **confirmadas** (as desfeitas só se pedir).
+- [x] **Privacidade (proposta confirmada):** só id, endereço e cidade (nunca nome de cliente, telefone nem CEP); o endereço é apagado depois de 90 dias (`HISTORICO_DIAS`), mantendo id, cidade, volume e os dados da rota; limpeza preguiçosa 1x por dia.
+- [x] A tabela `rotas_pedidos` também resolve a perda do resultado da roteirização quando o Render reinicia antes de "Confirmar rotas": o que foi confirmado fica no banco.
+- [ ] Aplicar a `0011` no Neon, publicar e validar no site: abrir o Histórico, filtrar, abrir uma rota, conferir "Hoje"/"Ontem" e as rotas antigas sem detalhe.
 
 ## ⬜ Etapa 13 — Romaneio
 ```
@@ -378,14 +375,18 @@ Implemente conectores de pedidos para Google Sheets (links nomeados) e BigQuery 
 - [ ] Carga de lojas: os pendentes da Etapa 6c acima (rodar de novo a carga do segundo arquivo, "ATC Varzea Grande", limpeza opcional das 14 lojas sem motorista) e as 5 lojas que faltam para os motoristas sem vínculo.
 - [x] Remover `correcoes_etapa1_auth.patch` da raiz (já removido; commit `75d2312`).
 
-**Próxima ordem:** Etapa 9 (duplicidade) e Etapa 12 (histórico) em sequência, depois as demais (10, 11 e 13; a 14 foi cancelada); conectores na Etapa 15.
+**Próxima ordem:** aplicar a `0011` e validar as Etapas 9 e 12 no site; depois as demais (10, 11 e 13; a 14 foi cancelada); conectores na Etapa 15.
 
 ## Pendências novas (validação no site)
 - [ ] **Itens de teste:** os itens **TESTE-001 a TESTE-004** foram criados na validação dos pesos; ainda **não há como excluir nem desativar itens** na tela "Pesos dos itens". Criar a desativação de itens (ou aceitar conviver com eles) e depois tirá-los da fila "sem peso".
 
+## Etapas 9 e 12 — prontas no código (22/10/2026)
+
+- **Etapas 9 e 12 PRONTAS NO CÓDIGO (22/10/2026); falta aplicar a `0011` no Neon, publicar e validar no site.** Uma só tabela nova, `rotas_pedidos` (migration `0011`, idempotente, sem DROP/TRUNCATE/DELETE; SQL conferido com `--sql`, **não aplicada**), liga cada rota CONFIRMADA aos seus pedidos (rota, ordem, id do pedido, endereço "rua, número - bairro", cidade, UF e volume; **nunca nome de cliente, telefone nem CEP**) e é gravada no "Confirmar rotas" na mesma transação que `rotas_realizadas` (restrição única rota + ordem: confirmar duas vezes não duplica; "Desfazer" só marca a rota como cancelada e os pedidos ficam ligados). A `0011` também cria o índice `ix_rotas_realizadas_data`. **Privacidade (proposta confirmada):** só id, endereço e cidade; o endereço (e só ele) é apagado depois de 90 dias da confirmação (`HISTORICO_DIAS`, padrão 90; `data < hoje - 90`), preenchendo `endereco_apagado_em`; id, cidade, volume e os dados da rota ficam. A limpeza é preguiçosa (sem agendador, o Render dorme): roda no máximo 1x por dia, ao confirmar rotas ou ao abrir o histórico, e é um UPDATE idempotente; falha dela nunca derruba quem chamou e só registra a classe do erro. **Etapa 9 (duplicidade):** `POST /api/pedidos/ja-roteirizados` (login; até 20.000 ids, consulta em blocos) devolve só os pedidos em rotas confirmadas de HOJE (America/Sao_Paulo): número da rota, motorista (nome), turno, loja, operador (só o nome, sem e-mail) e hora; rota cancelada e outro dia não contam. Na lista de pedidos, selo "já está na Rota N de [motorista] ([turno], hh:mm)"; **os já roteirizados entram DESMARCADOS** assim que a consulta responde (uma vez por pedido, com um aviso único e curto) e o mesmo vale depois de "Confirmar rotas"; marcar de volta pede duas confirmações; "Marcar visíveis" não os marca e diz quantos ficaram de fora; o texto de confirmação de "Executar Roteirização" traz a contagem de marcados já roteirizados. É sempre aviso, nunca bloqueio; falha da consulta não desmarca nada e mostra um aviso discreto. **Etapa 12 (histórico):** botão "Histórico" no cabeçalho abre uma janela sem mapa, estilo histórico de navegador: DIA ("Hoje", "Ontem", depois a data) > LOJA > "Motorista · Rota N" (turno, hora, pedidos, km; abre e fecha) > pedidos (ordem, id, endereço ou "endereço removido após 90 dias"; rotas confirmadas antes desta etapa mostram "sem detalhe dos pedidos"). `GET /api/historico` (login) com período (padrão 7 dias), loja, motorista, operador (pelo nome), busca por id exato ou trecho do endereço, "mostrar rotas desfeitas" (riscadas) e "carregar mais" (50 por vez); `GET /api/historico/filtros` alimenta os seletores. Privacidade verificada com testes de log (caplog/capsys): nenhum endereço nem id de pedido em log, aviso ou erro. Testes: 1043 no backend (36 novos em `test_historico.py`: gravação ao confirmar, sem duplicar, desfazer, limpeza e prazo, duplicidade, histórico com filtros, paginação, desfeitas, rotas antigas e endereço removido, 401, privacidade, migration) e 136 no frontend (`duplicidade.test.js` e `historico.test.js`); build ok.
+
 ## Decisões do operador (22/10/2026)
 - **Etapa 14 (layout novo) CANCELADA:** o layout atual (aba à esquerda, informações acima do mapa) fica como está.
-- **Etapa 12 (histórico) redesenhada:** tela estilo histórico do navegador, agrupada por dia, loja, motorista-rota (expansível) e pedidos com id e endereço, com busca e filtros por loja, motorista e operador, só com rotas confirmadas. **Proposta pendente de confirmação:** guardar só id, endereço e cidade (sem nome de cliente nem telefone) e apagar o endereço depois de cerca de 90 dias, mantendo a contagem de rotas.
+- **Etapa 12 (histórico) redesenhada:** tela estilo histórico do navegador, agrupada por dia, loja, motorista-rota (expansível) e pedidos com id e endereço, com busca e filtros por loja, motorista e operador, só com rotas confirmadas. **Proposta de privacidade CONFIRMADA:** guardar só id, endereço e cidade (sem nome de cliente, telefone nem CEP) e apagar o endereço depois de 90 dias, mantendo a contagem de rotas.
 - **Etapas 9 (duplicidade) e 12 (histórico) serão feitas em sequência sobre uma mesma tabela de pedidos por rota confirmada**, o que também resolve a perda do resultado da roteirização quando o Render reinicia.
 - **Melhoria futura:** trocar o ícone de casinha das lojas pela logo da rede (arquivos guardados no próprio sistema, com ícone de reserva, e a rede de cada loja vinda do `retailer_name` do Superset), depois que tudo estiver pronto, conferindo o uso das marcas.
 - **Operação no Render:** a primeira roteirização levou cerca de 30 segundos (inclui carregar o ortools) e o servidor dorme após 15 minutos sem uso.

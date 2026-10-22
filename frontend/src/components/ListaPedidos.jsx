@@ -2,13 +2,16 @@
 // endereço, marcar/desmarcar todos os visíveis e paginação de 50 (lotes grandes). SÓ os pedidos marcados entram na roteirização.
 // A data de entrega, quando vem no arquivo, aparece em letra pequena junto do pedido, só como informação: nunca filtra nem muda a roteirização.
 // Pedido cujo endereço não foi localizado fica desmarcado e travado, com a mensagem combinada, até o operador corrigir o endereço.
+// Pedido que já está em rota confirmada de hoje mostra o selo "já está na Rota N de [motorista]" e entra desmarcado; marcar de volta pede
+// duas confirmações e "Marcar visíveis" não o marca. É só aviso: nunca bloqueia.
 // Cliente e endereço só existem na memória da tela: nada vai para console, log nem armazenamento do navegador.
 import { useMemo, useState } from 'react';
 import { Search, AlertTriangle, Pencil, ChevronLeft, ChevronRight, CheckSquare, Square, Save, X } from 'lucide-react';
 import {
   filtrarPedidos, paginar, alternarMarca, marcarVisiveis, desmarcarVisiveis, todosVisiveisMarcados, contarMarcados, textoDoContador,
-  temErroDeEndereco, dataParaExibir, MSG_ERRO_ENDERECO,
+  temErroDeEndereco, dataParaExibir, contarDeixadosDeFora, MSG_ERRO_ENDERECO,
 } from '../services/pedidos';
+import { seloDeDuplicidade, confirmarMarcarDeNovo, avisoMarcarVisiveis, MSG_FALHA_DUPLICIDADE } from '../services/duplicidade';
 
 const campo = 'w-full px-2 py-1 rounded bg-slate-950 border border-slate-700 text-slate-100 text-[11px] focus:outline-none focus:border-blue-500';
 
@@ -45,17 +48,28 @@ function Correcao({ pedido, aoSalvar, aoCancelar }) {
   );
 }
 
-export default function ListaPedidos({ pedidos, marcados, comErro, lojaId, lojaNome, aoMudarMarcados, aoCorrigir }) {
+export default function ListaPedidos({ pedidos, marcados, comErro, lojaId, lojaNome, aoMudarMarcados, aoCorrigir, jaRoteirizados = null, avisoDuplicidade = '', duplicidadeFalhou = false, aoFecharAviso }) {
   const [busca, setBusca] = useState('');
   const [pagina, setPagina] = useState(1);
   const [corrigindo, setCorrigindo] = useState(null);
+  const [avisoVisiveis, setAvisoVisiveis] = useState(null);
 
   const { visiveis, foraDaLoja, naLoja } = useMemo(() => filtrarPedidos(pedidos, { lojaId, busca }), [pedidos, lojaId, busca]);
   const contagem = useMemo(() => contarMarcados(pedidos, marcados, { lojaId, comErro }), [pedidos, marcados, lojaId, comErro]);
   const paginas = paginar(visiveis, pagina);
   const marcadosVisiveis = visiveis.filter((p) => marcados.has(p.id) && !temErroDeEndereco(p, comErro)).length;
-  const todos = todosVisiveisMarcados(marcados, visiveis, comErro);
+  const todos = todosVisiveisMarcados(marcados, visiveis, comErro, jaRoteirizados);
 
+  const marcarTodosVisiveis = () => {
+    setAvisoVisiveis(avisoMarcarVisiveis(contarDeixadosDeFora(marcados, visiveis, comErro, jaRoteirizados)));
+    aoMudarMarcados(marcarVisiveis(marcados, visiveis, comErro, jaRoteirizados));
+  };
+  // Marcar de volta um pedido já roteirizado hoje exige duas confirmações; desmarcar é sempre direto.
+  const alternar = (p, marcado) => {
+    const info = jaRoteirizados?.[p.id];
+    if (!marcado && info && !confirmarMarcarDeNovo(info, window.confirm)) return;
+    aoMudarMarcados(alternarMarca(marcados, p.id));
+  };
   const mudarFiltro = (aplicar) => (valor) => { aplicar(valor); setPagina(1); };
 
   return (
@@ -64,6 +78,17 @@ export default function ListaPedidos({ pedidos, marcados, comErro, lojaId, lojaN
         <span className="font-bold uppercase tracking-wider text-slate-400">Pedidos do lote</span>
         <span className="font-mono text-slate-300">{textoDoContador(contagem)}</span>
       </div>
+
+      {avisoDuplicidade && (
+        <p className="flex items-start gap-1.5 text-[11px] text-amber-300" role="status">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          <span className="flex-1">{avisoDuplicidade}</span>
+          {aoFecharAviso && (
+            <button type="button" onClick={aoFecharAviso} aria-label="Fechar aviso" className="shrink-0 text-amber-300 hover:text-amber-100"><X className="w-3 h-3" /></button>
+          )}
+        </p>
+      )}
+      {duplicidadeFalhou && <p className="text-[10px] text-slate-500" role="status">{MSG_FALHA_DUPLICIDADE}</p>}
 
       {lojaId !== null && foraDaLoja > 0 && (
         <p className="flex items-start gap-1.5 text-[11px] text-amber-300">
@@ -81,7 +106,7 @@ export default function ListaPedidos({ pedidos, marcados, comErro, lojaId, lojaN
       </div>
 
       <div className="flex items-center gap-1.5">
-        <button type="button" onClick={() => aoMudarMarcados(marcarVisiveis(marcados, visiveis, comErro))} disabled={todos || visiveis.length === 0}
+        <button type="button" onClick={marcarTodosVisiveis} disabled={todos || visiveis.length === 0}
           className="flex items-center gap-1 px-2 py-1 rounded text-[11px] border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-40">
           <CheckSquare className="w-3 h-3" /> Marcar visíveis
         </button>
@@ -91,16 +116,19 @@ export default function ListaPedidos({ pedidos, marcados, comErro, lojaId, lojaN
         </button>
       </div>
 
+      {avisoVisiveis && <p className="text-[11px] text-amber-300" role="status">{avisoVisiveis}</p>}
+
       {visiveis.length === 0 && <p className="py-3 text-center text-[11px] text-slate-500">Nenhum pedido com esses filtros.</p>}
 
       <div className="space-y-1 max-h-80 overflow-y-auto pr-1">
         {paginas.itens.map((p) => {
           const erro = temErroDeEndereco(p, comErro);
           const marcado = marcados.has(p.id) && !erro;
+          const jaRoteirizado = jaRoteirizados?.[p.id] ?? null;
           return (
             <div key={p.id} className={`p-2 rounded-lg border text-[11px] ${erro ? 'bg-red-950/20 border-red-500/30' : marcado ? 'bg-blue-500/10 border-blue-500/40' : 'bg-slate-900/70 border-slate-800'}`}>
               <div className="flex items-start gap-2">
-                <input type="checkbox" checked={marcado} disabled={erro} onChange={() => aoMudarMarcados(alternarMarca(marcados, p.id))}
+                <input type="checkbox" checked={marcado} disabled={erro} onChange={() => alternar(p, marcado)}
                   aria-label={`Marcar o pedido ${p.id}`} className="mt-0.5 accent-blue-500 shrink-0" />
                 <div className="min-w-0 flex-1">
                   <p className="font-semibold text-slate-100 truncate">
@@ -111,6 +139,11 @@ export default function ListaPedidos({ pedidos, marcados, comErro, lojaId, lojaN
                     {p.cidade}/{p.uf}{p.cep ? ` · ${p.cep}` : ''} · vol. {p.volume}
                     {p.janela_inicio ? ` · ${p.janela_inicio}-${p.janela_fim}` : ''}
                   </p>
+                  {jaRoteirizado && (
+                    <p className="flex items-center gap-1 text-amber-300 mt-0.5">
+                      <AlertTriangle className="w-3 h-3 shrink-0" /> {seloDeDuplicidade(jaRoteirizado)}
+                    </p>
+                  )}
                   {p.data_entrega && <p className="text-[9px] text-slate-600">Entrega: {dataParaExibir(p.data_entrega)} (só informação)</p>}
                   {erro && (
                     <p className="flex items-center gap-1 text-red-300 mt-0.5">

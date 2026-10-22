@@ -4,6 +4,7 @@ import math
 import time
 import asyncio
 import uuid
+from datetime import date
 from typing import List, Optional, Dict, Any, Union
 
 import httpx
@@ -33,7 +34,7 @@ import rotas_realizadas
 import setores as modulo_setores
 from logistica.costs import calcular_custo_rota
 from database import get_db, Operador, init_db
-from config import OPERATOR_INVITE_CODE
+from config import OPERATOR_INVITE_CODE, HISTORICO_DIAS
 from auth import (
     gerar_hash_senha,
     verificar_senha_hash,
@@ -749,7 +750,7 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar:
                 continue
 
             pedidos_geo.append({
-                "id": pedido_id, "Endereco": rua, "Numero": num, "Bairro": bairro,
+                "id": pedido_id, "Endereco": rua, "Numero": num, "Bairro": bairro, "Cidade": cidade_p, "UF": uf_p,
                 "CEP": cep, "Volume": vol, "lat": p_lat, "lon": p_lon,
                 # ALERTA_APROXIMADO = só achou bairro/cidade (sem precisão de rua).
                 # O pedido continua sendo roteirizado normalmente, só fica marcado
@@ -1326,15 +1327,87 @@ async def confirmar_rotas(dados: ConfirmarRotasRequest, operador: Operador = Dep
     resultado = job["resultado"]
     rotas = [
         {"numero_rota": r["id"], "motorista_id": r["motorista_id"], "qtd_pedidos": r.get("qtd_pedidos", 0), "distancia_km": r.get("km_total", 0),
-         "setores": modulo_setores.texto_dos_setores(r.get("setores") or [])}
+         "setores": modulo_setores.texto_dos_setores(r.get("setores") or []),
+         # Só o mínimo vai para o banco: id, endereço (rua, número e bairro), cidade, UF e volume. Nunca cliente, telefone nem CEP.
+         "pedidos": [
+             {"ordem": p.get("ordem") or i + 1, "pedido_id": p.get("id"), "volume": p.get("Volume"), "cidade": p.get("Cidade"), "uf": p.get("UF"),
+              "endereco": _endereco_da_parada(p)}
+             for i, p in enumerate(r.get("paradas") or [])
+         ]}
         for r in resultado.get("rotas", []) if r.get("motorista_id") is not None
     ]
     # O turno gravado é o da roteirização (escolhido pelo operador); o do corpo só vale para resultados sem turno.
     turno = (resultado.get("turno") or (dados.turno or "").strip())[:20] or None
     dia = rotas_realizadas.hoje_em_brasilia()
-    return await _com_conexao_frota(
-        lambda c: rotas_realizadas.confirmar(c, dados.execucao_id, rotas, dia, resultado.get("loja_hub"), turno, _rotulo_do_operador(operador))
-    )
+    async def confirmar_e_limpar(c):
+        resposta = await rotas_realizadas.confirmar(c, dados.execucao_id, rotas, dia, resultado.get("loja_hub"), turno, _rotulo_do_operador(operador))
+        await rotas_realizadas.limpeza_preguicosa(c, dia, HISTORICO_DIAS)  # no máximo uma vez por dia; nunca derruba a confirmação
+        return resposta
+
+    return await _com_conexao_frota(confirmar_e_limpar)
+
+
+def _endereco_da_parada(p: dict) -> str:
+    """'rua, número - bairro' (só o que existir)."""
+    rua = ", ".join(t for t in (str(p.get("Endereco") or "").strip(), str(p.get("Numero") or "").strip()) if t)
+    bairro = str(p.get("Bairro") or "").strip()
+    return f"{rua} - {bairro}" if rua and bairro else (rua or bairro)
+
+
+class JaRoteirizadosRequest(BaseModel):
+    ids: List[Any] = Field(default_factory=list, max_length=rotas_realizadas.MAX_IDS_DUPLICIDADE)
+
+
+@app.post("/api/pedidos/ja-roteirizados")
+async def pedidos_ja_roteirizados(dados: JaRoteirizadosRequest, operador: Operador = Depends(obter_operador_atual)):
+    """
+    Controle de duplicidade (aviso, nunca bloqueio): dos ids recebidos, os que já estão em rotas CONFIRMADAS de hoje (dia de Brasília), com o número da rota,
+    o motorista, o turno, a loja, o nome de quem confirmou (sem e-mail) e a hora. Usa só o id do pedido; nada do corpo vai para log.
+    """
+    dia = rotas_realizadas.hoje_em_brasilia()
+    return {"data": dia.isoformat(), "pedidos": await _com_conexao_frota(lambda c: rotas_realizadas.ja_roteirizados(c, dados.ids, dia))}
+
+
+def _data_do_filtro(texto: Optional[str], padrao):
+    if texto is None or not str(texto).strip():
+        return padrao
+    try:
+        return date.fromisoformat(str(texto).strip()[:10])
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Data inválida. Use o formato aaaa-mm-dd.")
+
+
+@app.get("/api/historico")
+async def historico_de_rotas(
+    de: Optional[str] = None, ate: Optional[str] = None, loja: Optional[str] = None, motorista_id: Optional[int] = None,
+    operador_nome: Optional[str] = None, q: Optional[str] = None, desfeitas: bool = False, limite: int = 50, deslocamento: int = 0,
+    operador: Operador = Depends(obter_operador_atual),
+):
+    """
+    Histórico das rotas confirmadas (padrão: últimos 7 dias), agrupável por dia, loja e motorista-rota, com os pedidos de cada rota (id e endereço; o endereço
+    some depois de HISTORICO_DIAS). Filtros por período, loja, motorista, operador (pelo nome) e busca (id do pedido ou trecho do endereço). Paginado.
+    """
+    hoje = rotas_realizadas.hoje_em_brasilia()
+    padrao_de, padrao_ate = rotas_realizadas.periodo_padrao(hoje)
+    de_dia, ate_dia = _data_do_filtro(de, padrao_de), _data_do_filtro(ate, padrao_ate)
+    if de_dia > ate_dia:
+        raise HTTPException(status_code=422, detail="A data inicial precisa ser antes da data final.")
+
+    async def consultar(c):
+        await rotas_realizadas.limpeza_preguicosa(c, hoje, HISTORICO_DIAS)
+        return await rotas_realizadas.historico(c, de_dia, ate_dia, loja, motorista_id, operador_nome, q, desfeitas, limite, deslocamento)
+
+    resposta = await _com_conexao_frota(consultar)
+    return {"hoje": hoje.isoformat(), "de": de_dia.isoformat(), "ate": ate_dia.isoformat(), "dias_retencao": HISTORICO_DIAS, **resposta}
+
+
+@app.get("/api/historico/filtros")
+async def filtros_do_historico(de: Optional[str] = None, ate: Optional[str] = None, operador: Operador = Depends(obter_operador_atual)):
+    """Lojas, motoristas e operadores (só nomes) do período, para os seletores de filtro do histórico."""
+    hoje = rotas_realizadas.hoje_em_brasilia()
+    padrao_de, padrao_ate = rotas_realizadas.periodo_padrao(hoje)
+    de_dia, ate_dia = _data_do_filtro(de, padrao_de), _data_do_filtro(ate, padrao_ate)
+    return await _com_conexao_frota(lambda c: rotas_realizadas.filtros_do_historico(c, de_dia, ate_dia))
 
 
 @app.post("/api/rotas-realizadas/{execucao_id}/desfazer")

@@ -18,6 +18,18 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440
 # fica bloqueado por padrão (mais seguro do que deixar aberto por engano).
 OPERATOR_INVITE_CODE = os.getenv("OPERATOR_INVITE_CODE")
 
+
+def _dias_do_historico() -> int:
+    """HISTORICO_DIAS: depois de quantos dias da confirmação o endereço dos pedidos é apagado (padrão 90; valor inválido volta ao padrão)."""
+    try:
+        dias = int(os.getenv("HISTORICO_DIAS", "90"))
+    except ValueError:
+        return 90
+    return dias if dias >= 1 else 90
+
+
+HISTORICO_DIAS = _dias_do_historico()
+
 # ==============================
 # CONFIGURAÇÃO DE LOGGING
 # ==============================

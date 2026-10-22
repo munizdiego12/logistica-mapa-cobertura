@@ -34,6 +34,7 @@ import {
   seloDeRotacao, MSG_TROCA_TRAVADA, MSG_AJUSTES_E_REINICIO, MSG_SEM_ROTACAO, interpretarLimiteKm
 } from './services/despacho';
 import { relatorioDeJanelas, foraDoPrazoPorRota, dicaDoSelo } from './services/janelas';
+import { montarCsv, nomeDoArquivo, avisoDoRomaneio } from './services/romaneio';
 import { API_BASE } from './config';
 import { instalarTratamento401, MENSAGEM_SESSAO_EXPIRADA } from './services/sessao';
 import { baixarBlob } from './services/download';
@@ -645,37 +646,12 @@ export default function App() {
     }
   };
 
+  // Romaneio (.csv): montado na tela (nada passa pelo servidor). Motorista e veículo são os FINAIS depois das trocas; o cliente vem do lote em memória
+  // e só existe no arquivo baixado; a chegada é a estimativa do bloco "Janelas de entrega".
   const exportarRomaneio = () => {
     if (!resultado || !resultado.rotas) return;
-
-    let csvContent = "data:text/csv;charset=utf-8,Rota,Motorista,Viagem,Veiculo,Ordem_Parada,Endereco,Numero,Bairro,CEP,Volume\n";
-
-    rotasDoDespacho.forEach((r) => {
-      if (r.paradas && r.paradas.length > 0) {
-        r.paradas.forEach((p, pIdx) => {
-          const linha = [
-            `Rota ${r.id}`,
-            `"${r.motorista_base || r.motorista}"`,
-            `Viagem ${r.viagem_num || 1}`,
-            `"${r.modal}"`,
-            pIdx + 1,
-            `"${p.Endereco || p.rua || ''}"`,
-            `"${p.Numero || p.numero || ''}"`,
-            `"${p.Bairro || p.bairro || ''}"`,
-            `"${p.CEP || p.cep || ''}"`,
-            p.Volume || 1
-          ].join(',');
-          csvContent += linha + "\n";
-        });
-      }
-    });
-
-    const downloadAnchor = document.createElement('a');
-    downloadAnchor.setAttribute('href', encodeURI(csvContent));
-    downloadAnchor.setAttribute('download', `romaneio_expedicao_zubale_${new Date().toISOString().slice(0, 10)}.csv`);
-    document.body.appendChild(downloadAnchor);
-    downloadAnchor.click();
-    downloadAnchor.remove();
+    const csv = montarCsv({ rotas: rotasDoDespacho, pedidos: loteSelecionado?.pedidos ?? [], relatorio: relatorioDeJanela, loja: lojaHub, turno: resultado.turno });
+    baixarBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), nomeDoArquivo(new Date().toISOString().slice(0, 10)));
   };
 
   // Etapa 1 — Autenticação: sem operador logado, não renderiza o app,
@@ -1391,12 +1367,14 @@ export default function App() {
                   )}
                   <button
                     onClick={exportarRomaneio}
+                    title="Baixa o romaneio com cliente, coordenadas, chegada estimada e janela de entrega"
                     className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-lg text-xs font-medium transition-colors"
                   >
                     <FileDown className="w-3.5 h-3.5" /> Romaneio (.csv)
                   </button>
                 </div>
               </div>
+              <p className="px-4 pt-2 text-[10px] text-slate-500">{avisoDoRomaneio(relatorioDeJanela, Number(resultado.parametros?.tempo_por_parada_min) || 10)}</p>
 
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">

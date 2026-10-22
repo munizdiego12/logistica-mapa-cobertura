@@ -131,6 +131,11 @@ function janelaDoPedido(pedido) {
   return inicio === null || fim === null ? null : { inicio, fim };
 }
 
+/** Janela que vale para o pedido (em minutos): a do PEDIDO quando ele trouxe as duas horas; senão a da LOJA no turno; null se não houver nenhuma. */
+export function janelaEfetivaDoPedido(pedido, loja, turno) {
+  return janelaDoPedido(pedido) ?? (loja ? janelaDaLoja(loja, turno) : null);
+}
+
 function avaliar(chegada, janelaLoja, janelaPedido, turno) {
   const hora = minutosParaHora(chegada);
   const nomeLoja = `a janela da ${TURNO_NO_TEXTO[turno]} da loja`;
@@ -156,7 +161,7 @@ function avaliar(chegada, janelaLoja, janelaPedido, turno) {
  */
 export function relatorioDeJanelas({ rotas, pedidos, loja, turno, horaDeSaida = '', tempoPorParada = 10 }) {
   const mensagens = [];
-  const base = { mensagens, saidaPadrao: null, saidaUsada: null, totalPedidos: 0, foraDoPrazo: 0, antesDoInicio: 0, rotas: [] };
+  const base = { mensagens, saidaPadrao: null, saidaUsada: null, totalPedidos: 0, foraDoPrazo: 0, antesDoInicio: 0, rotas: [], porParada: {} };
   if (!rotas || rotas.length === 0) return { ...base, status: 'sem_rotas' };
 
   const janelaLoja = loja ? janelaDaLoja(loja, turno) : null;
@@ -179,12 +184,17 @@ export function relatorioDeJanelas({ rotas, pedidos, loja, turno, horaDeSaida = 
   let foraDoPrazo = 0;
   let antesDoInicio = 0;
   const relatorioRotas = [];
+  const porParada = {};
   for (const rota of rotas) {
     const fora = [];
     const antes = [];
+    porParada[rota.id] = [];
     for (const c of chegadasDaRota(rota, saidas.get(rota.id), tempoPorParada)) {
       total += 1;
-      const veredito = avaliar(c.chegada, janelaLoja, janelaDoPedido(porId.get(c.pedidoId)), turno);
+      const janelaProprio = janelaDoPedido(porId.get(c.pedidoId));
+      const veredito = avaliar(c.chegada, janelaLoja, janelaProprio, turno);
+      // por parada (usado no romaneio): chegada e se está fora do prazo (null = sem nenhuma janela para avaliar)
+      porParada[rota.id].push({ pedidoId: c.pedidoId, ordem: c.ordem, chegada: c.chegada, horaTexto: minutosParaHora(c.chegada), fora: veredito?.tipo === 'fora' ? true : (janelaLoja || janelaProprio ? false : null) });
       if (!veredito) continue;
       (veredito.tipo === 'fora' ? fora : antes).push({ id: c.pedidoId, ordem: c.ordem, chegada: veredito.hora, texto: veredito.texto });
     }
@@ -194,7 +204,7 @@ export function relatorioDeJanelas({ rotas, pedidos, loja, turno, horaDeSaida = 
       relatorioRotas.push({ rotaId: rota.id, titulo: `Rota ${rota.id} · ${rota.motorista}`, saida: minutosParaHora(saidas.get(rota.id)), total: (rota.paradas ?? []).length, fora, antes });
     }
   }
-  return { ...resultado, status: 'ok', totalPedidos: total, foraDoPrazo, antesDoInicio, rotas: relatorioRotas };
+  return { ...resultado, status: 'ok', totalPedidos: total, foraDoPrazo, antesDoInicio, rotas: relatorioRotas, porParada };
 }
 
 /** { id_da_rota: quantos pedidos chegam fora do prazo } só das rotas com algum (para o selo da Matriz de despacho). */

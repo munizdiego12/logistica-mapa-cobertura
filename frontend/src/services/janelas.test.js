@@ -219,3 +219,13 @@ test('resumo da saída: digitada, padrão do turno ou pedir a hora', () => {
   assert.equal(resumoDaSaida('', null), 'Informe a hora de saída');
   assert.equal(resumoDaSaida('xx', 480), 'Saída às 08:00 (padrão do turno)');
 });
+
+test('o relatório traz a chegada e o "fora do prazo" por parada (usado no romaneio), sem mudar o resto', () => {
+  const lote = [{ id: 'a' }, { id: 'b', janela_inicio: '12:00', janela_fim: '12:30' }, { id: 'c' }];
+  const r = relatorioDeJanelas({ rotas: [rota(1, 1)], pedidos: lote, loja: LOJA, turno: 'manha', horaDeSaida: '12:00', tempoPorParada: 10 });
+  assert.deepEqual(r.porParada[1].map((p) => [p.pedidoId, p.ordem, p.horaTexto, p.fora]), [['a', 1, '12:10', false], ['b', 2, '12:40', true], ['c', 3, '12:55', false]]);
+  const semJanela = relatorioDeJanelas({ rotas: [rota(1, 1)], pedidos: lote, loja: null, turno: 'manha', horaDeSaida: '12:00', tempoPorParada: 10 });
+  assert.deepEqual(semJanela.porParada[1].map((p) => p.fora), [null, true, null]);
+  assert.deepEqual(relatorioDeJanelas({ rotas: [rota(1, 1)], pedidos: lote, loja: null, turno: 'manha' }).porParada, {});
+  assert.equal(r.foraDoPrazo, 1);
+});

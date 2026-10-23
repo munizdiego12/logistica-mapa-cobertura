@@ -30,6 +30,19 @@ body {
   filter: sepia(1) hue-rotate(186deg) saturate(1.6) brightness(0.7) contrast(1.8);
 }
 
+/*
+ * Emendas entre os blocos: com a tela em escala fracionada (ex.: 120%, em que 256 px viram 307,2 px) as bordas dos blocos caem em meio pixel e o fundo do mapa
+ * aparece como linhas finas em grade; o contraste do filtro acima as realça. Só estética, sem mudar o tom: o contorno transparente faz o navegador rasterizar cada
+ * bloco alinhado ao pixel e a camada própria (will-change) evita a recomposição fracionada durante o zoom. O filtro continua o mesmo, no contêiner dos blocos
+ * (não em cada bloco), e as camadas de cima (marcadores, hub, círculos e rotas) ficam de fora.
+ */
+.mapa-escuro .leaflet-tile-pane {
+  will-change: transform;
+}
+.mapa-escuro .leaflet-tile-pane .leaflet-tile {
+  outline: 1px solid transparent;
+}
+
 /* Atribuição e botões de zoom combinando com o mapa (a atribuição continua visível e com link). */
 .mapa-escuro .leaflet-container .leaflet-control-attribution {
   background: rgba(11, 26, 51, 0.82);

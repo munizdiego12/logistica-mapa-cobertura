@@ -26,6 +26,15 @@ test('o tom azul-marinho vem do filtro de CSS do mapa (o mesmo de antes)', () =>
   assert.match(CSS, /\.mapa-escuro \.leaflet-tile-pane \{\s*filter: sepia\(1\) hue-rotate\(186deg\) saturate\(1\.6\) brightness\(0\.7\) contrast\(1\.8\);\s*\}/);
 });
 
+test('as emendas entre os blocos têm correção no CSS (contorno transparente e camada própria) e o filtro azul continua só no contêiner dos blocos', () => {
+  assert.match(CSS, /\.mapa-escuro \.leaflet-tile-pane \{\s*will-change: transform;\s*\}/);
+  assert.match(CSS, /\.mapa-escuro \.leaflet-tile-pane \.leaflet-tile \{\s*outline: 1px solid transparent;\s*\}/);
+  assert.equal((CSS.match(/filter: sepia/g) || []).length, 1); // o filtro aparece uma vez só, no contêiner
+  assert.doesNotMatch(CSS, /\.leaflet-tile \{[^}]*filter/); // e não em cada bloco
+  // as camadas de cima não são tocadas pela correção
+  assert.doesNotMatch(CSS, /(leaflet-marker-pane|leaflet-overlay-pane|leaflet-shadow-pane)[^{]*\{[^}]*(will-change|outline)/);
+});
+
 test('há um único tema: sem seletor Escuro/Claro, sem escolha guardada no navegador e sem CSS do tema claro', () => {
   assert.doesNotMatch(CSS, /mapa-claro/);
   assert.doesNotMatch(MAPA, /Fundo do mapa|aria-pressed|localStorage|lerTema|salvarTema|TEMAS|mapa-claro/);

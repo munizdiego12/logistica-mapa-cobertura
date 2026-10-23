@@ -360,6 +360,30 @@ async def atualizar_peso(conn, id_sku: str, peso, confianca, operador: str) -> O
     return _para_dict(registro) if registro else None
 
 
+async def consultar_pesos(conn, skus: list) -> dict:
+    """
+    Subetapa 3 do peso (só leitura): {id_sku: {"peso_kg": kg ou None, "confianca": ou None}} dos SKUs que EXISTEM no cadastro (SKU que não existe não aparece; peso_kg
+    nulo = existe sem peso). Recebe só códigos de SKU e devolve só peso e confiança (sem nome nem quem alterou). Código inválido é ignorado. Consulta em blocos.
+    """
+    unicos = []
+    vistos = set()
+    for bruto in skus or []:
+        try:
+            sku = normalizar_id_sku(bruto)
+        except ValueError:
+            continue
+        if sku not in vistos:
+            vistos.add(sku)
+            unicos.append(sku)
+    pesos = {}
+    for i in range(0, len(unicos), 500):
+        bloco = unicos[i:i + 500]
+        marcas = ", ".join(f"${n}" for n in range(1, len(bloco) + 1))
+        for r in await conn.fetch(f"SELECT id_sku, peso_kg, confianca FROM item_pesos WHERE id_sku IN ({marcas})", *bloco):
+            pesos[str(r["id_sku"])] = {"peso_kg": None if r["peso_kg"] is None else float(r["peso_kg"]), "confianca": r["confianca"]}
+    return pesos
+
+
 async def registrar_skus_vistos(conn, itens: list) -> dict:
     """
     Faz os SKUs que apareceram em pedidos entrarem na fila "sem peso": SKU novo é inserido sem peso; SKU que já

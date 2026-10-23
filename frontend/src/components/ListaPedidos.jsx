@@ -4,13 +4,15 @@
 // Pedido cujo endereço não foi localizado fica desmarcado e travado, com a mensagem combinada, até o operador corrigir o endereço.
 // Pedido que já está em rota confirmada de hoje mostra o selo "já está na Rota N de [motorista]" e entra desmarcado; marcar de volta pede
 // duas confirmações e "Marcar visíveis" não o marca. É só aviso: nunca bloqueia.
+// Peso (subetapa 3): com o arquivo de itens, cada pedido mostra o peso estimado e o total dos marcados aparece com o selo "estimado"; é só informação, nunca bloqueia.
 // Cliente e endereço só existem na memória da tela: nada vai para console, log nem armazenamento do navegador.
 import { useMemo, useState } from 'react';
 import { Search, AlertTriangle, Pencil, ChevronLeft, ChevronRight, CheckSquare, Square, Save, X } from 'lucide-react';
 import {
   filtrarPedidos, paginar, alternarMarca, marcarVisiveis, desmarcarVisiveis, todosVisiveisMarcados, contarMarcados, textoDoContador,
-  temErroDeEndereco, dataParaExibir, contarDeixadosDeFora, MSG_ERRO_ENDERECO,
+  temErroDeEndereco, dataParaExibir, contarDeixadosDeFora, pedidosParaRoteirizar, MSG_ERRO_ENDERECO,
 } from '../services/pedidos';
+import { pesoDoPedido, pesoDosPedidos, textoDoPeso, textoDoTotal, detalheDoTotal, DICA_SEM_ITENS } from '../services/pesoPedidos';
 import { seloDeDuplicidade, confirmarMarcarDeNovo, avisoMarcarVisiveis, MSG_FALHA_DUPLICIDADE } from '../services/duplicidade';
 
 const campo = 'w-full px-2 py-1 rounded bg-slate-950 border border-slate-700 text-slate-100 text-[11px] focus:outline-none focus:border-blue-500';
@@ -48,7 +50,7 @@ function Correcao({ pedido, aoSalvar, aoCancelar }) {
   );
 }
 
-export default function ListaPedidos({ pedidos, marcados, comErro, lojaId, lojaNome, aoMudarMarcados, aoCorrigir, jaRoteirizados = null, avisoDuplicidade = '', duplicidadeFalhou = false, aoFecharAviso }) {
+export default function ListaPedidos({ pedidos, marcados, comErro, lojaId, lojaNome, aoMudarMarcados, aoCorrigir, jaRoteirizados = null, avisoDuplicidade = '', duplicidadeFalhou = false, aoFecharAviso, itens = null, pesos = {}, aoAtualizarPesos, atualizandoPesos = false }) {
   const [busca, setBusca] = useState('');
   const [pagina, setPagina] = useState(1);
   const [corrigindo, setCorrigindo] = useState(null);
@@ -70,6 +72,12 @@ export default function ListaPedidos({ pedidos, marcados, comErro, lojaId, lojaN
     if (!marcado && info && !confirmarMarcarDeNovo(info, window.confirm)) return;
     aoMudarMarcados(alternarMarca(marcados, p.id));
   };
+  // Peso estimado dos marcados que entram na roteirização (só com o arquivo de itens).
+  const pesoDosMarcados = useMemo(
+    () => (itens ? pesoDosPedidos(pedidosParaRoteirizar(pedidos, marcados, { lojaId, comErro }).map((p) => p.id), itens, pesos) : null),
+    [itens, pesos, pedidos, marcados, lojaId, comErro],
+  );
+
   const mudarFiltro = (aplicar) => (valor) => { aplicar(valor); setPagina(1); };
 
   return (
@@ -78,6 +86,22 @@ export default function ListaPedidos({ pedidos, marcados, comErro, lojaId, lojaN
         <span className="font-bold uppercase tracking-wider text-slate-400">Pedidos do lote</span>
         <span className="font-mono text-slate-300">{textoDoContador(contagem)}</span>
       </div>
+
+      {pesoDosMarcados ? (
+        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[11px]" aria-label="Peso estimado dos marcados">
+          <span className="text-slate-300">
+            Peso dos marcados: <span className="font-mono font-semibold">{textoDoTotal(pesoDosMarcados)}</span>
+            {detalheDoTotal(pesoDosMarcados) && <span className="block text-[10px] text-slate-500">{detalheDoTotal(pesoDosMarcados)}</span>}
+          </span>
+          {aoAtualizarPesos && (
+            <button type="button" onClick={aoAtualizarPesos} disabled={atualizandoPesos} className="px-2 py-0.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-40 text-[10px]">
+              {atualizandoPesos ? 'Atualizando...' : 'Atualizar pesos'}
+            </button>
+          )}
+        </div>
+      ) : (
+        <p className="text-[10px] text-slate-500">{DICA_SEM_ITENS}</p>
+      )}
 
       {avisoDuplicidade && (
         <p className="flex items-start gap-1.5 text-[11px] text-amber-300" role="status">
@@ -144,6 +168,7 @@ export default function ListaPedidos({ pedidos, marcados, comErro, lojaId, lojaN
                       <AlertTriangle className="w-3 h-3 shrink-0" /> {seloDeDuplicidade(jaRoteirizado)}
                     </p>
                   )}
+                  {itens && <p className="text-slate-400">{textoDoPeso(pesoDoPedido(itens[String(p.id)], pesos))}</p>}
                   {p.data_entrega && <p className="text-[9px] text-slate-600">Entrega: {dataParaExibir(p.data_entrega)} (só informação)</p>}
                   {erro && (
                     <p className="flex items-center gap-1 text-red-300 mt-0.5">

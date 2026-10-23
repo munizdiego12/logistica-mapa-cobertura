@@ -17,6 +17,7 @@ import Lojas from './components/Lojas';
 import Historico from './components/Historico';
 import SeletorMotoristaDaRota from './components/SeletorMotoristaDaRota';
 import JanelasDeEntrega from './components/JanelasDeEntrega';
+import RelatorioItens from './components/RelatorioItens';
 import SeletorLoja from './components/SeletorLoja';
 import ListaPedidos from './components/ListaPedidos';
 import RelatorioImportacao from './components/RelatorioImportacao';
@@ -35,6 +36,10 @@ import {
 } from './services/despacho';
 import { relatorioDeJanelas, foraDoPrazoPorRota, dicaDoSelo } from './services/janelas';
 import { montarCsv, nomeDoArquivo, avisoDoRomaneio } from './services/romaneio';
+import {
+  indexarItens, skusParaRegistrar, marcarComoRegistrados, emBlocos, skusDosItens, substituirPesos, resumoDosItens, pesoPorViagem, pesoPorMotorista, pesoPorTipoDeVeiculo,
+  textoDoTotal, detalheDoTotal, TAMANHO_BLOCO_SKUS_VISTOS, TAMANHO_BLOCO_CONSULTA
+} from './services/pesoPedidos';
 import { API_BASE } from './config';
 import { instalarTratamento401, MENSAGEM_SESSAO_EXPIRADA } from './services/sessao';
 import { baixarBlob } from './services/download';
@@ -241,6 +246,12 @@ export default function App() {
     tempoPorParada: Number(resultado.parametros?.tempo_por_parada_min) || 10
   }) : null;
   const foraDaJanelaPorRota = foraDoPrazoPorRota(relatorioDeJanela);
+  // Peso estimado (subetapa 3): por viagem, motorista e tipo de veículo, com as rotas efetivas (depois das trocas); só informação.
+  const itensDoLote = loteSelecionado?.itens ?? null;
+  const pesosDoLote = loteSelecionado?.pesos ?? {};
+  const pesoDasViagens = resultado && itensDoLote ? pesoPorViagem(rotasDoDespacho, itensDoLote, pesosDoLote) : null;
+  const pesoDosMotoristas = resultado && itensDoLote ? pesoPorMotorista(rotasDoDespacho, itensDoLote, pesosDoLote) : [];
+  const pesoDosTipos = resultado && itensDoLote ? pesoPorTipoDeVeiculo(rotasDoDespacho, itensDoLote, pesosDoLote) : [];
   const alternativasDaRota = (rota) => (busca) => alternativasParaRota({
     rota, rotas: rotasDoDespacho, motoristas, selecionados, lojaId: lojaHubId, rotasHoje, pedidosHoje, rotacao, busca
   });
@@ -259,6 +270,98 @@ export default function App() {
       }
     }));
   };
+
+  // Itens do pedido (subetapa 3 do peso): arquivo OPCIONAL que liga SKUs e quantidades aos pedidos do lote. Os itens e os pesos ficam só na memória da tela;
+  // o peso dos pedidos é uma estimativa e nunca bloqueia nada.
+  const [relatorioItens, setRelatorioItens] = useState(null); // { loteId, nome, relatorio } à espera de o operador aceitar
+  const [registrandoItens, setRegistrandoItens] = useState(false);
+  const [avisoItens, setAvisoItens] = useState('');
+  const [atualizandoPesos, setAtualizandoPesos] = useState(false);
+
+  const baixarModeloDeItens = async () => {
+    try {
+      const resposta = await apiAuth.get('/itens-pedido/modelo', { responseType: 'blob' });
+      baixarBlob(resposta.data, 'modelo_itens_do_pedido.csv');
+    } catch (err) {
+      if (err?.response?.status === 401) return; // já voltou para o login, com o aviso
+      alert('Não foi possível baixar o modelo agora. Tente de novo.');
+    }
+  };
+
+  const handleItensUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file || !loteSelecionado) return;
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('ids_pedidos', JSON.stringify(loteSelecionado.pedidos.map((p) => String(p.id)))); // só os ids do lote, para listar os pedidos que não estão nele
+    try {
+      setLoading(true);
+      const res = await apiAuth.post('/itens-pedido/validar', formData);
+      setRelatorioItens({ loteId: loteSelecionado.id, nome: file.name, relatorio: res.data });
+    } catch (err) {
+      if (err?.response?.status === 401) return;
+      const detalhe = err?.response?.data?.detail;
+      alert((typeof detalhe === 'string' && detalhe) || 'Erro ao ler o arquivo de itens. Confira se é um .csv ou .xlsx válido ou use o modelo.');
+    } finally {
+      setLoading(false);
+      e.target.value = '';
+    }
+  };
+
+  // Aceitar: guarda os itens e os pesos no lote e registra na fila "sem peso" SÓ os SKUs novos ou sem peso que este lote ainda não registrou
+  // (a chamada soma unidades a cada vez). Nunca é chamada ao validar, ao atualizar pesos, ao remover itens nem ao reenviar o mesmo arquivo.
+  const aceitarItens = async () => {
+    if (!relatorioItens || registrandoItens) return;
+    const { loteId, nome, relatorio } = relatorioItens;
+    const lote = lotesRef.current.find((l) => l.id === loteId);
+    if (!lote) { setRelatorioItens(null); return; }
+    setRegistrandoItens(true);
+    alterarLote(loteId, { itens: indexarItens(relatorio.itens), pesos: relatorio.pesos || {}, arquivoItens: nome });
+    let registrados = lote.skusRegistrados ?? [];
+    let falhou = false;
+    for (const bloco of emBlocos(skusParaRegistrar(relatorio.itens, relatorio.pesos, registrados), TAMANHO_BLOCO_SKUS_VISTOS)) {
+      try {
+        await apiAuth.post('/item-pesos/skus-vistos', { itens: bloco });
+        registrados = marcarComoRegistrados(registrados, bloco);
+      } catch (err) {
+        if (err?.response?.status !== 401) falhou = true;
+        break;
+      }
+    }
+    alterarLote(loteId, { skusRegistrados: registrados });
+    setAvisoItens(falhou ? 'Os itens foram aceitos, mas não consegui incluir os itens sem peso na fila agora. Envie o arquivo de novo para tentar outra vez.' : '');
+    setRelatorioItens(null);
+    setRegistrandoItens(false);
+  };
+
+  const removerItens = (loteId) => {
+    alterarLote(loteId, { itens: null, pesos: {}, arquivoItens: null }); // os SKUs já registrados na fila continuam marcados (não somam de novo)
+    setAvisoItens('');
+  };
+
+  // Pesos de novo (depois de o operador cadastrar um peso): consulta só os códigos de SKU dos lotes com itens e recalcula na tela.
+  const atualizarPesos = useCallback(async () => {
+    const comItens = lotesRef.current.filter((l) => l.itens);
+    if (comItens.length === 0) return;
+    setAtualizandoPesos(true);
+    try {
+      for (const lote of comItens) {
+        const skus = skusDosItens(lote.itens);
+        let resposta = {};
+        for (const bloco of emBlocos(skus, TAMANHO_BLOCO_CONSULTA)) {
+          const { data } = await apiAuth.post('/item-pesos/consultar', { skus: bloco });
+          resposta = { ...resposta, ...(data.pesos || {}) };
+        }
+        setLotes((prev) => prev.map((l) => (l.id === lote.id ? { ...l, pesos: substituirPesos(l.pesos, skus, resposta) } : l)));
+      }
+      setAvisoItens('');
+    } catch (err) {
+      if (err?.response?.status === 401) return;
+      setAvisoItens('Não consegui atualizar os pesos agora. Tente de novo.');
+    } finally {
+      setAtualizandoPesos(false);
+    }
+  }, []);
 
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
@@ -290,6 +393,10 @@ export default function App() {
       marcados: new Set(relatorio.pedidos.map((p) => p.id)),
       comErro: new Set(),
       tratados: new Set(), // ids já tratados pela checagem de duplicidade (cada pedido é desmarcado sozinho no máximo uma vez)
+      itens: null, // arquivo opcional de itens: { [idDoPedido]: [{ sku, quantidade }] } (só na memória da tela)
+      pesos: {}, // pesos dos SKUs do arquivo de itens: { [sku]: { peso_kg, confianca } }
+      arquivoItens: null,
+      skusRegistrados: [], // SKUs já enviados para a fila "sem peso" neste lote (a chamada soma unidades a cada vez: nunca repetir)
       dataUpload: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
     setLotes(prev => [...prev, novoLote]);
@@ -736,6 +843,15 @@ export default function App() {
         </div>
       </header>
 
+      {relatorioItens && (
+        <RelatorioItens
+          nomeArquivo={relatorioItens.nome}
+          relatorio={relatorioItens.relatorio}
+          enviando={registrandoItens}
+          onAceitar={aceitarItens}
+          onCancelar={() => { if (!registrandoItens) setRelatorioItens(null); }}
+        />
+      )}
       {relatorioPendente && (
         <RelatorioImportacao
           nomeArquivo={relatorioPendente.nome}
@@ -757,7 +873,7 @@ export default function App() {
       )}
 
       {mostrarPesos && (
-        <PesosItens api={apiAuth} onFechar={() => setMostrarPesos(false)} onSessaoExpirada={handleLogout} />
+        <PesosItens api={apiAuth} onFechar={() => { setMostrarPesos(false); atualizarPesos(); }} onSessaoExpirada={handleLogout} />
       )}
 
       {/* Espaço de Trabalho */}
@@ -975,6 +1091,35 @@ export default function App() {
               </div>
             )}
 
+            {loteSelecionado && (
+              <div className="space-y-1.5 p-2.5 rounded-lg bg-slate-900/40 border border-slate-800/80">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-semibold text-slate-300 flex items-center gap-1.5">
+                    <Scale className="w-3 h-3 text-blue-400" /> Itens do pedido (opcional)
+                  </span>
+                  <button
+                    onClick={baixarModeloDeItens}
+                    className="inline-flex items-center gap-1 text-[10px] text-blue-400 hover:text-blue-300 font-medium px-2 py-0.5 rounded bg-blue-500/10 border border-blue-500/20 transition-colors"
+                    title="Baixar o modelo do arquivo de itens (id_pedido, sku, quantidade)"
+                  >
+                    <Download className="w-2.5 h-2.5" /> Baixar modelo
+                  </button>
+                </div>
+                <label className="flex items-center justify-center gap-1.5 border border-dashed border-slate-800 hover:border-blue-500/60 rounded-lg px-2 py-1.5 cursor-pointer text-[11px] text-slate-300 transition-all">
+                  <Upload className="w-3 h-3 text-slate-400" /> Enviar arquivo de itens (.csv ou .xlsx)
+                  <input type="file" accept=".csv,.xlsx" onChange={handleItensUpload} className="hidden" />
+                </label>
+                <p className="text-[10px] text-slate-500">Serve para estimar o peso de cada pedido; você confere o arquivo antes de aceitar.</p>
+                {loteSelecionado.itens && (
+                  <div className="flex items-center justify-between gap-2 text-[11px]">
+                    <span className="text-emerald-300 truncate">{resumoDosItens(loteSelecionado.itens)} · {loteSelecionado.arquivoItens}</span>
+                    <button onClick={() => removerItens(loteSelecionado.id)} className="text-[10px] text-slate-400 hover:text-rose-400 underline shrink-0">Remover itens</button>
+                  </div>
+                )}
+                {avisoItens && <p className="text-[10px] text-amber-300" role="status">{avisoItens}</p>}
+              </div>
+            )}
+
             <div className="flex items-center justify-between text-[11px] px-1">
               <span className="text-slate-400">Pedidos marcados:</span>
               <span className={`font-mono font-semibold ${pedidosAtivos.length > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>
@@ -994,6 +1139,10 @@ export default function App() {
                 avisoDuplicidade={avisoDuplicidade}
                 duplicidadeFalhou={duplicidadeFalhou}
                 aoFecharAviso={() => setAvisoDuplicidade('')}
+                itens={loteSelecionado.itens}
+                pesos={loteSelecionado.pesos}
+                aoAtualizarPesos={atualizarPesos}
+                atualizandoPesos={atualizandoPesos}
                 aoMudarMarcados={(marcados) => alterarLote(loteSelecionado.id, { marcados })}
                 aoCorrigir={(id, campos) => alterarLote(loteSelecionado.id, (l) => {
                   const corrigido = corrigirEndereco(l.pedidos, l.comErro, id, campos);
@@ -1383,6 +1532,7 @@ export default function App() {
                       <th className="p-3.5 font-semibold">Despacho / Motorista</th>
                       <th className="p-3.5 font-semibold">Veículo</th>
                       <th className="p-3.5 font-semibold">Entregas</th>
+                      <th className="p-3.5 font-semibold" title="Estimativa a partir do arquivo de itens; só informação">Peso (estimado)</th>
                       <th className="p-3.5 font-semibold">Setores</th>
                       <th className="p-3.5 font-semibold">Quilometragem</th>
                       <th className="p-3.5 font-semibold">Tempo</th>
@@ -1449,6 +1599,14 @@ export default function App() {
                             )}
                           </div>
                         </td>
+                        <td className="p-3.5 text-slate-300 font-sans text-[11px]">
+                          {pesoDasViagens ? (
+                            <span>
+                              {textoDoTotal(pesoDasViagens[r.id])}
+                              {detalheDoTotal(pesoDasViagens[r.id]) && <span className="block text-[10px] text-slate-500">{detalheDoTotal(pesoDasViagens[r.id])}</span>}
+                            </span>
+                          ) : <span className="text-slate-600">—</span>}
+                        </td>
                         <td className="p-3.5 text-slate-300 font-sans" title={seloDeRotacao(regioesRepetidas(r, rotacao)) || undefined}>
                           {textoDosSetores(r.setores)}
                           {regioesRepetidas(r, rotacao).length > 0 && <AlertTriangle className="inline w-3.5 h-3.5 ml-1 text-amber-400" />}
@@ -1482,6 +1640,33 @@ export default function App() {
                   </tbody>
                 </table>
               </div>
+              {itensDoLote && (
+                <div className="border-t border-slate-800/80 p-4 space-y-2" aria-label="Peso estimado">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                    Peso estimado <span className="font-normal normal-case text-slate-500">(só informação; a estimativa vem do arquivo de itens e nada é bloqueado)</span>
+                  </p>
+                  <div className="grid sm:grid-cols-2 gap-3 text-[11px] text-slate-300">
+                    <div className="space-y-1">
+                      <p className="text-[10px] uppercase tracking-wider text-slate-500">Por motorista</p>
+                      {pesoDosMotoristas.map((m) => (
+                        <p key={m.chave}>
+                          <span className="font-semibold text-slate-200">{m.nome}</span>: {textoDoTotal(m.total)} · {m.viagens} {m.viagens === 1 ? 'viagem' : 'viagens'}
+                          {detalheDoTotal(m.total) && <span className="block text-[10px] text-slate-500">{detalheDoTotal(m.total)}</span>}
+                        </p>
+                      ))}
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-[10px] uppercase tracking-wider text-slate-500">Por tipo de veículo</p>
+                      {pesoDosTipos.map((t) => (
+                        <p key={t.chave}>
+                          <span className="font-semibold text-slate-200">{t.nome}</span>: {textoDoTotal(t.total)} · {t.viagens} {t.viagens === 1 ? 'viagem' : 'viagens'}
+                          {detalheDoTotal(t.total) && <span className="block text-[10px] text-slate-500">{detalheDoTotal(t.total)}</span>}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

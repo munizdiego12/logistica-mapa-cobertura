@@ -1,4 +1,5 @@
 import io
+import json
 import logging
 import math
 import time
@@ -25,6 +26,7 @@ import database
 import cobertura
 import item_pesos
 import item_pesos_importacao
+import itens_fonte
 import frota
 import lojas
 import matriz
@@ -1108,6 +1110,60 @@ async def confirmar_importacao_de_itens(
     resultado = await _com_conexao_pesos(lambda c: item_pesos_importacao.importar(c, validas, atualizar_existentes, incluir_sem_peso, rotulo))
     resultado["invalidos"] = len(erros)
     return resultado
+
+
+class ConsultarPesosRequest(BaseModel):
+    skus: List[str] = Field(default_factory=list, max_length=5000)
+
+
+@app.post("/api/item-pesos/consultar")
+async def consultar_pesos_dos_skus(dados: ConsultarPesosRequest, operador: Operador = Depends(obter_operador_atual)):
+    """
+    Pesos dos SKUs informados (só leitura), para recalcular o peso dos pedidos na tela depois que o operador cadastra um peso. Recebe SÓ códigos de SKU e devolve só
+    peso e confiança dos que existem: {"pesos": {"10001": {"peso_kg": 5.0, "confianca": "alta"}}} (peso_kg nulo = existe sem peso). Nada vai para log.
+    """
+    return {"pesos": await _com_conexao_pesos(lambda c: item_pesos.consultar_pesos(c, dados.skus))}
+
+
+MSG_ARQUIVO_DE_ITENS_DO_PEDIDO_ILEGIVEL = 'Não consegui ler o arquivo. Confira se é um .csv ou .xlsx válido ou use o modelo (botão "Baixar modelo").'
+
+
+@app.get("/api/itens-pedido/modelo")
+def baixar_modelo_de_itens_do_pedido(operador: Operador = Depends(obter_operador_atual)):
+    """Modelo de CSV do arquivo de itens do pedido (id_pedido, sku, quantidade e a descricao opcional; 2 exemplos)."""
+    return StreamingResponse(
+        io.BytesIO(itens_fonte.gerar_modelo_csv()),
+        headers={"Content-Disposition": 'attachment; filename="modelo_itens_do_pedido.csv"'},
+        media_type="text/csv; charset=utf-8",
+    )
+
+
+@app.post("/api/itens-pedido/validar")
+async def validar_itens_do_pedido(file: UploadFile = File(...), ids_pedidos: Optional[str] = Form(None), operador: Operador = Depends(obter_operador_atual)):
+    """
+    Lê o arquivo de itens (id_pedido, sku, quantidade, descricao opcional) e devolve o RELATÓRIO de validação mais os itens válidos e os pesos dos SKUs, para o operador conferir
+    ANTES de aceitar. `ids_pedidos` (texto JSON, só os ids do lote da tela) serve para listar e ignorar os pedidos que não estão no lote. Não grava nada e não guarda o arquivo;
+    o banco só é LIDO (peso e confiança dos SKUs das linhas válidas). Ids, SKUs e itens nunca vão para log nem para mensagem de erro.
+    """
+    ids_do_lote = None
+    if ids_pedidos:
+        try:
+            lista = json.loads(ids_pedidos)
+            if not isinstance(lista, list) or len(lista) > itens_fonte.MAX_IDS_DO_LOTE:
+                raise ValueError
+            ids_do_lote = [str(i) for i in lista]
+        except ValueError:
+            raise HTTPException(status_code=422, detail="A lista de pedidos do lote não está num formato válido. Atualize a tela e tente de novo.")
+    try:
+        conteudo = await file.read(itens_fonte.MAX_BYTES + 1)
+        resultado = itens_fonte.validar_itens(itens_fonte.FONTES["arquivo"](conteudo, file.filename or "").ler(), ids_do_lote)
+    except itens_fonte.ErroDeItens as erro:
+        raise HTTPException(status_code=400, detail=str(erro))
+    except Exception as erro:  # só a classe: a mensagem do erro pode trazer um pedaço do arquivo
+        print(f"[itens] Falha ao ler o arquivo de itens: {type(erro).__name__}")
+        raise HTTPException(status_code=400, detail=MSG_ARQUIVO_DE_ITENS_DO_PEDIDO_ILEGIVEL)
+    pesos = await _com_conexao_pesos(lambda c: item_pesos.consultar_pesos(c, [i["sku"] for i in resultado.itens])) if resultado.itens else None
+    return itens_fonte.relatorio(resultado, pesos)
 
 
 @app.post("/api/item-pesos/skus-vistos")

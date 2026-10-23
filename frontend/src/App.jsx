@@ -1526,23 +1526,24 @@ export default function App() {
               <p className="px-4 pt-2 text-[10px] text-slate-500">{avisoDoRomaneio(relatorioDeJanela, Number(resultado.parametros?.tempo_por_parada_min) || 10)}</p>
 
               <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
+                <table className="w-full min-w-[1040px] text-left text-xs">
                   <thead className="bg-slate-950/80 text-slate-400 border-b border-slate-800/80 text-[11px] uppercase tracking-wider">
                     <tr>
-                      <th className="p-3.5 font-semibold">Despacho / Motorista</th>
-                      <th className="p-3.5 font-semibold">Veículo</th>
-                      <th className="p-3.5 font-semibold">Entregas</th>
-                      <th className="p-3.5 font-semibold" title="Estimativa a partir do arquivo de itens; só informação">Peso (estimado)</th>
-                      <th className="p-3.5 font-semibold">Setores</th>
-                      <th className="p-3.5 font-semibold">Quilometragem</th>
-                      <th className="p-3.5 font-semibold">Tempo</th>
-                      <th className="p-3.5 font-semibold text-right">Navegação</th>
+                      <th className="p-3.5 font-semibold min-w-[260px]">Despacho / Motorista</th>
+                      <th className="p-3.5 font-semibold whitespace-nowrap">Veículo</th>
+                      <th className="p-3.5 font-semibold whitespace-nowrap">Entregas</th>
+                      <th className="p-3.5 font-semibold min-w-[120px]" title="Estimativa a partir do arquivo de itens; só informação">Peso (estimado)</th>
+                      <th className="p-3.5 font-semibold whitespace-nowrap">Setores</th>
+                      <th className="p-3.5 font-semibold whitespace-nowrap">Quilometragem</th>
+                      <th className="p-3.5 font-semibold whitespace-nowrap">Tempo</th>
+                      <th className="p-3.5 font-semibold text-right whitespace-nowrap">Navegação</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60 font-mono text-[12px]">
                     {rotasDoDespacho.map((r) => (
                       <tr key={r.id} className="hover:bg-slate-800/30 transition-colors">
-                        <td className="p-3.5 font-sans font-bold flex items-center gap-2">
+                        <td className="p-3.5 font-sans font-bold min-w-[260px]">
+                          <div className="flex flex-wrap items-center gap-2">
                           <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: r.cor }}></span>
                           <SeletorMotoristaDaRota
                             rota={r}
@@ -1569,18 +1570,20 @@ export default function App() {
                           {textoResumoDoMotorista(resumoDosMotoristas.get(r.motorista_id)) && (
                             <span className="text-[10px] font-normal text-slate-400">({textoResumoDoMotorista(resumoDosMotoristas.get(r.motorista_id))})</span>
                           )}
+                          </div>
                         </td>
-                        <td className="p-3.5 text-slate-300 font-sans">
-                          <span className="text-[10px] font-normal px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300">
+                        <td className="p-3.5 text-slate-300 font-sans whitespace-nowrap">
+                          <span className="inline-block whitespace-nowrap text-[10px] font-normal px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300">
                             {r.modal}
                           </span>
                         </td>
                         <td className="p-3.5 text-slate-300 font-sans">
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                             <span>
-                              {textoPedidos(r.qtd_pedidos)}
+                              <span className="whitespace-nowrap">{textoPedidos(r.qtd_pedidos)}</span>
                               {r.rota_personalizada && <span className="text-[10px] text-violet-300">; recomendado {r.teto_recomendado} por viagem</span>}
                             </span>
+                            <span className="inline-flex items-center gap-2 shrink-0">
                             {foraDaJanelaPorRota[r.id] > 0 && (
                               <div
                                 title={dicaDoSelo(foraDaJanelaPorRota[r.id])}
@@ -1597,9 +1600,10 @@ export default function App() {
                                 <AlertTriangle className="w-3.5 h-3.5" />
                               </div>
                             )}
+                            </span>
                           </div>
                         </td>
-                        <td className="p-3.5 text-slate-300 font-sans text-[11px]">
+                        <td className="p-3.5 text-slate-300 font-sans text-[11px] min-w-[120px]">
                           {pesoDasViagens ? (
                             <span>
                               {textoDoTotal(pesoDasViagens[r.id])}
@@ -1607,11 +1611,11 @@ export default function App() {
                             </span>
                           ) : <span className="text-slate-600">—</span>}
                         </td>
-                        <td className="p-3.5 text-slate-300 font-sans" title={seloDeRotacao(regioesRepetidas(r, rotacao)) || undefined}>
+                        <td className="p-3.5 text-slate-300 font-sans whitespace-nowrap" title={seloDeRotacao(regioesRepetidas(r, rotacao)) || undefined}>
                           {textoDosSetores(r.setores)}
                           {regioesRepetidas(r, rotacao).length > 0 && <AlertTriangle className="inline w-3.5 h-3.5 ml-1 text-amber-400" />}
                         </td>
-                        <td className="p-3.5 text-slate-300">
+                        <td className="p-3.5 text-slate-300 whitespace-nowrap">
                           <div className="flex items-center gap-2">
                             {r.km_total} km
                             {r.alerta_amplitude && (
@@ -1624,8 +1628,8 @@ export default function App() {
                             )}
                           </div>
                         </td>
-                        <td className="p-3.5 text-slate-400" title={r.tempo_min !== undefined ? `Deslocamento ${formatarMinutos(r.tempo_deslocamento_min)} + paradas ${formatarMinutos(r.tempo_paradas_min)}` : undefined}>{r.tempo_formatado}</td>
-                        <td className="p-3.5 text-right font-sans">
+                        <td className="p-3.5 text-slate-400 whitespace-nowrap" title={r.tempo_min !== undefined ? `Deslocamento ${formatarMinutos(r.tempo_deslocamento_min)} + paradas ${formatarMinutos(r.tempo_paradas_min)}` : undefined}>{r.tempo_formatado}</td>
+                        <td className="p-3.5 text-right font-sans whitespace-nowrap">
                           <a
                             href={r.link_maps}
                             target="_blank"

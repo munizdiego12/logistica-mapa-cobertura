@@ -49,7 +49,7 @@ export default function SeletorMotoristaDaRota({ rota, alternativas, onEscolher,
       <button
         ref={botao} type="button" onClick={() => (aberto ? fechar() : abrir())} disabled={desabilitado} title={desabilitado ? motivoDesabilitado : 'Trocar o motorista desta rota'}
         aria-haspopup="listbox" aria-expanded={aberto} aria-label={`Motorista da rota ${rota.id}: ${rota.motorista_base || rota.motorista}. Trocar`}
-        className="flex items-center gap-1 text-white font-bold rounded px-1.5 py-0.5 hover:bg-slate-800 border border-transparent hover:border-slate-700 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:border-transparent"
+        className="flex items-center gap-1 text-left text-white font-bold rounded px-1.5 py-0.5 hover:bg-slate-800 border border-transparent hover:border-slate-700 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:border-transparent"
       >
         {rota.motorista}
         {!desabilitado && <ChevronDown className="w-3 h-3 text-slate-400" />}

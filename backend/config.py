@@ -30,6 +30,31 @@ def _dias_do_historico() -> int:
 
 HISTORICO_DIAS = _dias_do_historico()
 
+JOBS_TTL_HORAS_PADRAO = 8.0
+JOBS_MAX_PADRAO = 200
+
+
+def jobs_ttl_horas() -> float:
+    """JOBS_TTL_HORAS: horas, desde o término, que um resultado de roteirização fica na memória (padrão 8; valor inválido volta ao padrão)."""
+    try:
+        horas = float(os.getenv("JOBS_TTL_HORAS", str(JOBS_TTL_HORAS_PADRAO)).replace(",", "."))
+    except ValueError:
+        return JOBS_TTL_HORAS_PADRAO
+    return horas if horas > 0 and horas != float("inf") else JOBS_TTL_HORAS_PADRAO
+
+
+def jobs_max() -> int:
+    """JOBS_MAX: quantos resultados de roteirização ficam na memória, no máximo (padrão 200; valor inválido volta ao padrão)."""
+    try:
+        maximo = int(os.getenv("JOBS_MAX", str(JOBS_MAX_PADRAO)))
+    except ValueError:
+        return JOBS_MAX_PADRAO
+    return maximo if maximo >= 1 else JOBS_MAX_PADRAO
+
+
+JOBS_TTL_HORAS = jobs_ttl_horas()
+JOBS_MAX = jobs_max()
+
 # ==============================
 # CONFIGURAÇÃO DE LOGGING
 # ==============================

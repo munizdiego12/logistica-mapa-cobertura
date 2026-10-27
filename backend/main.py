@@ -36,7 +36,7 @@ import rotas_realizadas
 import setores as modulo_setores
 from logistica.costs import calcular_custo_rota
 from database import get_db, Operador, init_db
-from config import OPERATOR_INVITE_CODE, HISTORICO_DIAS
+from config import OPERATOR_INVITE_CODE, HISTORICO_DIAS, JOBS_TTL_HORAS, JOBS_MAX
 from auth import (
     gerar_hash_senha,
     verificar_senha_hash,
@@ -655,10 +655,43 @@ async def upload_planilha(file: UploadFile = File(...)):
 # Como geocodificar pode levar segundos, a otimização roda em segundo plano
 # e o frontend consulta o andamento em /api/otimizar/status/{job_id}.
 # ==========================================================================
+# Os resultados ficam na memória até "Confirmar rotas". Para a memória do servidor não crescer
+# sem fim, os jobs terminados saem depois de JOBS_TTL_HORAS do término e, passando de JOBS_MAX,
+# saem primeiro os terminados mais antigos. Job em andamento nunca é removido.
 JOBS: Dict[str, Dict[str, Any]] = {}
+logger_jobs = logging.getLogger("zubale.jobs")
+
+
+def _limpar_jobs(agora: Optional[float] = None, ttl_horas: Optional[float] = None, maximo: Optional[int] = None) -> int:
+    """Limpeza preguiçosa dos jobs terminados (ao criar um job e ao consultar o status). Nunca levanta erro; devolve quantos removeu."""
+    try:
+        agora = time.time() if agora is None else agora
+        ttl_s = (JOBS_TTL_HORAS if ttl_horas is None else ttl_horas) * 3600
+        maximo = JOBS_MAX if maximo is None else maximo
+        terminados = []
+        for job_id, job in list(JOBS.items()):
+            if job.get("status") == "em_andamento":
+                continue
+            if job.get("terminado_em") is None:  # job terminado sem horário (ex.: gravado por fora): conta a partir de agora
+                job["terminado_em"] = agora
+            terminados.append((job["terminado_em"], job_id))
+        remover = {job_id for terminado_em, job_id in terminados if agora - terminado_em >= ttl_s}
+        excesso = len(JOBS) - len(remover) - maximo
+        if excesso > 0:
+            restantes = sorted(t for t in terminados if t[1] not in remover)
+            remover.update(job_id for _, job_id in restantes[:excesso])
+        for job_id in remover:
+            JOBS.pop(job_id, None)
+        if remover:  # só contagens: nada de id de pedido, endereço ou cliente
+            logger_jobs.info("Limpeza de resultados de roteirização: %d removidos, %d restantes", len(remover), len(JOBS))
+        return len(remover)
+    except Exception as erro:
+        logger_jobs.warning("Falha na limpeza de resultados de roteirização: %s", type(erro).__name__)
+        return 0
 
 
 def _novo_job() -> str:
+    _limpar_jobs(maximo=max(JOBS_MAX - 1, 0))  # abre espaço para o job novo
     job_id = str(uuid.uuid4())
     JOBS[job_id] = {
         "status": "em_andamento",   # em_andamento | concluido | erro
@@ -667,6 +700,8 @@ def _novo_job() -> str:
         "total": 1,
         "resultado": None,
         "erro": None,
+        "criado_em": time.time(),
+        "terminado_em": None,
     }
     return job_id
 
@@ -882,6 +917,9 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar:
         # só a classe do erro: a mensagem pode trazer endereço de pedido (dado pessoal)
         print(f"[otimizar] Falha na roteirização: {type(e).__name__}")
         job["erro"] = f"Erro interno no algoritmo de roteirização ({type(e).__name__}). Tente de novo; se persistir, avise o administrador."
+    finally:
+        if job.get("status") != "em_andamento":
+            job["terminado_em"] = time.time()
 
 
 @app.post("/api/otimizar", dependencies=[Depends(obter_operador_atual)])
@@ -924,6 +962,7 @@ async def iniciar_otimizacao(req: "OtimizarRequest"):
 
 @app.get("/api/otimizar/status/{job_id}", dependencies=[Depends(obter_operador_atual)])
 def status_otimizacao(job_id: str):
+    _limpar_jobs()
     job = JOBS.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Cálculo não encontrado (pode ter expirado). Gere as rotas novamente.")

@@ -76,6 +76,34 @@ def formatar_tempo(minutos: int) -> str:
     return f"{minutos // 60}h {minutos % 60}m" if minutos >= 60 else f"{minutos} min"
 
 
+def metricas_da_rota(dist: list, dur: list, ordem: list, pedidos: list, tempo_por_parada_min: int, setor_de: list) -> dict:
+    """
+    Métricas de uma viagem a partir da matriz (nó 0 = loja, pedido i = nó i + 1) e da ordem das paradas (índices de `pedidos`): paradas numeradas
+    (cópias, com ordem, setor e distância desde a anterior), trechos em km e em segundos (incluindo a volta à loja), km total, tempos e setores.
+    Usada ao montar as rotas e ao mover um pedido entre rotas (Etapa 10b). Viagem sem paradas = tudo zero.
+    """
+    if not ordem:
+        return {"paradas": [], "km_total": 0.0, "distancias_trechos_km": [], "tempos_trechos_s": [], "distancia_retorno_km": 0.0,
+                "tempo_deslocamento_min": 0, "tempo_paradas_min": 0, "tempo_min": 0, "setores": []}
+    nos = [0] + [i + 1 for i in ordem] + [0]
+    trechos_km = [round(dist[a][b] / 1000.0, 2) for a, b in zip(nos, nos[1:])]
+    tempos_trechos_s = [int(round(dur[a][b])) for a, b in zip(nos, nos[1:])]  # tempo de cada trecho (a tela estima as chegadas por parada)
+    deslocamento_min = round(sum(dur[a][b] for a, b in zip(nos, nos[1:])) / 60)
+    paradas_min = len(ordem) * tempo_por_parada_min
+    paradas = []
+    for posicao, indice in enumerate(ordem, start=1):
+        parada = dict(pedidos[indice])
+        parada.update({"ordem": posicao, "setor": setor_de[indice], "distancia_anterior_km": trechos_km[posicao - 1]})
+        paradas.append(parada)
+    presentes = {setor_de[i] for i in ordem}
+    return {
+        "paradas": paradas, "km_total": round(sum(dist[a][b] for a, b in zip(nos, nos[1:])) / 1000.0, 2), "distancias_trechos_km": trechos_km,
+        "tempos_trechos_s": tempos_trechos_s, "distancia_retorno_km": trechos_km[-1], "tempo_deslocamento_min": deslocamento_min,
+        "tempo_paradas_min": paradas_min, "tempo_min": deslocamento_min + paradas_min,
+        "setores": [s for s in modulo_setores.SETORES if s in presentes],
+    }
+
+
 async def executar(
     *, pedidos: list, hub: tuple, motoristas: list, capacidades: dict, turno: str, tempo_por_parada_min: int,
     rotas_hoje: Optional[dict], proibidos: Optional[dict],
@@ -119,21 +147,11 @@ async def executar(
 
     viagens = []
     for rota in resultado.rotas:
-        nos = [0] + [i + 1 for i in rota.pedidos] + [0]
-        trechos_km = [round(dist[a][b] / 1000.0, 2) for a, b in zip(nos, nos[1:])]
-        tempos_trechos_s = [int(round(dur[a][b])) for a, b in zip(nos, nos[1:])]  # tempo de cada trecho (a tela estima as chegadas por parada)
-        deslocamento_min = round(rota.duracao_s / 60)
-        paradas_min = len(rota.pedidos) * tempo_por_parada_min
-        paradas = []
-        for ordem, indice in enumerate(rota.pedidos, start=1):
-            parada = dict(pedidos[indice])
-            parada.update({"ordem": ordem, "setor": setor_de[indice], "distancia_anterior_km": trechos_km[ordem - 1]})
-            paradas.append(parada)
+        metricas = metricas_da_rota(dist, dur, rota.pedidos, pedidos, tempo_por_parada_min, setor_de)
+        paradas = metricas.pop("paradas")
         viagens.append({
-            "motorista_id": rota.motorista_id, "viagem_num": rota.viagem_num, "modal": rota.modal, "pedidos": paradas,
-            "km_total": round(rota.distancia_m / 1000.0, 2), "distancias_trechos_km": trechos_km, "tempos_trechos_s": tempos_trechos_s, "distancia_retorno_km": trechos_km[-1],
-            "tempo_deslocamento_min": deslocamento_min, "tempo_paradas_min": paradas_min, "tempo_min": deslocamento_min + paradas_min,
-            "setores": [s for s in modulo_setores.SETORES if s in rota.setores], "violacoes_rotacao": rota.violacoes,
+            "motorista_id": rota.motorista_id, "viagem_num": rota.viagem_num, "modal": rota.modal, "pedidos": paradas, **metricas,
+            "violacoes_rotacao": rota.violacoes,
             "personalizada": rota.personalizada, "teto_recomendado": rota.teto_recomendado, "viagens_solicitadas": rota.viagens_solicitadas,
         })
     return {"viagens": viagens, "avisos": avisos, "origem_distancias": matriz["origem"], "metodo": resultado.metodo, "parametros": parametros}

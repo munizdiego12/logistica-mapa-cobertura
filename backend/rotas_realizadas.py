@@ -112,6 +112,13 @@ async def resumo_da_execucao(conn, execucao_id: str, dia: date) -> list:
     ]
 
 
+async def execucao_confirmada(conn, execucao_id: str) -> bool:
+    """Etapa 10b: alguma rota desta roteirização está confirmada? (então nada se move até "Desfazer confirmação")."""
+    return await conn.fetchval(
+        "SELECT 1 FROM rotas_realizadas WHERE execucao_id = $1 AND status = 'confirmada' LIMIT 1", execucao_id
+    ) is not None
+
+
 async def confirmar(conn, execucao_id: str, rotas: list, dia: date, loja_hub: Optional[str], turno: Optional[str], rotulo_operador: str) -> dict:
     """
     Grava uma linha por rota (com o motorista de cada rota). Rota já confirmada não é gravada de novo; rota cancelada
@@ -136,6 +143,9 @@ async def confirmar(conn, execucao_id: str, rotas: list, dia: date, loja_hub: Op
             )
             if linha is not None:
                 novas += 1
+                # Rota nova ou desfeita que volta a valer: os pedidos são os de agora (a divisão pode ter mudado ao mover pedidos, Etapa 10b).
+                if rota.get("pedidos"):
+                    await conn.execute("DELETE FROM rotas_pedidos WHERE rota_id = $1", int(linha["id"]))
             await _gravar_pedidos_da_rota(conn, execucao_id, int(rota["numero_rota"]), rota.get("pedidos") or [])
     return {"execucao_id": execucao_id, "confirmada": True, "novas": novas, "ja_confirmada": novas == 0, "motoristas": await resumo_da_execucao(conn, execucao_id, dia)}
 

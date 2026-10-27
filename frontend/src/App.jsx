@@ -16,6 +16,7 @@ import SeletorMotoristas from './components/SeletorMotoristas';
 import Lojas from './components/Lojas';
 import Historico from './components/Historico';
 import SeletorMotoristaDaRota from './components/SeletorMotoristaDaRota';
+import SeletorRotaDestino from './components/SeletorRotaDestino';
 import JanelasDeEntrega from './components/JanelasDeEntrega';
 import RelatorioItens from './components/RelatorioItens';
 import SeletorLoja from './components/SeletorLoja';
@@ -32,8 +33,11 @@ import { interpretarRaio, nomeDoHub, RAIO_PADRAO_KM } from './services/lojas';
 import { idsParaConsultar, aplicarDuplicidade, avisoDesmarcados, contarJaRoteirizados } from './services/duplicidade';
 import {
   rotasEfetivas, trocarMotorista, voltarASugestao, quantasAjustadas, corpoDaConfirmacao, alternativasParaRota, linhasDoCartao, avisosDoDespacho, regioesRepetidas,
-  seloDeRotacao, MSG_TROCA_TRAVADA, MSG_AJUSTES_E_REINICIO, MSG_SEM_ROTACAO, interpretarLimiteKm
+  seloDeRotacao, MSG_TROCA_TRAVADA, MSG_AJUSTES_E_REINICIO, MSG_SEM_ROTACAO, interpretarLimiteKm, rotasComPedidos, rotaVazia, quantasMovidas
 } from './services/despacho';
+import {
+  paradasDaRota, textoDoMovimento, corpoDoMovimento, erroDoMovimento, MSG_MOVER_TRAVADO, MSG_ROTA_SEM_PEDIDOS
+} from './services/movimentos';
 import { relatorioDeJanelas, foraDoPrazoPorRota, dicaDoSelo } from './services/janelas';
 import { montarCsv, nomeDoArquivo, avisoDoRomaneio } from './services/romaneio';
 import {
@@ -41,6 +45,8 @@ import {
   textoDoTotal, detalheDoTotal, TAMANHO_BLOCO_SKUS_VISTOS, TAMANHO_BLOCO_CONSULTA
 } from './services/pesoPedidos';
 import { API_BASE } from './config';
+
+const MOVIMENTO_INICIAL = { enviando: false, texto: '', erro: '', podeDesfazer: false }; // Etapa 10b: andamento do último pedido movido
 import { instalarTratamento401, MENSAGEM_SESSAO_EXPIRADA } from './services/sessao';
 import { baixarBlob } from './services/download';
 import {
@@ -231,8 +237,19 @@ export default function App() {
   const [rotacao, setRotacao] = useState(null); // regiões que cada motorista já fez hoje em outros turnos; nulo = ainda não carregou ou falhou
   const [rotacaoFalhou, setRotacaoFalhou] = useState(false);
   const rotasDoDespacho = resultado ? rotasEfetivas(resultado.rotas, atribuicoes, motoristas) : [];
-  const resumoDosMotoristas = resultado ? resumoPorMotorista(rotasDoDespacho) : new Map();
+  // Etapa 10b: a rota que perdeu todos os pedidos ao mover fica na matriz (o número não muda), mas o resto da tela só lê as rotas com pedidos.
+  const rotasUsadas = rotasComPedidos(rotasDoDespacho);
+  const resumoDosMotoristas = resultado ? resumoPorMotorista(rotasUsadas) : new Map();
   const ajustadas = quantasAjustadas(rotasDoDespacho);
+  const movidas = quantasMovidas(rotasDoDespacho);
+  // Mover pedido entre rotas (Etapa 10b): quem move é o servidor; aqui só o andamento, o resumo do último movimento e as paradas abertas na matriz.
+  const [movimento, setMovimento] = useState(MOVIMENTO_INICIAL);
+  const [paradasAbertas, setParadasAbertas] = useState(() => new Set());
+  const alternarParadas = (id) => setParadasAbertas((atual) => {
+    const novo = new Set(atual);
+    if (novo.has(id)) novo.delete(id); else novo.add(id);
+    return novo;
+  });
   const capacidadesPorTipo = Object.fromEntries(Object.entries(modais).map(([tipo, v]) => [tipo, v.capacidade]));
   // Etapa 11 (informativo, só na tela): limites de km por viagem e por motorista (opcionais) e hora de saída para estimar as chegadas.
   const [limiteKmViagem, setLimiteKmViagem] = useState('');
@@ -242,18 +259,18 @@ export default function App() {
   const limiteMotorista = interpretarLimiteKm(limiteKmMotorista);
   const limitesKm = { porViagem: limiteViagem.valor, porMotorista: limiteMotorista.valor };
   const relatorioDeJanela = resultado ? relatorioDeJanelas({
-    rotas: rotasDoDespacho, pedidos: loteSelecionado?.pedidos ?? [], loja: lojaHub, turno: resultado.turno, horaDeSaida,
+    rotas: rotasUsadas, pedidos: loteSelecionado?.pedidos ?? [], loja: lojaHub, turno: resultado.turno, horaDeSaida,
     tempoPorParada: Number(resultado.parametros?.tempo_por_parada_min) || 10
   }) : null;
   const foraDaJanelaPorRota = foraDoPrazoPorRota(relatorioDeJanela);
   // Peso estimado (subetapa 3): por viagem, motorista e tipo de veículo, com as rotas efetivas (depois das trocas); só informação.
   const itensDoLote = loteSelecionado?.itens ?? null;
   const pesosDoLote = loteSelecionado?.pesos ?? {};
-  const pesoDasViagens = resultado && itensDoLote ? pesoPorViagem(rotasDoDespacho, itensDoLote, pesosDoLote) : null;
-  const pesoDosMotoristas = resultado && itensDoLote ? pesoPorMotorista(rotasDoDespacho, itensDoLote, pesosDoLote) : [];
-  const pesoDosTipos = resultado && itensDoLote ? pesoPorTipoDeVeiculo(rotasDoDespacho, itensDoLote, pesosDoLote) : [];
+  const pesoDasViagens = resultado && itensDoLote ? pesoPorViagem(rotasUsadas, itensDoLote, pesosDoLote) : null;
+  const pesoDosMotoristas = resultado && itensDoLote ? pesoPorMotorista(rotasUsadas, itensDoLote, pesosDoLote) : [];
+  const pesoDosTipos = resultado && itensDoLote ? pesoPorTipoDeVeiculo(rotasUsadas, itensDoLote, pesosDoLote) : [];
   const alternativasDaRota = (rota) => (busca) => alternativasParaRota({
-    rota, rotas: rotasDoDespacho, motoristas, selecionados, lojaId: lojaHubId, rotasHoje, pedidosHoje, rotacao, busca
+    rota, rotas: rotasUsadas, motoristas, selecionados, lojaId: lojaHubId, rotasHoje, pedidosHoje, rotacao, busca
   });
   // O número de rotas só vale para quem continua marcado.
   const viagensDosMarcados = manterViagensDosMarcados(viagensPorMotorista, selecionados);
@@ -599,6 +616,8 @@ export default function App() {
   }, []);
   useEffect(() => {
     setAtribuicoes({});
+    setMovimento(MOVIMENTO_INICIAL);
+    setParadasAbertas(new Set());
     setHoraDeSaida('');
     setRotacao(null);
     setRotacaoFalhou(false);
@@ -609,7 +628,7 @@ export default function App() {
     if (!resultado?.execucao_id) return;
     setConfirmacao((c) => ({ ...c, enviando: true, erro: '' }));
     try {
-      const { data } = await apiAuth.post('/rotas-realizadas/confirmar', corpoDaConfirmacao(resultado.execucao_id, resultado.rotas, atribuicoes, motoristas));
+      const { data } = await apiAuth.post('/rotas-realizadas/confirmar', corpoDaConfirmacao(resultado.execucao_id, resultado.rotas, atribuicoes, motoristas, resultado.versao));
       setConfirmacao({
         confirmada: true,
         avisos: data.avisos || [],
@@ -623,9 +642,43 @@ export default function App() {
     } catch (err) {
       if (err?.response?.status === 401) return; // já voltou para o login, com o aviso
       const detalhe = err?.response?.data?.detail;
+      if (err?.response?.status === 409) recarregarResultado(); // outra aba mudou a divisão: mostra a atual antes de confirmar
       setConfirmacao((c) => ({ ...c, enviando: false, erro: (typeof detalhe === 'string' && detalhe) || 'Não foi possível confirmar as rotas agora. Tente de novo.' }));
     }
   };
+
+  // Etapa 10b: relê o resultado guardado no servidor (quando outra aba mudou a divisão). O id da execução é o mesmo, então os ajustes da tela ficam.
+  const recarregarResultado = async () => {
+    if (!resultado?.execucao_id) return;
+    try {
+      const { data } = await apiAuth.get(`/otimizar/status/${encodeURIComponent(resultado.execucao_id)}`);
+      if (data?.status === 'concluido' && data.resultado) setResultado(data.resultado);
+    } catch {
+      // a mensagem do movimento ou do confirmar já foi mostrada
+    }
+  };
+
+  // Mover pedido, desfazer o último movimento e voltar ao que o sistema sugeriu: o servidor muda o resultado dele e devolve o resultado inteiro.
+  const chamarMovimento = async (acao, corpo, textoDoSucesso) => {
+    if (!resultado?.execucao_id || movimento.enviando) return;
+    setMovimento((m) => ({ ...m, enviando: true, erro: '' }));
+    try {
+      const { data } = await apiAuth.post(`/otimizar/${encodeURIComponent(resultado.execucao_id)}/${acao}`, corpo);
+      setResultado(data.resultado);
+      setMovimento({ enviando: false, texto: textoDoSucesso(data), erro: '', podeDesfazer: Boolean(data.pode_desfazer) });
+    } catch (err) {
+      if (err?.response?.status === 401) return;
+      const erro = erroDoMovimento(err);
+      setMovimento((m) => ({ ...m, enviando: false, texto: '', erro: erro.mensagem }));
+      if (erro.recarregar) recarregarResultado();
+    }
+  };
+  const moverPedido = (pedidoId, rotaDestino) =>
+    chamarMovimento('mover', corpoDoMovimento(pedidoId, rotaDestino, resultado?.versao), (data) => textoDoMovimento(data.movimento));
+  const desfazerMovimento = () =>
+    chamarMovimento('desfazer-movimento', { versao: resultado?.versao ?? null }, () => 'Último movimento desfeito.');
+  const voltarAoOriginal = () =>
+    chamarMovimento('voltar-ao-original', { versao: resultado?.versao ?? null }, () => 'As rotas voltaram ao que o sistema sugeriu.');
 
   const desfazerConfirmacao = async () => {
     if (!resultado?.execucao_id) return;
@@ -757,7 +810,7 @@ export default function App() {
   // e só existe no arquivo baixado; a chegada é a estimativa do bloco "Janelas de entrega".
   const exportarRomaneio = () => {
     if (!resultado || !resultado.rotas) return;
-    const csv = montarCsv({ rotas: rotasDoDespacho, pedidos: loteSelecionado?.pedidos ?? [], relatorio: relatorioDeJanela, loja: lojaHub, turno: resultado.turno });
+    const csv = montarCsv({ rotas: rotasUsadas, pedidos: loteSelecionado?.pedidos ?? [], relatorio: relatorioDeJanela, loja: lojaHub, turno: resultado.turno });
     baixarBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), nomeDoArquivo(new Date().toISOString().slice(0, 10)));
   };
 
@@ -1362,7 +1415,7 @@ export default function App() {
                 <Users className="w-4 h-4 text-emerald-400" />
               </div>
               {(() => {
-                const nestaRoteirizacao = resultado ? linhasDoCartao(rotasDoDespacho, marcados) : [];
+                const nestaRoteirizacao = resultado ? linhasDoCartao(rotasUsadas, marcados) : [];
                 const linhas = resultado
                   ? nestaRoteirizacao
                   : marcados.map((m) => ({ motorista_id: m.id, nome: m.nome, rotas: null }));
@@ -1420,7 +1473,7 @@ export default function App() {
                   {confirmacao.avisos.map((aviso) => <li key={aviso} className="flex items-start gap-1.5"><AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" /> {aviso}</li>)}
                 </ul>
               )}
-              {ajustadas > 0 && !confirmacao.confirmada && <p className="text-[10px] text-slate-500">{MSG_AJUSTES_E_REINICIO}</p>}
+              {(ajustadas > 0 || movidas > 0) && !confirmacao.confirmada && <p className="text-[10px] text-slate-500">{MSG_AJUSTES_E_REINICIO}</p>}
               {confirmacao.erro && (
                 <p className="flex items-center gap-1.5 text-[11px] text-amber-300"><AlertCircle className="w-3.5 h-3.5 shrink-0" /> {confirmacao.erro}</p>
               )}
@@ -1453,10 +1506,10 @@ export default function App() {
               <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> Distâncias e tempos em linha reta (estimativa): não foi possível consultar as ruas.
             </p>
           )}
-          {resultado && avisosOrdenados(avisosDoDespacho({ avisosDoSolver: resultado.avisos, rotas: rotasDoDespacho, rotacao, capacidades: capacidadesPorTipo, marcados, limitesKm })).length > 0 && (
+          {resultado && avisosOrdenados(avisosDoDespacho({ avisosDoSolver: resultado.avisos, rotas: rotasUsadas, rotacao, capacidades: capacidadesPorTipo, marcados, limitesKm })).length > 0 && (
             <div className="bg-slate-900/50 border border-slate-800/80 rounded-xl p-4 space-y-1.5" aria-label="Avisos da roteirização">
               <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Avisos</p>
-              {avisosOrdenados(avisosDoDespacho({ avisosDoSolver: resultado.avisos, rotas: rotasDoDespacho, rotacao, capacidades: capacidadesPorTipo, marcados, limitesKm })).map((a, i) => (
+              {avisosOrdenados(avisosDoDespacho({ avisosDoSolver: resultado.avisos, rotas: rotasUsadas, rotacao, capacidades: capacidadesPorTipo, marcados, limitesKm })).map((a, i) => (
                 <p key={`${a.tipo}-${i}`} className={`text-[11px] rounded px-2.5 py-1.5 ${a.gravidade === 'atencao' ? 'text-amber-200 bg-amber-950/20' : 'text-slate-300 bg-slate-950/50'}`}>
                   {a.mensagem}
                 </p>
@@ -1487,7 +1540,7 @@ export default function App() {
                 : (dadosCoberturaCeps
                   ? dadosCoberturaCeps.hub
                   : (lojaHub ? { lat: lojaHub.lat, lon: lojaHub.lng, rua: lojaHub.nome, numero: '' } : null))}
-              rotas={resultado ? rotasDoDespacho : []}
+              rotas={resultado ? rotasUsadas : []}
               lojas={lojas}
               lojaSelecionadaId={lojaHubId}
               onEscolherLoja={escolherLoja}
@@ -1502,10 +1555,32 @@ export default function App() {
               <div className="p-4 border-b border-slate-800/80 flex items-center justify-between">
                 <div>
                   <h3 className="font-bold text-xs uppercase tracking-wider text-slate-200">Matriz de Despacho & Ondas de Entrega</h3>
-                  <p className="text-[11px] text-slate-400">{rotasDoDespacho.length} viagens distribuídas entre a frota{ajustadas > 0 ? ` (${ajustadas} ajustada${ajustadas === 1 ? '' : 's'} à mão)` : ''}</p>
+                  <p className="text-[11px] text-slate-400">
+                    {rotasUsadas.length} viagens distribuídas entre a frota{ajustadas > 0 ? ` (${ajustadas} ajustada${ajustadas === 1 ? '' : 's'} à mão)` : ''}
+                    {movidas > 0 ? ` · ${movidas} com pedidos movidos` : ''}
+                  </p>
                   {rotacaoFalhou && <p className="text-[10px] text-slate-500">{MSG_SEM_ROTACAO}</p>}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  {movimento.podeDesfazer && !confirmacao.confirmada && (
+                    <button
+                      onClick={desfazerMovimento}
+                      disabled={movimento.enviando}
+                      className="px-3 py-1.5 border border-slate-600 text-slate-300 hover:bg-slate-800 rounded-lg text-xs font-medium transition-colors disabled:opacity-40"
+                    >
+                      Desfazer último movimento
+                    </button>
+                  )}
+                  {movidas > 0 && !confirmacao.confirmada && (
+                    <button
+                      onClick={voltarAoOriginal}
+                      disabled={movimento.enviando}
+                      title="Desfaz todos os pedidos movidos (os motoristas trocados continuam como estão)"
+                      className="px-3 py-1.5 border border-violet-500/30 text-violet-300 hover:bg-violet-500/10 rounded-lg text-xs font-medium transition-colors disabled:opacity-40"
+                    >
+                      Voltar ao que o sistema sugeriu
+                    </button>
+                  )}
                   {ajustadas > 0 && !confirmacao.confirmada && (
                     <button
                       onClick={() => setAtribuicoes(voltarASugestao(atribuicoes))}
@@ -1523,6 +1598,11 @@ export default function App() {
                   </button>
                 </div>
               </div>
+              {(movimento.enviando || movimento.texto || movimento.erro) && (
+                <p className={`px-4 pt-2 text-[11px] ${movimento.erro ? 'text-amber-300' : 'text-emerald-300'}`} role="status">
+                  {movimento.enviando ? 'Movendo o pedido e reordenando as paradas...' : (movimento.erro || movimento.texto)}
+                </p>
+              )}
               <p className="px-4 pt-2 text-[10px] text-slate-500">{avisoDoRomaneio(relatorioDeJanela, Number(resultado.parametros?.tempo_por_parada_min) || 10)}</p>
 
               <div className="overflow-x-auto">
@@ -1541,7 +1621,8 @@ export default function App() {
                   </thead>
                   <tbody className="divide-y divide-slate-800/60 font-mono text-[12px]">
                     {rotasDoDespacho.map((r) => (
-                      <tr key={r.id} className="hover:bg-slate-800/30 transition-colors">
+                      <React.Fragment key={r.id}>
+                      <tr className={`hover:bg-slate-800/30 transition-colors ${rotaVazia(r) ? 'opacity-50' : ''}`}>
                         <td className="p-3.5 font-sans font-bold min-w-[260px]">
                           <div className="flex flex-wrap items-center gap-2">
                           <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: r.cor }}></span>
@@ -1562,6 +1643,14 @@ export default function App() {
                               )}
                             </span>
                           )}
+                          {r.movida && !rotaVazia(r) && (
+                            <span className="text-[10px] font-normal px-1.5 py-0.5 rounded bg-sky-500/15 border border-sky-500/30 text-sky-300" title="Esta rota ganhou ou perdeu pedidos movidos à mão; o sistema reordenou as paradas">
+                              Pedidos movidos
+                            </span>
+                          )}
+                          {rotaVazia(r) && (
+                            <span className="text-[10px] font-normal px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400">{MSG_ROTA_SEM_PEDIDOS}</span>
+                          )}
                           {r.rota_personalizada && (
                             <span className="text-[10px] font-normal px-1.5 py-0.5 rounded bg-violet-500/15 border border-violet-500/30 text-violet-300" title="O operador escolheu quantas rotas este motorista faz">
                               Rota personalizada
@@ -1571,6 +1660,14 @@ export default function App() {
                             <span className="text-[10px] font-normal text-slate-400">({textoResumoDoMotorista(resumoDosMotoristas.get(r.motorista_id))})</span>
                           )}
                           </div>
+                          {!rotaVazia(r) && (
+                            <button
+                              type="button" onClick={() => alternarParadas(r.id)} aria-expanded={paradasAbertas.has(r.id)}
+                              className="mt-1 inline-flex items-center gap-1 text-[10px] font-normal text-slate-400 hover:text-slate-200"
+                            >
+                              {paradasAbertas.has(r.id) ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />} Paradas ({(r.paradas || []).length})
+                            </button>
+                          )}
                         </td>
                         <td className="p-3.5 text-slate-300 font-sans whitespace-nowrap">
                           <span className="inline-block whitespace-nowrap text-[10px] font-normal px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300">
@@ -1640,6 +1737,31 @@ export default function App() {
                           </a>
                         </td>
                       </tr>
+                      {paradasAbertas.has(r.id) && !rotaVazia(r) && (
+                        <tr className="bg-slate-950/40">
+                          <td colSpan={8} className="px-6 py-2 font-sans">
+                            <p className="text-[10px] text-slate-500 mb-1">Ordem escolhida pelo sistema. Para mudar a divisão, mova um pedido por vez; as paradas das duas rotas são reordenadas.</p>
+                            <ol className="space-y-1">
+                              {paradasDaRota(r).map((p) => (
+                                <li key={p.id} className="flex flex-wrap items-center gap-2 text-[11px] text-slate-300">
+                                  <span className="w-5 text-right text-slate-500 font-mono">{p.ordem}.</span>
+                                  <span className="font-mono text-slate-200">#{p.id}</span>
+                                  <span className="text-slate-400">{p.endereco}</span>
+                                  <SeletorRotaDestino
+                                    rotas={rotasDoDespacho}
+                                    rotaAtualId={r.id}
+                                    pedidoId={p.id}
+                                    onEscolher={(destino) => moverPedido(p.id, destino)}
+                                    desabilitado={confirmacao.confirmada || movimento.enviando}
+                                    motivoDesabilitado={confirmacao.confirmada ? MSG_MOVER_TRAVADO : 'Aguarde o movimento anterior terminar.'}
+                                  />
+                                </li>
+                              ))}
+                            </ol>
+                          </td>
+                        </tr>
+                      )}
+                      </React.Fragment>
                     ))}
                   </tbody>
                 </table>

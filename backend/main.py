@@ -30,6 +30,7 @@ import itens_fonte
 import frota
 import lojas
 import matriz
+import movimentos
 import pedidos_fonte
 import roteirizacao
 import rotas_realizadas
@@ -869,26 +870,8 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar:
                 job["atual"] = c_idx + 1
                 job["etapa"] = f"Montando as rotas ({c_idx + 1}/{len(viagens)})..."
 
-        # Resumo do valor por rota usado em cada tipo de veículo desta execução e de onde veio (o mesmo tipo pode ter
-        # valores diferentes se algum motorista tiver valor próprio): uma linha por tipo, valor e origem.
-        valores_por_tipo = {}
-        for rota in rotas_resultado:
-            chave = (rota["modal"], rota["valor_rota"], rota["origem_valor"])
-            item = valores_por_tipo.setdefault(chave, {"tipo": rota["modal"], "valor": rota["valor_rota"], "origem": rota["origem_valor"], "rotas": 0})
-            item["rotas"] += 1
-
-        total_p = len(pedidos_geo)
-        kpis = {
-            "total_pedidos": total_p, "total_veiculos": len({r["motorista_id"] for r in rotas_resultado}),
-            # Motoristas realmente usados nas rotas (podem ser menos que os escolhidos se não houve pedido para todos).
-            "total_motoristas": len({r["motorista_id"] for r in rotas_resultado}),
-            "total_rotas_viagens": len(rotas_resultado), "km_total": round(km_total_geral, 2),
-            "custo_total": round(custo_total_geral, 2),
-            "custo_medio_pedido": round(custo_total_geral / max(total_p, 1), 2),
-            "valores_por_tipo": list(valores_por_tipo.values()),
-            "total_pedidos_sem_geocodificacao": len(pedidos_sem_geocodificacao),
-            "tempo_total_min": tempo_total_min,
-        }
+        # kpis (com o resumo do valor por rota usado em cada tipo de veículo e de onde veio): a mesma conta de quando um pedido é movido (Etapa 10b).
+        kpis = movimentos.kpis_do_resultado(rotas_resultado, len(pedidos_geo), len(pedidos_sem_geocodificacao))
         avisos = list(plano["avisos"])
         if not pedidos_geo and pedidos_sem_geocodificacao:
             avisos.append({"tipo": "sem_pedidos", "gravidade": "atencao", "mensagem": "Nenhum pedido pôde ser localizado no mapa, então não há rotas."})
@@ -910,6 +893,8 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar:
             "metodo": plano["metodo"],
             "avisos": avisos,
             "parametros": plano["parametros"],
+            # Etapa 10b: sobe a cada pedido movido (ou desfeito); a tela manda a versão que tem para não aplicar ajuste sobre uma divisão velha.
+            "versao": 0,
         }
 
     except Exception as e:
@@ -1398,6 +1383,8 @@ async def atualizar_loja(id_loja: int, dados: LojaRequest, operador: Operador = 
 class ConfirmarRotasRequest(BaseModel):
     execucao_id: str
     turno: Optional[str] = None
+    # Etapa 10b: versão do resultado que a tela mostra (opcional; ausente = confirma a versão atual, como antes).
+    versao: Optional[int] = None
     # Etapa 10: motorista final das rotas que o operador trocou na matriz de despacho, {"<numero da rota>": <id do motorista>}. Ausente = o do solver.
     atribuicoes: Optional[Any] = None
 
@@ -1454,9 +1441,13 @@ async def rotacao_do_dia(turno: Optional[str] = None, operador: Operador = Depen
 @app.post("/api/rotas-realizadas/confirmar")
 async def confirmar_rotas(dados: ConfirmarRotasRequest, operador: Operador = Depends(obter_operador_atual)):
     """Grava uma rota por viagem do resultado, com o motorista de cada rota. Confirmar de novo não duplica."""
-    job = JOBS.get(dados.execucao_id)
-    if not job or job.get("status") != "concluido" or not job.get("resultado"):
-        raise HTTPException(status_code=404, detail="Este resultado não está mais disponível. Gere as rotas de novo.")
+    job = _job_concluido(dados.execucao_id)
+    async with _trava_do_job(job):  # um movimento de pedido em andamento termina antes
+        _conferir_versao(job, dados.versao)
+        return await _confirmar_rotas(job, dados, operador)
+
+
+async def _confirmar_rotas(job: dict, dados: "ConfirmarRotasRequest", operador: Operador):
     resultado = job["resultado"]
     rotas = [
         {"numero_rota": r["id"], "motorista_id": r["motorista_id"], "qtd_pedidos": r.get("qtd_pedidos", 0), "distancia_km": r.get("km_total", 0),
@@ -1467,7 +1458,8 @@ async def confirmar_rotas(dados: ConfirmarRotasRequest, operador: Operador = Dep
               "endereco": _endereco_da_parada(p)}
              for i, p in enumerate(r.get("paradas") or [])
          ]}
-        for r in resultado.get("rotas", []) if r.get("motorista_id") is not None
+        # A rota que ficou sem pedidos depois de mover (Etapa 10b) não é confirmada.
+        for r in resultado.get("rotas", []) if r.get("motorista_id") is not None and not _rota_vazia(r)
     ]
     # O turno gravado é o da roteirização (escolhido pelo operador); o do corpo só vale para resultados sem turno.
     turno = (resultado.get("turno") or (dados.turno or "").strip())[:20] or None
@@ -1499,6 +1491,138 @@ async def confirmar_rotas(dados: ConfirmarRotasRequest, operador: Operador = Dep
         return {**resposta, "ajustadas": 0 if resposta.get("ja_confirmada") else ajustadas, "avisos": avisos}
 
     return await _com_conexao_frota(confirmar_e_limpar)
+
+
+# --------------------------------------------------------------------------------------------------------------------------------------------
+# Etapa 10b: mover um pedido entre rotas ANTES de confirmar. O movimento muda o resultado guardado no servidor (é ele que "Confirmar rotas" grava);
+# a tela só mostra o que volta daqui. Cada resultado tem uma versão (contra duas abas) e uma trava (um movimento por vez, nunca durante o confirmar).
+# --------------------------------------------------------------------------------------------------------------------------------------------
+MSG_RESULTADO_INDISPONIVEL = "Este resultado não está mais disponível. Gere as rotas de novo."
+MSG_VERSAO_DIFERENTE = "As rotas foram alteradas em outra aba ou janela. Atualizei a tela com a divisão atual."
+MSG_MOVER_CONFIRMADA = "Desfaça a confirmação para mover pedidos."
+MSG_FALHA_AO_MOVER = "Não foi possível mover o pedido agora. Tente de novo; se persistir, avise o administrador."
+
+
+class MoverPedidoRequest(BaseModel):
+    pedido_id: Any = None
+    rota_destino: Any = None
+    versao: Optional[int] = None
+
+
+class VersaoRequest(BaseModel):
+    versao: Optional[int] = None
+
+
+def _rota_vazia(rota: dict) -> bool:
+    """Rota que perdeu todas as paradas ao mover pedidos: fica no resultado (o número não muda), mas não é confirmada."""
+    return "paradas" in rota and not rota["paradas"] and not rota.get("qtd_pedidos")
+
+
+def _job_concluido(execucao_id: str) -> dict:
+    job = JOBS.get(execucao_id)
+    if not job or job.get("status") != "concluido" or not job.get("resultado"):
+        raise HTTPException(status_code=404, detail=MSG_RESULTADO_INDISPONIVEL)
+    return job
+
+
+def _trava_do_job(job: dict) -> asyncio.Lock:
+    trava = job.get("trava")
+    if trava is None:
+        trava = job["trava"] = asyncio.Lock()
+    return trava
+
+
+def _conferir_versao(job: dict, versao: Optional[int]) -> None:
+    if versao is not None and int(versao) != int(job["resultado"].get("versao") or 0):
+        raise HTTPException(status_code=409, detail=MSG_VERSAO_DIFERENTE)
+
+
+def _resposta_do_resultado(job: dict, movimento: Optional[dict] = None) -> dict:
+    return {"resultado": job["resultado"], "movimento": movimento, "pode_desfazer": bool(job.get("movimentos"))}
+
+
+async def _conferir_confirmacao(execucao_id: str, turno: Optional[str]) -> dict:
+    """409 se alguma rota desta execução está confirmada; devolve os setores que cada motorista já fez hoje em outro turno (rotação, só aviso)."""
+    async def conferir(c):
+        if await rotas_realizadas.execucao_confirmada(c, execucao_id):
+            raise HTTPException(status_code=409, detail=MSG_MOVER_CONFIRMADA)
+        if not turno:
+            return {}
+        try:
+            return await rotas_realizadas.setores_do_dia(c, rotas_realizadas.hoje_em_brasilia(), turno)
+        except Exception as erro:  # rotação é só aviso: sem ela o movimento segue
+            print(f"[mover] Falha ao conferir a rotação: {type(erro).__name__}")
+            return {}
+    return await _com_conexao_frota(conferir)
+
+
+def _subir_versao(job: dict) -> None:
+    job["resultado"]["versao"] = int(job["resultado"].get("versao") or 0) + 1
+
+
+@app.post("/api/otimizar/{execucao_id}/mover")
+async def mover_pedido(execucao_id: str, dados: MoverPedidoRequest, operador: Operador = Depends(obter_operador_atual)):
+    """
+    Move UM pedido para outra rota do resultado, antes de confirmar; o sistema reordena as paradas das duas rotas e recalcula km, tempos,
+    setores, custo, viagens e kpis. Devolve o resultado inteiro (mesmo formato do status) e o resumo do movimento (só números).
+    """
+    job = _job_concluido(execucao_id)
+    async with _trava_do_job(job):
+        _conferir_versao(job, dados.versao)
+        resultado = job["resultado"]
+        proibidos = await _conferir_confirmacao(execucao_id, resultado.get("turno"))
+        original = job.get("original") or movimentos.fotografia(resultado)
+        anterior = movimentos.fotografia(resultado)
+        try:
+            async with httpx.AsyncClient() as client:
+                async def geometria(pontos):
+                    return (await get_osrm_route_async(client, pontos))[2]
+
+                movimento = await movimentos.mover(
+                    resultado, dados.pedido_id, dados.rota_destino, original=original["rotas"],
+                    obter_matriz=lambda pontos: obter_matriz(client, pontos), obter_geometria=geometria, proibidos=proibidos,
+                )
+        except ValueError as erro:
+            raise HTTPException(status_code=422, detail=str(erro))
+        except Exception as erro:  # só a classe: a mensagem pode trazer endereço de pedido
+            print(f"[mover] Falha ao mover o pedido: {type(erro).__name__}")
+            movimentos.restaurar(resultado, anterior)
+            raise HTTPException(status_code=500, detail=MSG_FALHA_AO_MOVER)
+        job["original"] = original
+        pilha = job.setdefault("movimentos", [])
+        pilha.append(anterior)
+        del pilha[:-movimentos.MAX_MOVIMENTOS_GUARDADOS]
+        _subir_versao(job)
+        logger_jobs.info("Pedido movido entre rotas: %d rotas no resultado, %d movimentos guardados", len(resultado["rotas"]), len(pilha))
+        return _resposta_do_resultado(job, movimento)
+
+
+@app.post("/api/otimizar/{execucao_id}/desfazer-movimento")
+async def desfazer_movimento(execucao_id: str, dados: VersaoRequest, operador: Operador = Depends(obter_operador_atual)):
+    """Desfaz o último pedido movido (antes de confirmar)."""
+    job = _job_concluido(execucao_id)
+    async with _trava_do_job(job):
+        _conferir_versao(job, dados.versao)
+        if not job.get("movimentos"):
+            raise HTTPException(status_code=422, detail=movimentos.MSG_NADA_A_DESFAZER)
+        await _conferir_confirmacao(execucao_id, None)
+        movimentos.restaurar(job["resultado"], job["movimentos"].pop())
+        _subir_versao(job)
+        return _resposta_do_resultado(job)
+
+
+@app.post("/api/otimizar/{execucao_id}/voltar-ao-original")
+async def voltar_ao_original(execucao_id: str, dados: VersaoRequest, operador: Operador = Depends(obter_operador_atual)):
+    """Volta às rotas que o sistema sugeriu: desfaz todos os pedidos movidos (as trocas de motorista da tela não mudam)."""
+    job = _job_concluido(execucao_id)
+    async with _trava_do_job(job):
+        _conferir_versao(job, dados.versao)
+        await _conferir_confirmacao(execucao_id, None)
+        if job.get("original"):
+            movimentos.restaurar(job["resultado"], job["original"])
+        job["movimentos"] = []
+        _subir_versao(job)
+        return _resposta_do_resultado(job)
 
 
 def _endereco_da_parada(p: dict) -> str:

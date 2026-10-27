@@ -10,7 +10,7 @@ export const LIMITE_DE_ALTERNATIVAS = 60;
 export const TITULO_MARCADOS = 'Marcados nesta roteirização';
 export const TITULO_OUTROS_DA_LOJA = 'Outros motoristas desta loja';
 export const MSG_TROCA_TRAVADA = 'Desfaça a confirmação para trocar o motorista.';
-export const MSG_AJUSTES_E_REINICIO = 'Se o servidor reiniciar antes de confirmar, será preciso gerar as rotas de novo e os ajustes feitos à mão se perdem.';
+export const MSG_AJUSTES_E_REINICIO = 'Se o servidor reiniciar antes de confirmar, será preciso gerar as rotas de novo e os ajustes feitos à mão (motoristas trocados e pedidos movidos) se perdem.';
 export const MSG_SEM_ROTACAO = 'Não foi possível conferir agora as regiões que cada motorista já fez hoje; o selo de rotação não aparece.';
 
 const plural = (n, um, varios) => `${n} ${n === 1 ? um : varios}`;
@@ -20,6 +20,12 @@ const numero = (valor) => Number(valor);
 const listaDeRegioes = (regioes) => (regioes.length === 1
   ? `a região ${regioes[0]}`
   : `as regiões ${regioes.slice(0, -1).join(', ')} e ${regioes[regioes.length - 1]}`);
+
+/** Rota que ficou sem pedidos ao mover pedidos (Etapa 10b): continua na matriz (o número não muda), mas não é confirmada nem conta viagem. */
+export const rotaVazia = (rota) => Array.isArray(rota?.paradas) && rota.paradas.length === 0 && !rota.qtd_pedidos;
+
+/** Só as rotas com pedidos: o que o mapa, o cartão, os avisos, as janelas, o peso e o romaneio leem. */
+export const rotasComPedidos = (rotas) => (rotas ?? []).filter((r) => !rotaVazia(r));
 
 /** Regiões da rota que o motorista já fez hoje em outro turno. Sem a conferência (`rotacao` nulo), vale o que o solver já tinha marcado na rota. */
 export function regioesRepetidas(rota, rotacao) {
@@ -54,11 +60,13 @@ export function rotasEfetivas(rotas, atribuicoes, motoristas) {
       modal: destino.tipo_veiculo ?? rota.modal, rota_personalizada: false, violacoes_rotacao: [],
     };
   });
+  // Viagens contadas só nas rotas com pedidos (a rota vazia fica com o nome do motorista, sem "Viagem N").
   const contagem = new Map();
-  trocadas.forEach((r) => contagem.set(r.motorista_id, (contagem.get(r.motorista_id) ?? 0) + 1));
+  trocadas.forEach((r) => { if (!rotaVazia(r)) contagem.set(r.motorista_id, (contagem.get(r.motorista_id) ?? 0) + 1); });
   const vistas = new Map();
   return trocadas.map((r) => {
     if (!tocados.has(r.motorista_id)) return r;
+    if (rotaVazia(r)) return { ...r, motorista: r.motorista_base };
     const viagem = (vistas.get(r.motorista_id) ?? 0) + 1;
     vistas.set(r.motorista_id, viagem);
     return { ...r, viagem_num: viagem, motorista: contagem.get(r.motorista_id) > 1 ? `${r.motorista_base} • Viagem ${viagem}` : r.motorista_base };
@@ -82,18 +90,26 @@ export function voltarASugestao(atribuicoes, rotaId = null) {
   return novo;
 }
 
-/** Só os ajustes que realmente mudam o motorista de uma rota existente para um motorista conhecido: { id_da_rota: motorista_id }. */
+/** Só os ajustes que realmente mudam o motorista de uma rota existente (com pedidos) para um motorista conhecido: { id_da_rota: motorista_id }. */
 export function ajustesValidos(rotas, atribuicoes, motoristas) {
   const efetivas = rotasEfetivas(rotas, atribuicoes, motoristas);
-  return Object.fromEntries(efetivas.filter((r) => r.ajustada).map((r) => [chave(r.id), r.motorista_id]));
+  return Object.fromEntries(efetivas.filter((r) => r.ajustada && !rotaVazia(r)).map((r) => [chave(r.id), r.motorista_id]));
 }
 
+/** Rotas com o motorista trocado à mão (Etapa 10). */
 export const quantasAjustadas = (rotas) => (rotas ?? []).filter((r) => r.ajustada).length;
 
-/** Corpo do "Confirmar rotas": só leva `atribuicoes` quando há rota ajustada (senão fica igual ao formato antigo). */
-export function corpoDaConfirmacao(execucaoId, rotas, atribuicoes, motoristas) {
+/** Rotas que ganharam ou perderam pedidos movidos à mão (Etapa 10b). */
+export const quantasMovidas = (rotas) => (rotas ?? []).filter((r) => r.movida).length;
+
+/**
+ * Corpo do "Confirmar rotas": só leva `atribuicoes` quando há rota ajustada (senão fica igual ao formato antigo) e, quando conhecida, a `versao` do
+ * resultado que a tela mostra (Etapa 10b: o servidor recusa se outra aba mudou a divisão).
+ */
+export function corpoDaConfirmacao(execucaoId, rotas, atribuicoes, motoristas, versao = null) {
   const ajustes = ajustesValidos(rotas, atribuicoes, motoristas);
-  return Object.keys(ajustes).length > 0 ? { execucao_id: execucaoId, atribuicoes: ajustes } : { execucao_id: execucaoId };
+  const corpo = Object.keys(ajustes).length > 0 ? { execucao_id: execucaoId, atribuicoes: ajustes } : { execucao_id: execucaoId };
+  return Number.isInteger(versao) ? { ...corpo, versao } : corpo;
 }
 
 /** "nenhuma rota nesta roteirização" ou "já tem 2 rotas nesta roteirização (10 pedidos)". */
@@ -165,9 +181,9 @@ export function avisoDeCargaDesigual(linhas) {
   return { tipo: 'carga_desigual', gravidade: 'atencao', mensagem: `A carga ficou desigual: ${maior.nome} com ${textoPedidos(maior.pedidos)} e ${menor.nome} com ${textoPedidos(menor.pedidos)}.` };
 }
 
-/** Avisos do teto recomendado do tipo de veículo só para as rotas trocadas (a quantidade de pedidos, nunca o peso). `capacidades`: { tipo: pedidos por viagem }. */
+/** Avisos do teto recomendado do tipo de veículo só para as rotas trocadas ou com pedidos movidos (a quantidade de pedidos, nunca o peso). `capacidades`: { tipo: pedidos por viagem }. */
 export function avisosDeTeto(rotas, capacidades) {
-  return (rotas ?? []).filter((r) => r.ajustada).flatMap((r) => {
+  return (rotas ?? []).filter((r) => r.ajustada || r.movida).flatMap((r) => {
     const teto = Number(capacidades?.[r.modal]);
     if (!teto || r.qtd_pedidos <= teto) return [];
     return [{ tipo: 'teto_da_troca', gravidade: 'atencao', mensagem: `Rota ${r.id}: ${textoPedidos(r.qtd_pedidos)}; o recomendado para ${r.modal} é ${teto} por viagem.` }];
@@ -175,13 +191,13 @@ export function avisosDeTeto(rotas, capacidades) {
 }
 
 /**
- * Avisos da tela depois dos ajustes: os do solver (com a rotação recalculada quando a conferência está disponível) mais, só com rota trocada,
- * carga desigual e teto. Tudo informativo.
+ * Avisos da tela depois dos ajustes: os do solver (com a rotação recalculada quando a conferência está disponível) mais, só com rota trocada ou com
+ * pedido movido, carga desigual e teto. Tudo informativo. `rotas`: só as com pedidos.
  */
 export function avisosDoDespacho({ avisosDoSolver, rotas, rotacao, capacidades, marcados, limitesKm = null }) {
   const base = (avisosDoSolver ?? []).filter((a) => !(rotacao && a.tipo === 'rotacao'));
   const novos = [...avisosDeRotacao(rotas, rotacao)];
-  if (quantasAjustadas(rotas) > 0) {
+  if (quantasAjustadas(rotas) > 0 || quantasMovidas(rotas) > 0) {
     novos.push(...avisosDeTeto(rotas, capacidades));
     const desigual = avisoDeCargaDesigual(linhasDoCartao(rotas, marcados));
     if (desigual) novos.push(desigual);

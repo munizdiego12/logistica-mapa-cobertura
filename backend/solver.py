@@ -142,6 +142,23 @@ def _ordenar_vizinho(dist: list, pedidos: list) -> list:
     return _melhorar_2opt(dist, rota)
 
 
+def ordenar_uma_rota(dist: list, pedidos: list, limite_s: float = 1.0, usar_ortools: bool = True) -> list:
+    """
+    Ordem das paradas de UMA viagem (Etapa 10b, mover pedido): vizinho mais próximo + 2-opt e, com ortools, uma busca curta (`limite_s`) que só
+    vale se encurtar a rota. Nunca falha: sem ortools ou com erro, fica a ordem do vizinho.
+    """
+    base = _ordenar_vizinho(dist, pedidos)
+    if not usar_ortools or len(base) <= 3:
+        return base
+    try:
+        otimizada = _dividir_ortools(dist, list(base), 1, limite_s, [base])
+    except Exception:
+        return base
+    if otimizada and _distancia_da_rota(dist, otimizada[0]) < _distancia_da_rota(dist, base):
+        return otimizada[0]
+    return base
+
+
 def _varredura(azimutes: list, pedidos: list) -> list:
     """Pedidos em ordem angular, começando logo depois do maior vão entre azimutes vizinhos (assim a varredura não corta um grupo no meio)."""
     ordenados = sorted(pedidos, key=lambda p: (azimutes[p], p))

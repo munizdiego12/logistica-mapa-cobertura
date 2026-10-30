@@ -9,6 +9,7 @@ Privacidade: nada daqui vai para log; erros e avisos falam só de números de ro
 """
 import asyncio
 from typing import Awaitable, Callable, Optional
+from urllib.parse import quote
 
 import roteirizacao
 import setores as modulo_setores
@@ -67,10 +68,29 @@ def _custos(rota: dict) -> None:
     rota["custo_por_pedido"] = round(valor / qtd, 2) if qtd > 0 and valor > 0 else 0.0
 
 
-def _link_maps(hub: tuple, paradas: list) -> str:
+def _destino_da_parada(p: dict) -> str:
+    """Endereço em texto (rua, número, cidade - UF, CEP) para o Google achar o lugar certo mesmo se a coordenada do sistema
+    for aproximada; sem rua ou sem cidade, a coordenada. Nunca leva cliente nem telefone."""
+    def campo(*nomes):
+        for nome in nomes:
+            valor = str(p.get(nome) or "").strip()
+            if valor:
+                return valor
+        return ""
+
+    rua, cidade = campo("Endereco", "rua"), campo("Cidade", "cidade")
+    if not (rua and cidade):
+        return f"{p['lat']},{p['lon']}"
+    numero, uf, cep = campo("Numero", "numero"), campo("UF", "uf"), campo("CEP", "cep")
+    partes = [rua, numero, f"{cidade} - {uf}" if uf else cidade, cep]
+    return quote(", ".join(x for x in partes if x), safe=",")
+
+
+def link_maps(hub: tuple, paradas: list) -> str:
+    """Link do Google Maps: loja pela coordenada cadastrada, paradas pelo endereço (ver _destino_da_parada), volta à loja."""
     if not paradas:
         return ""
-    meio = "/".join(f"{p['lat']},{p['lon']}" for p in paradas)
+    meio = "/".join(_destino_da_parada(p) for p in paradas)
     return f"https://www.google.com/maps/dir/{hub[0]},{hub[1]}/{meio}/{hub[0]},{hub[1]}"
 
 
@@ -172,7 +192,7 @@ async def mover(
         proibidos_do_motorista = (proibidos or {}).get(rota.get("motorista_id")) or {}
         rota["violacoes_rotacao"] = [s for s in rota["setores"] if s in proibidos_do_motorista]
         _custos(rota)
-        rota["link_maps"] = _link_maps(hub, rota["paradas"])
+        rota["link_maps"] = link_maps(hub, rota["paradas"])
         rota["geometria"] = await obter_geometria([hub] + [(p["lat"], p["lon"]) for p in rota["paradas"]] + [hub]) if rota["paradas"] else []
 
     # Tudo calculado: aplica de uma vez.

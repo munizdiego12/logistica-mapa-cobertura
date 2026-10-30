@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 import database
 import cobertura
+import geocodificacao
 import item_pesos
 import item_pesos_importacao
 import itens_fonte
@@ -37,6 +38,7 @@ import rotas_realizadas
 import setores as modulo_setores
 from logistica.costs import calcular_custo_rota
 from database import get_db, Operador, init_db
+from ibge import normalizar_nome
 from config import OPERATOR_INVITE_CODE, HISTORICO_DIAS, JOBS_TTL_HORAS, JOBS_MAX
 from auth import (
     gerar_hash_senha,
@@ -93,7 +95,11 @@ def haversine_distance(coord1: tuple, coord2: tuple) -> float:
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
 
-_GEOCODE_CACHE_MEMORIA: Dict[str, tuple] = {}
+# VALIDO fica enquanto o processo viver; aproximado e erro expiram em 1 hora (geocodificacao.TTL_NAO_VALIDO_S).
+_GEOCODE_CACHE_MEMORIA = geocodificacao.CacheComValidade()
+# Centro e dispersão dos prefixos de CEP e centro dos bairros já consultados (não mudam durante o processo).
+_PREFIXOS_MEMORIA: Dict[str, Any] = {}
+_REGIOES_MEMORIA: Dict[str, Any] = {}
 
 # Controla o rate-limit do Nominatim (1 req/s) de forma assíncrona e SEGURA
 # mesmo quando várias geocodificações rodam "em paralelo" (asyncio.gather).
@@ -102,6 +108,10 @@ _nominatim_ultima_chamada = 0.0
 
 # BrasilAPI não exige 1 req/s, então aqui só limitamos concorrência (não velocidade).
 _brasilapi_semaforo = asyncio.Semaphore(8)
+
+URL_NOMINATIM = "https://nominatim.openstreetmap.org/search"
+_HEADERS_GEOCODE = {'User-Agent': 'ZubaleRoutingCore/6.1 (contato@zubale.com)'}
+logger_geocode = logging.getLogger("zubale.geocode")
 
 
 def _chave_cache(rua, numero, bairro, cep, cidade, uf):
@@ -118,38 +128,98 @@ async def _respeitar_rate_limit_nominatim():
         _nominatim_ultima_chamada = time.monotonic()
 
 
+async def _buscar_nominatim(client: httpx.AsyncClient, params: dict) -> list:
+    """Até 5 candidatos no Brasil, com o endereço detalhado (cidade, UF, bairro, número). Falha = lista vazia."""
+    try:
+        await _respeitar_rate_limit_nominatim()
+        res = await client.get(
+            URL_NOMINATIM,
+            params={**params, "format": "jsonv2", "addressdetails": 1, "limit": 5, "countrycodes": "br"},
+            headers=_HEADERS_GEOCODE, timeout=4,
+        )
+        data = res.json()
+        return [c for c in data if isinstance(c, dict)] if isinstance(data, list) else []
+    except Exception as erro:
+        # Só a classe do erro: nunca o endereço buscado.
+        logger_geocode.warning("Falha na busca de endereço: %s", type(erro).__name__)
+        return []
+
+
+async def _consultar_brasilapi(client: httpx.AsyncClient, clean_cep: str):
+    """Coordenada, cidade, UF e bairro do CEP de 8 dígitos; None se não houver coordenada ou em falha."""
+    if len(clean_cep) != 8:
+        return None
+    async with _brasilapi_semaforo:
+        try:
+            r = await client.get(f"https://brasilapi.com.br/api/cep/v2/{clean_cep}", timeout=3)
+            if r.status_code != 200:
+                return None
+            data = r.json()
+            loc = (data.get("location") or {}).get("coordinates") or {}
+            lat, lon = float(loc.get("latitude")), float(loc.get("longitude"))
+            if not geocodificacao.dentro_do_brasil(lat, lon):
+                return None
+            return {"ponto": (lat, lon), "cidade": data.get("city"), "uf": data.get("state"), "bairro": data.get("neighborhood")}
+        except Exception:
+            return None
+
+
+async def _prefixo_do_cep(clean_cep: str):
+    prefixo = clean_cep[:5]
+    if len(prefixo) != 5:
+        return None
+    if prefixo not in _PREFIXOS_MEMORIA:
+        _PREFIXOS_MEMORIA[prefixo] = await database.consultar_prefixo_cep(prefixo)
+    return _PREFIXOS_MEMORIA[prefixo]
+
+
+async def _centro_da_regiao(client: httpx.AsyncClient, bairro: str, cidade: str, uf: str):
+    """Centro do bairro (ou da cidade, sem bairro) na cidade e UF do pedido; None se não achar."""
+    chave = "|".join(normalizar_nome(x) for x in (bairro, cidade, uf))
+    if chave in _REGIOES_MEMORIA:
+        return _REGIOES_MEMORIA[chave]
+    query = ", ".join([p for p in [bairro, cidade, uf, "Brasil"] if p])
+    ponto = None
+    if bairro or cidade:
+        candidatos = await _buscar_nominatim(client, {"q": query})
+        coerentes = [c for c in candidatos if geocodificacao.coerente_com_local(c, cidade, uf)]
+        ponto = geocodificacao.coordenada(coerentes[0]) if coerentes else None
+    _REGIOES_MEMORIA[chave] = ponto
+    return ponto
+
+
 async def geocode_async(client: httpx.AsyncClient, rua: str = "", numero: str = "",
                          bairro: str = "", cep: str = "", cidade: str = "", uf: str = ""):
     """
-    Versão assíncrona da geocodificação. Ordem de prioridade:
-    1) Cache em memória (instantâneo, válido durante a execução do processo)
-    2) Cache Postgres (instantâneo, sobrevive a reinícios do servidor)
-    3) Endereço completo via Nominatim (preciso, mas limitado a 1 req/s)
-    4) CEP via BrasilAPI (aproximado, mas pode rodar em paralelo)
-    5) Bairro/cidade via Nominatim (último recurso, aproximado por região)
+    Geocodificação com conferência (o ponto precisa ser coerente com o próprio pedido). Ordem:
+    1) Cache em memória e cache Postgres (chave com a versão geocodificacao.CHAVE_VERSAO; o banco só guarda VALIDO)
+    2) Ponto esperado do CEP: centro do prefixo de 5 dígitos (CNEFE/IBGE) ou, fora dele, a coordenada da BrasilAPI
+    3) Nominatim estruturado (até 5 candidatos) e, se nenhum servir, 1 busca em texto livre (até 5)
+       - descarta candidato de outra UF ou cidade
+       - com CEP: o mais próximo do ponto esperado, dentro do limite (geocodificacao.limite_km)
+       - sem CEP: bairro igual (ou, sem bairro, número da porta igual); senão a até 3 km do centro do bairro
+    4) Nada confirmado: centro do CEP ou do bairro como localização aproximada (nunca VALIDO)
 
     Retorna sempre uma tupla de 7 posições:
         (lat, lon, cidade, uf, cep, bairro, status)
     onde 'status' é um de:
-        VALIDO             -> coordenada de rua/CEP exata
-        ALERTA_APROXIMADO  -> só foi possível localizar bairro/cidade (sem precisão de rua)
+        VALIDO             -> ponto conferido com cidade, UF e CEP (ou bairro)
+        ALERTA_APROXIMADO  -> não deu para confirmar: centro do CEP ou do bairro (confira no mapa)
         ERRO_CEP_INVALIDO  -> não foi possível localizar o endereço em nenhuma fonte;
                               nesse caso lat/lon vêm como None (NUNCA mais retorna uma
                               coordenada fixa "chumbada" para mascarar o erro).
     """
     clean_cep = ''.join(filter(str.isdigit, str(cep or "")))
-    chave = _chave_cache(rua, numero, bairro, cep, cidade, uf)
+    chave = geocodificacao.CHAVE_VERSAO + _chave_cache(rua, numero, bairro, cep, cidade, uf)
 
-    if chave in _GEOCODE_CACHE_MEMORIA:
-        return _GEOCODE_CACHE_MEMORIA[chave]
+    em_memoria = _GEOCODE_CACHE_MEMORIA.get(chave)
+    if em_memoria is not None:
+        return em_memoria
 
     cache_db = await database.cache_get(chave)
-    if cache_db:
-        _GEOCODE_CACHE_MEMORIA[chave] = cache_db
+    if cache_db and cache_db[6] == geocodificacao.VALIDO:
+        _GEOCODE_CACHE_MEMORIA.set(chave, cache_db)
         return cache_db
-
-    resultado = None
-    headers = {'User-Agent': 'ZubaleRoutingCore/6.1 (contato@zubale.com)'}
 
     # 1) Descobre Cidade e UF oficiais via ViaCEP caso não estejam preenchidos
     cidade_resolvida = cidade
@@ -167,72 +237,78 @@ async def geocode_async(client: httpx.AsyncClient, rua: str = "", numero: str = 
         except Exception:
             pass
 
-    # 2) Endereço completo com Cidade/UF garantidos via Nominatim -> match de rua exata
-    if rua and numero:
-        partes = [f"{rua}, {numero}", bairro, cidade_resolvida, uf_resolvida, "Brasil"]
-        query = ", ".join([p for p in partes if p])
-        try:
-            await _respeitar_rate_limit_nominatim()
-            res = await client.get(
-                "https://nominatim.openstreetmap.org/search",
-                params={"format": "json", "q": query, "limit": 1},
-                headers=headers, timeout=4,
-            )
-            data = res.json()
-            if data:
-                resultado = (float(data[0]['lat']), float(data[0]['lon']),
-                             cidade_resolvida or "Centro", uf_resolvida or "BR", clean_cep, bairro,
-                             "VALIDO")
-        except Exception:
-            pass
+    def montar(ponto, status):
+        return (ponto[0], ponto[1], cidade_resolvida or "Centro", uf_resolvida or "BR", clean_cep, bairro, status)
 
-    # 3) CEP via BrasilAPI v2 (fallback se o Nominatim não achar o número exato)
-    #    Quando a BrasilAPI devolve coordenadas, elas já são no nível do CEP/logradouro
-    #    (precisão suficiente para tratar como VALIDO).
-    if resultado is None and len(clean_cep) == 8:
-        async with _brasilapi_semaforo:
-            try:
-                r = await client.get(f"https://brasilapi.com.br/api/cep/v2/{clean_cep}", timeout=3)
-                if r.status_code == 200:
-                    data = r.json()
-                    loc = data.get("location", {}).get("coordinates", {})
-                    lat, lon = loc.get("latitude"), loc.get("longitude")
-                    if lat and lon:
-                        resultado = (float(lat), float(lon), data.get("city", cidade_resolvida),
-                                     data.get("state", uf_resolvida), clean_cep, data.get("neighborhood", bairro),
-                                     "VALIDO")
-            except Exception:
-                pass
+    # 2) Ponto esperado para o CEP
+    prefixo = await _prefixo_do_cep(clean_cep)
+    referencia, limite, consulta_cep = None, None, None
+    if prefixo:
+        referencia, limite = (prefixo["lat"], prefixo["lon"]), geocodificacao.limite_km(prefixo["dispersao_km"])
+    else:
+        consulta_cep = await _consultar_brasilapi(client, clean_cep)
+        if consulta_cep:
+            referencia, limite = consulta_cep["ponto"], geocodificacao.LIMITE_CEP_COMPLETO_KM
 
-    # 4) Fallback: bairro/cidade via Nominatim (não localizou a rua/CEP exato,
-    #    então isso é uma aproximação por região, não a posição real do endereço)
+    # 3) Candidatos do Nominatim: estruturado e, se nenhum servir, texto livre
+    resultado = None
+    duvidosos = []
+    if rua:
+        estruturada = {"street": " ".join(p for p in [str(numero or "").strip(), rua] if p), "country": "Brasil"}
+        if cidade_resolvida:
+            estruturada["city"] = cidade_resolvida
+        if uf_resolvida:
+            estruturada["state"] = uf_resolvida
+        texto_livre = {"q": ", ".join(p for p in [f"{rua}, {numero}" if numero else rua, bairro, cidade_resolvida, uf_resolvida, "Brasil"] if p)}
+        for params in (estruturada, texto_livre):
+            candidatos = await _buscar_nominatim(client, params)
+            if referencia:
+                ponto = geocodificacao.escolher_por_referencia(candidatos, cidade_resolvida, uf_resolvida, referencia, limite)
+            else:
+                ponto, novos = geocodificacao.escolher_sem_cep(candidatos, cidade_resolvida, uf_resolvida, bairro, numero)
+                duvidosos += novos
+            if ponto:
+                resultado = montar(ponto, geocodificacao.VALIDO)
+                break
+
+    # 4) Nada confirmado: localização aproximada (nunca VALIDO)
+    if resultado is None and referencia:
+        centro = referencia
+        if prefixo:
+            # Centro do CEP de 8 dígitos, se ele estiver dentro do prefixo; senão o centro do prefixo.
+            consulta_cep = await _consultar_brasilapi(client, clean_cep)
+            if consulta_cep and geocodificacao.distancia_km(consulta_cep["ponto"], referencia) <= limite:
+                centro = consulta_cep["ponto"]
+        resultado = montar(centro, geocodificacao.APROXIMADO)
+
+    if resultado is None and duvidosos and not bairro:
+        # Sem CEP nem bairro: o candidato da cidade sem número de porta confirmado fica como aproximado.
+        resultado = montar(duvidosos[0], geocodificacao.APROXIMADO)
     if resultado is None:
-        query = ", ".join([p for p in [bairro, cidade_resolvida, uf_resolvida, "Brasil"] if p])
-        if query:
-            try:
-                await _respeitar_rate_limit_nominatim()
-                res = await client.get(
-                    "https://nominatim.openstreetmap.org/search",
-                    params={"format": "json", "q": query, "limit": 1},
-                    headers=headers, timeout=4,
-                )
-                data = res.json()
-                if data:
-                    resultado = (float(data[0]['lat']), float(data[0]['lon']),
-                                 cidade_resolvida or "Centro", uf_resolvida or "BR", clean_cep, bairro,
-                                 "ALERTA_APROXIMADO")
-            except Exception:
-                pass
+        regiao = await _centro_da_regiao(client, bairro, cidade_resolvida, uf_resolvida)
+        ponto = geocodificacao.mais_proximo(duvidosos, regiao, geocodificacao.LIMITE_BAIRRO_KM) if regiao and bairro else None
+        if ponto:
+            resultado = montar(ponto, geocodificacao.VALIDO)
+        elif regiao or duvidosos:
+            resultado = montar(regiao or duvidosos[0], geocodificacao.APROXIMADO)
 
     # 5) Nenhuma fonte conseguiu localizar o endereço/CEP: sinaliza erro explícito
     #    em vez de inventar uma coordenada (era aqui que caía no centro de SP).
     if resultado is None:
         resultado = (None, None, cidade_resolvida, uf_resolvida, clean_cep, bairro,
-                     "ERRO_CEP_INVALIDO")
+                     geocodificacao.ERRO)
 
-    _GEOCODE_CACHE_MEMORIA[chave] = resultado
-    await database.cache_set(chave, resultado)
+    _GEOCODE_CACHE_MEMORIA.set(chave, resultado)
+    # O banco só guarda o que foi conferido: aproximado e erro são buscados de novo depois.
+    if resultado[6] == geocodificacao.VALIDO:
+        await database.cache_set(chave, resultado)
     return resultado
+
+
+def texto_localizacao_aproximada(quantidade: int) -> str:
+    if quantidade == 1:
+        return "1 endereço com localização aproximada: confira no mapa."
+    return f"{quantidade} endereços com localização aproximada: confira no mapa."
 
 
 async def geocodificar_lote(pedidos_raw: List[Dict[str, Any]]) -> Dict[str, tuple]:
@@ -848,8 +924,7 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar:
                 custo_total_geral += custo_rota
                 tempo_total_min += tempo_min
 
-                waypoint_coords = "/".join([f"{p['lat']},{p['lon']}" for p in pts_rota])
-                link_maps = f"https://www.google.com/maps/dir/{orig_lat},{orig_lon}/{waypoint_coords}/{orig_lat},{orig_lon}"
+                link_maps = movimentos.link_maps((orig_lat, orig_lon), pts_rota)
                 titulo_viagem = f"{mot_info.motorista} • Viagem {num_viagem}" if total_viagens_por_motorista[mot_info.id] > 1 else mot_info.motorista
 
                 rotas_resultado.append({
@@ -873,6 +948,9 @@ async def _processar_otimizacao(job_id: str, req: "OtimizarRequest", frota_usar:
         # kpis (com o resumo do valor por rota usado em cada tipo de veículo e de onde veio): a mesma conta de quando um pedido é movido (Etapa 10b).
         kpis = movimentos.kpis_do_resultado(rotas_resultado, len(pedidos_geo), len(pedidos_sem_geocodificacao))
         avisos = list(plano["avisos"])
+        aproximados = sum(1 for p in pedidos_geo if p.get("geocode_status") == geocodificacao.APROXIMADO)
+        if aproximados:
+            avisos.append({"tipo": "localizacao_aproximada", "gravidade": "atencao", "mensagem": texto_localizacao_aproximada(aproximados)})
         if not pedidos_geo and pedidos_sem_geocodificacao:
             avisos.append({"tipo": "sem_pedidos", "gravidade": "atencao", "mensagem": "Nenhum pedido pôde ser localizado no mapa, então não há rotas."})
 

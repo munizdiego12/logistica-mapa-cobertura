@@ -1691,7 +1691,7 @@ export default function App() {
                             )}
                             {(r.paradas || []).some(p => p.geocode_status === 'ALERTA_APROXIMADO') && (
                               <div
-                                title="Uma ou mais paradas desta rota têm localização aproximada (só bairro/cidade, não o endereço exato)."
+                                title="Uma ou mais paradas desta rota têm localização aproximada (centro do CEP ou do bairro): confira no mapa."
                                 className="flex items-center justify-center p-1 bg-amber-500/10 rounded border border-amber-500/20 text-amber-400 cursor-help"
                               >
                                 <AlertTriangle className="w-3.5 h-3.5" />

@@ -190,6 +190,27 @@ async def cache_set(chave: str, resultado: tuple):
         )
 
 
+async def consultar_prefixo_cep(prefixo: str):
+    """
+    Centro e dispersão de um prefixo de CEP de 5 dígitos (CNEFE/IBGE), só leitura: {"lat", "lon", "dispersao_km"}.
+    None se o prefixo não existir, sem banco ou em falha (a geocodificação segue sem essa conferência).
+    """
+    if not (len(prefixo or "") == 5 and prefixo.isdigit()):
+        return None
+    pool = await get_pool()
+    if not pool:
+        return None
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT lat, lon, dispersao_km FROM cep_prefixos WHERE prefixo = $1", prefixo)
+    except Exception as erro:
+        print(f"[database] Falha ao consultar o prefixo de CEP: {type(erro).__name__}")
+        return None
+    if not row or row["lat"] is None or row["lon"] is None:
+        return None
+    return {"lat": float(row["lat"]), "lon": float(row["lon"]), "dispersao_km": float(row["dispersao_km"] or 0)}
+
+
 async def invalidar_cache(chave: str):
     """
     Remove uma entrada do cache de geocodificação para forçar uma nova consulta

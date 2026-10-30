@@ -23,7 +23,7 @@ const isCoordValid = (lat, lon) => {
 
 // Ícone customizado para paradas de pedidos numeradas.
 // Quando 'aproximado' é true (geocode_status === 'ALERTA_APROXIMADO', Etapa 2),
-// desenha um anel/badge amarelo indicando que a posição é só do bairro/cidade,
+// desenha um anel/badge amarelo indicando que a posição é o centro do CEP ou do bairro,
 // não do endereço exato — sem impedir a rota, só avisando visualmente.
 const createStopIcon = (num, color, aproximado) => {
   return L.divIcon({
@@ -470,7 +470,7 @@ export default function MapaLeaflet({ origem, rotas, lojas = [], lojaSelecionada
                   </div>
                   {p.geocode_status === 'ALERTA_APROXIMADO' && (
                     <div className="mt-1 mb-1 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-50 border border-amber-300 text-[10px] font-bold text-amber-700">
-                      ⚠ Localização aproximada (bairro/cidade, não o endereço exato)
+                      ⚠ Localização aproximada (centro do CEP ou do bairro): confira no mapa
                     </div>
                   )}
                   <p className="font-semibold text-xs text-slate-900">{logradouro}, {numero}</p>
